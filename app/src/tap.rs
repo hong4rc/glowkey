@@ -5,13 +5,17 @@
 //!
 //! A `CGEventTap` intercepts key-down events *after* the system keyboard layout has
 //! mapped them, so the user's Colemak/US layout stays in effect and GlowKey sees
-//! the already-mapped character. For a plain keystroke that the engine does not
-//! change, the original event passes through untouched. When the engine transforms
-//! (a diacritic or tone appears, moving earlier characters), GlowKey **suppresses**
-//! the keystroke and re-emits the result: it posts N backspaces to delete the
-//! characters already on screen, then inserts the new Vietnamese text — the same
-//! `(backspaces, insert)` diff the engine produces. There is no marked text: every
-//! keystroke is written straight to the document.
+//! the already-mapped character. GlowKey **suppresses every letter it handles** and
+//! re-emits the engine's `(backspaces, insert)` diff — a plain append re-emits the
+//! character, a transform posts N backspaces then the new Vietnamese text. There is
+//! no marked text: every keystroke is written straight to the document.
+//!
+//! Suppressing *every* letter (rather than passing plain keys through) is what makes
+//! the output deterministic. A natively-typed character and a synthesized backspace
+//! posted a moment later reach the document out of order in multiprocess apps
+//! (Chrome/Edge), so mixing the two races — the first transform after a letter lands
+//! wrong (`aa` → `aâ`, `hoongf` → `hoồng`). Routing every mutation through the one
+//! tagged source's single `CGEventPost` queue removes the race by construction.
 //!
 //! Synthesized events are posted at the **session level** (`CGEventPost`), the
 //! normal input path, so multi-process apps like Chrome route them to the focused
@@ -397,18 +401,19 @@ impl TapState {
                 if !response.handled {
                     return Decision::Passthrough;
                 }
-                // Let a plain append (no diacritic, no reordering) pass through the
-                // normal input path. This is essential, not just an optimization:
-                // a passed-through key is committed by the OS *synchronously*
-                // before the next key is processed, so when a later transform posts
-                // a backspace, the character it deletes is already on screen.
-                // Suppressing and re-injecting every key instead makes the injected
-                // character asynchronous, so the first transform's backspace can
-                // fire before that character lands — producing an extra letter
-                // (`exit` → `eexit`, `hoongf` → `hoồng`).
-                if response.backspaces == 0 && response.insert == ch.to_string() {
-                    return Decision::Passthrough;
-                }
+                // Suppress the key and synthesize the edit — for EVERY letter,
+                // including a plain append (`{backspaces:0, insert:ch}`). This is
+                // the crux of correctness: mixing native passthrough with
+                // synthesized edits races, because a natively-typed character and a
+                // synthesized backspace posted a moment later reach the document out
+                // of order (the app→renderer path in multiprocess apps like Chrome
+                // is asynchronous). The symptom is the first transform after a
+                // letter landing wrong: `aa` → `aâ`, `hoongf` → `hoồng`.
+                //
+                // With every letter suppressed and re-emitted from the one tagged
+                // `CGEventSource`, all document mutations flow through a single
+                // ordered `CGEventPost` queue, so a backspace can never overtake the
+                // character it deletes. This is how EVKey/OpenKey drive the document.
                 Decision::Emit(response)
             }
             // A word boundary (space, digit, punctuation): commit the word. If

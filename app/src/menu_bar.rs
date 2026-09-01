@@ -13,16 +13,20 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_foundation::{MainThreadMarker, NSString};
+
+use std::cell::RefCell;
 
 use crate::tap::TapState;
 
 /// Ivars for the menu controller: a pointer to the leaked, program-lifetime
-/// `TapState` shared with the tap callback (both on the main thread).
+/// `TapState` shared with the tap callback (both on the main thread), plus the
+/// status item so the glyph can be refreshed to reflect live state.
 pub struct ControllerIvars {
     state: *const TapState,
+    status_item: RefCell<Option<Retained<NSStatusItem>>>,
 }
 
 define_class!(
@@ -43,17 +47,29 @@ define_class!(
     }
 
     impl MenuController {
+        /// Fired when a different application comes to the front. Update the
+        /// session's current app (so VN/EN state reflects the switch immediately)
+        /// and refresh the menu bar glyph.
+        #[unsafe(method(appDidActivate:))]
+        fn app_did_activate(&self, _notification: &objc2_foundation::NSNotification) {
+            if let Some((_, bundle_id)) = crate::app_info::frontmost() {
+                self.state().set_frontmost_app(&bundle_id);
+            }
+            self.update_glyph();
+        }
 
         #[unsafe(method(toggleCurrentApp:))]
         fn toggle_current_app(&self, _sender: Option<&AnyObject>) {
             if let Some((_, bundle_id)) = crate::app_info::frontmost() {
                 self.state().toggle_app_exclusion_and_save(&bundle_id);
             }
+            self.update_glyph();
         }
 
         #[unsafe(method(toggleMode:))]
         fn toggle_mode(&self, _sender: Option<&AnyObject>) {
             self.state().toggle_mode_and_save();
+            self.update_glyph();
         }
 
         #[unsafe(method(toggleAutoFix:))]
@@ -82,6 +98,18 @@ impl MenuController {
         // Safe: the pointer is to a leaked, program-lifetime TapState, and this
         // runs on the main thread where nothing frees it.
         unsafe { &*self.ivars().state }
+    }
+
+    /// Refreshes the menu bar glyph to reflect whether Vietnamese is active for the
+    /// frontmost app: `VN` when on, `EN` when off (English mode or excluded app).
+    fn update_glyph(&self) {
+        let title = if self.state().is_active() { "VN" } else { "EN" };
+        let mtm = MainThreadMarker::from(self);
+        if let Some(item) = self.ivars().status_item.borrow().as_ref() {
+            if let Some(button) = item.button(mtm) {
+                button.setTitle(&NSString::from_str(title));
+            }
+        }
     }
 
     /// Rebuilds the menu items from current state.
@@ -192,15 +220,16 @@ pub fn install(
     mtm: MainThreadMarker,
 ) -> (Retained<NSStatusItem>, Retained<MenuController>) {
     let controller: Retained<MenuController> = {
-        let this = MenuController::alloc(mtm).set_ivars(ControllerIvars { state });
+        let this = MenuController::alloc(mtm).set_ivars(ControllerIvars {
+            state,
+            status_item: RefCell::new(None),
+        });
         unsafe { msg_send![super(this), init] }
     };
 
     let status_bar = NSStatusBar::systemStatusBar();
     let item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
-    if let Some(button) = item.button(mtm) {
-        button.setTitle(&NSString::from_str("VN"));
-    }
+    *controller.ivars().status_item.borrow_mut() = Some(item.clone());
 
     let menu = NSMenu::new(mtm);
     let delegate = ProtocolObject::from_ref(&*controller);
@@ -208,5 +237,19 @@ pub fn install(
     controller.rebuild(&menu);
     item.setMenu(Some(&menu));
 
+    // Refresh the glyph whenever the frontmost app changes, so it always shows the
+    // state for the app you are in.
+    let workspace = NSWorkspace::sharedWorkspace();
+    let center = workspace.notificationCenter();
+    unsafe {
+        center.addObserver_selector_name_object(
+            &controller,
+            sel!(appDidActivate:),
+            Some(objc2_app_kit::NSWorkspaceDidActivateApplicationNotification),
+            None,
+        );
+    }
+
+    controller.update_glyph();
     (item, controller)
 }

@@ -114,6 +114,25 @@ impl TapState {
         }
     }
 
+    /// Records the frontmost application on the session, so the ignore list and
+    /// VN/EN state reflect an app switch immediately (not only at the next word
+    /// start). Called by the menu controller's app-activation observer.
+    pub fn set_frontmost_app(&self, bundle_id: &str) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_frontmost_app(bundle_id);
+        }
+        *self.last_bundle_id.borrow_mut() = Some(bundle_id.to_string());
+    }
+
+    /// Whether Vietnamese is currently active (Vietnamese mode and the frontmost
+    /// app not excluded) — drives the menu bar glyph.
+    pub fn is_active(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.is_active())
+            .unwrap_or(false)
+    }
+
     /// Toggles VN/EN mode and saves. Used by the menu bar.
     pub fn toggle_mode_and_save(&self) {
         if let Ok(mut session) = self.session.try_borrow_mut() {

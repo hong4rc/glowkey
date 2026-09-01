@@ -77,6 +77,16 @@ define_class!(
             self.state().toggle_auto_fix_and_save();
         }
 
+        #[unsafe(method(toggleLaunchAtLogin:))]
+        fn toggle_launch_at_login(&self, _sender: Option<&AnyObject>) {
+            crate::login_item::set_enabled(!crate::login_item::is_enabled());
+        }
+
+        #[unsafe(method(resetEngine:))]
+        fn reset_engine(&self, _sender: Option<&AnyObject>) {
+            self.state().reset();
+        }
+
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -157,6 +167,27 @@ impl MenuController {
             "Auto-fix English words",
             sel!(toggleAutoFix:),
             auto_fix,
+            "",
+            mtm,
+        );
+
+        self.add_separator(menu, mtm);
+
+        // Launch at login (checkmark reflects the real SMAppService status) and a
+        // safety-valve reset for the (human-unreachable) circuit breaker.
+        self.add_item(
+            menu,
+            "Open at login",
+            sel!(toggleLaunchAtLogin:),
+            crate::login_item::is_enabled(),
+            "",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            "Reset input (if stuck)",
+            sel!(resetEngine:),
+            false,
             "",
             mtm,
         );

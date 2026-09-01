@@ -221,6 +221,19 @@ impl TapState {
         self.save_settings();
     }
 
+    /// Clears the runaway circuit breaker and any half-typed word, recovering input
+    /// if the breaker ever latched (the "Reset input" menu item). Human typing never
+    /// trips it, so this is only a safety valve.
+    pub fn reset(&self) {
+        DISABLED.store(false, Ordering::Relaxed);
+        if let Ok(mut emits) = self.recent_emits.try_borrow_mut() {
+            emits.clear();
+        }
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.flush();
+        }
+    }
+
     /// Records an emit and returns false if the rate indicates a runaway; latches
     /// [`DISABLED`] on a trip so a loop is capped rather than sustained. Human
     /// typing never approaches the limit.
@@ -275,6 +288,8 @@ impl TapState {
                         "GlowKey: {} Vietnamese for “{name}”",
                         if excluded { "disabled" } else { "enabled" }
                     );
+                    // Brief on-screen confirmation for the hotkey (no menu is open).
+                    crate::hud::flash(if excluded { "EN" } else { "VN" });
                 }
                 true
             }
@@ -338,6 +353,9 @@ impl TapState {
             if let Ok(mut session) = self.session.try_borrow_mut() {
                 let mode = session.toggle_mode();
                 eprintln!("GlowKey: {mode:?} mode");
+                // Brief on-screen confirmation for the hotkey (no menu is open).
+                let on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
+                crate::hud::flash(if on { "VN" } else { "EN" });
             }
             return Decision::Consume;
         }

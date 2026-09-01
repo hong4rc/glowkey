@@ -12,6 +12,10 @@
 #[cfg(target_os = "macos")]
 mod app_info;
 #[cfg(target_os = "macos")]
+mod hud;
+#[cfg(target_os = "macos")]
+mod login_item;
+#[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]
 mod prefs_window;

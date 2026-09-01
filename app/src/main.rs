@@ -14,6 +14,8 @@ mod app_info;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]
+mod prefs_window;
+#[cfg(target_os = "macos")]
 mod settings_store;
 #[cfg(target_os = "macos")]
 mod tap;

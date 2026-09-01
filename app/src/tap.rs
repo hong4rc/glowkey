@@ -171,6 +171,56 @@ impl TapState {
         }
     }
 
+    /// The bundle identifiers currently excluded (Vietnamese off), sorted. Drives
+    /// the Settings window's "Excluded apps" list.
+    pub fn exclusion_ids(&self) -> Vec<String> {
+        match self.session.try_borrow() {
+            Ok(s) => s.exclusions().ids().map(|s| s.to_string()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Removes an app from the ignore list (re-enables Vietnamese there) and saves.
+    /// Used by the Settings window's per-row "Remove" button.
+    pub fn remove_exclusion_and_save(&self, bundle_id: &str) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.exclusions_mut().remove(bundle_id);
+        }
+        self.save_settings();
+    }
+
+    /// Whether auto-fix (restore invalid Vietnamese to the raw keys) is on.
+    pub fn auto_fix(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.auto_fix())
+            .unwrap_or(true)
+    }
+
+    /// Sets auto-fix on/off explicitly and saves. Used by the Settings checkbox.
+    pub fn set_auto_fix_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_auto_fix(on);
+        }
+        self.save_settings();
+    }
+
+    /// The current tone-placement style. Drives the Settings segmented control.
+    pub fn style(&self) -> glowkey_engine::PlacementStyle {
+        self.session
+            .try_borrow()
+            .map(|s| s.style())
+            .unwrap_or(glowkey_engine::PlacementStyle::New)
+    }
+
+    /// Sets the tone-placement style and saves. Used by the Settings segmented control.
+    pub fn set_style_and_save(&self, style: glowkey_engine::PlacementStyle) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_style(style);
+        }
+        self.save_settings();
+    }
+
     /// Records an emit and returns false if the rate indicates a runaway; latches
     /// [`DISABLED`] on a trip so a loop is capped rather than sustained. Human
     /// typing never approaches the limit.

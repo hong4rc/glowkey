@@ -24,7 +24,7 @@ glowkey-engine = { path = "../crates/glowkey-engine" }
 # re-emits the result. This keeps the user's Colemak/US layout live and requires an
 # Accessibility permission (it does not work in secure/password fields).
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSDictionary"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSDictionary", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSTextField", "NSSegmentedControl", "NSStackView", "NSLayoutConstraint", "NSUserInterfaceLayout", "NSCell", "NSText"] }
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGEventSource", "CGError"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase", "CFDictionary", "CFNumber"] }

@@ -79,10 +79,8 @@ define_class!(
 
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
-            // The Settings window (prefs_window) lands in the next phase; until
-            // then, log so the wiring is testable. Menu placement and the ⌘,
-            // shortcut are already correct per the UI design.
-            eprintln!("GlowKey: Settings… (window pending)");
+            let mtm = MainThreadMarker::from(self);
+            crate::prefs_window::show(self.ivars().state, mtm);
         }
 
         #[unsafe(method(quit:))]

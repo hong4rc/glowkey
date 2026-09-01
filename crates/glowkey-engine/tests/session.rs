@@ -140,3 +140,35 @@ fn focus_change_flushes_in_progress_word() {
     session.set_frontmost_app("com.apple.Notes");
     assert_eq!(type_through(&mut session, "oo"), "ô");
 }
+
+#[test]
+fn per_app_exclusion_is_independent() {
+    // Each app's enabled/disabled state is its own. Disabling app A must not
+    // change app B, and B stays as it was set — not affected by A.
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+
+    // In app A, disable it.
+    session.set_frontmost_app("com.app.A");
+    assert!(session.toggle_app_exclusion("com.app.A")); // A now excluded
+    assert!(!session.is_active());
+
+    // Switch to app B (never toggled): it is still enabled — its own state,
+    // unaffected by A being disabled.
+    session.set_frontmost_app("com.app.B");
+    assert!(session.is_active());
+    assert_eq!(type_through(&mut session, "hoongf"), "hồng");
+
+    // Disable B independently.
+    assert!(session.toggle_app_exclusion("com.app.B"));
+    assert!(!session.is_active());
+
+    // Back to A: still disabled (its own remembered state), and B unaffected.
+    session.set_frontmost_app("com.app.A");
+    assert!(!session.is_active());
+
+    // Re-enable A; B must remain disabled.
+    assert!(!session.toggle_app_exclusion("com.app.A")); // A now enabled
+    assert!(session.is_active());
+    session.set_frontmost_app("com.app.B");
+    assert!(!session.is_active(), "B stays disabled, independent of A");
+}

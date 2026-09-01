@@ -131,11 +131,11 @@ impl TapState {
         self.save_settings();
     }
 
-    /// Toggles a bundle id in the ignore list and saves. Used by the menu bar's
-    /// "Enable/Disable for <App>" action.
+    /// Toggles a specific app in the ignore list and saves. Used by the menu bar's
+    /// "Enable/Disable for <App>" action. Per-app and independent.
     pub fn toggle_app_exclusion_and_save(&self, bundle_id: &str) {
         if let Ok(mut session) = self.session.try_borrow_mut() {
-            session.exclusions_mut().toggle(bundle_id);
+            session.toggle_app_exclusion(bundle_id);
         }
         self.save_settings();
     }
@@ -193,16 +193,20 @@ impl TapState {
             Decision::Passthrough => false,
             Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
             Decision::ToggleApp => {
-                let excluded = self
-                    .session
-                    .try_borrow_mut()
-                    .map(|mut s| s.toggle_current_exclusion())
-                    .unwrap_or(false);
-                self.save_settings();
-                eprintln!(
-                    "GlowKey: {} Vietnamese for current app",
-                    if excluded { "disabled" } else { "enabled" }
-                );
+                // Resolve the frontmost app *now* (not a cached value) so ⌃⇧E always
+                // toggles the app you are actually in, even before you have typed.
+                if let Some((name, bundle_id)) = crate::app_info::frontmost() {
+                    let excluded = self
+                        .session
+                        .try_borrow_mut()
+                        .map(|mut s| s.toggle_app_exclusion(&bundle_id))
+                        .unwrap_or(false);
+                    self.save_settings();
+                    eprintln!(
+                        "GlowKey: {} Vietnamese for “{name}”",
+                        if excluded { "disabled" } else { "enabled" }
+                    );
+                }
                 true
             }
             Decision::Emit(response) => {
@@ -813,7 +817,10 @@ mod real_event_tests {
             Decision::ToggleApp
         ));
         // Applying the toggle (as handle_key_down does) excludes TextEdit.
-        assert!(state.session.borrow_mut().toggle_current_exclusion());
+        assert!(state
+            .session
+            .borrow_mut()
+            .toggle_app_exclusion("com.apple.TextEdit"));
         assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
     }
 

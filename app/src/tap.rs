@@ -13,10 +13,12 @@
 //! `(backspaces, insert)` diff the engine produces. There is no marked text: every
 //! keystroke is written straight to the document.
 //!
-//! Synthesized events are created from a dedicated [`CGEventSource`] tagged with
-//! [`GLOWKEY_TAG`] (its user-data survives the post), so the tap recognizes and
-//! skips its own output and never feeds back on itself. An in-flight flag guards
-//! synchronous re-entry as a second line of defense.
+//! Synthesized events are posted **directly to the target process**
+//! (`CGEventPostToPid`), which delivers them straight to the app and bypasses the
+//! session tap — so GlowKey's own output physically cannot re-enter its own tap.
+//! The no-feedback-loop guarantee is structural, not based on tagging. A circuit
+//! breaker latches transformation off if emits ever exceed a human typing rate, so
+//! any unforeseen runaway is capped rather than flooding the input system.
 //!
 //! ## Constraints (inherent to the event-tap approach, same as EVKey)
 //!
@@ -30,10 +32,12 @@
 //! verified by granting permission, running, and typing. See `docs/checkpoint.md`.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use glowkey_engine::{ExclusionList, KeyResponse, PlacementStyle, Session};
 use objc2_app_kit::NSWorkspace;
@@ -43,18 +47,18 @@ use objc2_core_graphics::{
     CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
 };
 
-/// User-data tag on GlowKey's own event source, so the tap can recognize and skip
-/// its own synthesized output.
-const GLOWKEY_TAG: i64 = 0x47_4C_4F_57; // "GLOW"
-
 /// macOS virtual key code for Delete/Backspace.
 const KEY_CODE_DELETE: i64 = 51;
 
-/// Set while GlowKey is posting its own synthesized events. Defense-in-depth
-/// against a feedback loop: if a posted event re-enters the callback synchronously,
-/// the callback sees this flag and passes it through instead of re-processing it.
-/// The tagged event source is the primary guard; this is the belt to its suspenders.
-static EMITTING: AtomicBool = AtomicBool::new(false);
+/// Tripped by the circuit breaker if GlowKey ever emits faster than a human could
+/// type — a runaway. Once set, transformation stops for the rest of the session so
+/// a bug can never flood the input system. Reset only by restarting.
+static DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// Circuit-breaker thresholds: more than this many emits within the window is a
+/// runaway, not typing.
+const RUNAWAY_LIMIT: usize = 40;
+const RUNAWAY_WINDOW: Duration = Duration::from_millis(1000);
 
 /// Long-lived shell state, referenced from the C tap callback via a raw pointer.
 /// The callback runs on the main run loop thread, so a `RefCell` is sufficient —
@@ -62,22 +66,54 @@ static EMITTING: AtomicBool = AtomicBool::new(false);
 struct TapState {
     session: RefCell<Session>,
     last_bundle_id: RefCell<Option<String>>,
-    /// The tagged event source all synthesized events are created from.
+    /// Process id of the frontmost app, captured at word start. Synthesized text is
+    /// posted directly to it, which bypasses the session tap (no feedback loop).
+    current_pid: RefCell<Option<libc::pid_t>>,
+    /// The event source all synthesized events are created from.
     source: CFRetained<CGEventSource>,
+    /// Recent emit timestamps, for the runaway circuit breaker.
+    recent_emits: RefCell<VecDeque<Instant>>,
 }
 
 impl TapState {
     fn new() -> Option<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)?;
-        CGEventSource::set_user_data(Some(&source), GLOWKEY_TAG);
         Some(Self {
             session: RefCell::new(Session::new(
                 PlacementStyle::New,
                 ExclusionList::with_defaults(),
             )),
             last_bundle_id: RefCell::new(None),
+            current_pid: RefCell::new(None),
             source,
+            recent_emits: RefCell::new(VecDeque::new()),
         })
+    }
+
+    /// Records an emit and returns false if the rate indicates a runaway. On a trip
+    /// it latches [`DISABLED`] so no further transformation occurs this session.
+    fn circuit_ok(&self) -> bool {
+        if DISABLED.load(Ordering::Relaxed) {
+            return false;
+        }
+        let now = Instant::now();
+        let mut times = self.recent_emits.borrow_mut();
+        while times
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > RUNAWAY_WINDOW)
+        {
+            times.pop_front();
+        }
+        times.push_back(now);
+        if times.len() > RUNAWAY_LIMIT {
+            DISABLED.store(true, Ordering::Relaxed);
+            eprintln!(
+                "GlowKey: runaway detected ({} emits/s) — transformation disabled. Restart to re-enable.",
+                times.len()
+            );
+            return false;
+        }
+        true
     }
 
     /// Flushes the in-progress word — the engine's edits assume the composing word
@@ -96,7 +132,12 @@ impl TapState {
         match self.decide(event) {
             Decision::Passthrough => false,
             Decision::Emit(response) => {
-                emit(&self.source, &response);
+                // Circuit breaker: if this fires faster than human typing, stop.
+                if !self.circuit_ok() {
+                    return false;
+                }
+                let pid = *self.current_pid.borrow();
+                emit(&self.source, pid, &response);
                 true
             }
         }
@@ -113,7 +154,8 @@ impl TapState {
         if session.is_composing() {
             return;
         }
-        if let Some(bundle_id) = frontmost_bundle_id() {
+        if let Some((bundle_id, pid)) = frontmost_app() {
+            *self.current_pid.borrow_mut() = Some(pid);
             let mut last = self.last_bundle_id.borrow_mut();
             if last.as_deref() != Some(bundle_id.as_str()) {
                 session.set_frontmost_app(bundle_id.clone());
@@ -212,29 +254,32 @@ fn unicode_char(event: NonNull<CGEvent>) -> Option<char> {
         .and_then(|s| s.chars().next())
 }
 
-/// Emits the engine's edit from GlowKey's tagged source: `backspaces` deletions,
-/// then the inserted text. Sets [`EMITTING`] for the duration.
-fn emit(source: &CGEventSource, response: &KeyResponse) {
-    EMITTING.store(true, Ordering::SeqCst);
+/// Emits the engine's edit — `backspaces` deletions then the inserted text —
+/// **directly to the target process** (`post_to_pid`) rather than to the session
+/// tap. Posting to the pid delivers the events straight to the app, bypassing the
+/// session tap, so GlowKey's own output physically cannot re-enter its tap: the
+/// feedback loop is impossible by construction, not by tagging. Falls back to the
+/// session tap if the pid is unknown.
+fn emit(source: &CGEventSource, pid: Option<libc::pid_t>, response: &KeyResponse) {
     for _ in 0..response.backspaces {
-        post_key(source, KEY_CODE_DELETE as u16, true);
-        post_key(source, KEY_CODE_DELETE as u16, false);
+        post_key(source, pid, KEY_CODE_DELETE as u16, true);
+        post_key(source, pid, KEY_CODE_DELETE as u16, false);
     }
     if !response.insert.is_empty() {
-        post_string(source, &response.insert);
+        post_string(source, pid, &response.insert);
     }
-    EMITTING.store(false, Ordering::SeqCst);
 }
 
-/// Posts a synthetic keystroke by virtual key code, from GlowKey's tagged source.
-fn post_key(source: &CGEventSource, keycode: u16, key_down: bool) {
+/// Posts a synthetic keystroke to the target process (or the session tap if the
+/// pid is unknown).
+fn post_key(source: &CGEventSource, pid: Option<libc::pid_t>, keycode: u16, key_down: bool) {
     if let Some(event) = CGEvent::new_keyboard_event(Some(source), keycode, key_down) {
-        CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
+        post_event(pid, &event);
     }
 }
 
-/// Posts a synthetic key event carrying a Unicode string, from GlowKey's source.
-fn post_string(source: &CGEventSource, text: &str) {
+/// Posts a synthetic key event carrying a Unicode string to the target process.
+fn post_string(source: &CGEventSource, pid: Option<libc::pid_t>, text: &str) {
     let utf16: Vec<u16> = text.encode_utf16().collect();
     // Key-down carries the string; a matching key-up keeps the event pair balanced.
     for key_down in [true, false] {
@@ -250,15 +295,26 @@ fn post_string(source: &CGEventSource, text: &str) {
                 );
             }
         }
-        CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
+        post_event(pid, &event);
     }
 }
 
-/// Bundle identifier of the frontmost application, for the ignore list.
-fn frontmost_bundle_id() -> Option<String> {
+/// Delivers a synthesized event to the target process, or to the session tap when
+/// the pid is unknown.
+fn post_event(pid: Option<libc::pid_t>, event: &CGEvent) {
+    match pid {
+        Some(pid) => CGEvent::post_to_pid(pid, Some(event)),
+        None => CGEvent::post(CGEventTapLocation::SessionEventTap, Some(event)),
+    }
+}
+
+/// Bundle identifier and process id of the frontmost application, for the ignore
+/// list and for post-to-pid delivery.
+fn frontmost_app() -> Option<(String, libc::pid_t)> {
     let workspace = NSWorkspace::sharedWorkspace();
     let app = workspace.frontmostApplication()?;
-    app.bundleIdentifier().map(|s| s.to_string())
+    let bundle_id = app.bundleIdentifier()?.to_string();
+    Some((bundle_id, app.processIdentifier()))
 }
 
 /// The C tap callback. Wrapped in `catch_unwind` because a panic must not unwind
@@ -303,14 +359,6 @@ fn tap_dispatch(
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown
     ) {
         ctx.state.flush();
-        return event.as_ptr();
-    }
-
-    // Ignore our own synthesized events — by the in-flight flag (synchronous
-    // re-entry) and by the source's user-data tag.
-    if EMITTING.load(Ordering::SeqCst)
-        || integer_field(event, CGEventField::EventSourceUserData) == GLOWKEY_TAG
-    {
         return event.as_ptr();
     }
 

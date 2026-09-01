@@ -27,4 +27,5 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSDictionary"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem"] }
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGEventSource", "CGError"] }
-objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase", "CFDictionary", "CFNumber"] }
+libc = "0.2"

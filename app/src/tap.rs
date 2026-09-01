@@ -287,13 +287,18 @@ impl TapState {
                 if !response.handled {
                     return Decision::Passthrough;
                 }
-                // Emit every handled letter through post-to-pid, even a plain
-                // append. Mixing channels — original keys via the event stream,
-                // edits via post-to-pid — races in apps that process input
-                // asynchronously (Chrome/Chromium): a backspace can land before or
-                // after the plain letters it depends on, dropping or duplicating a
-                // character. Routing all of a word's text through the single
-                // post-to-pid channel keeps it strictly ordered.
+                // Let a plain append (no diacritic, no reordering) pass through the
+                // normal input path. This is essential, not just an optimization:
+                // a passed-through key is committed by the OS *synchronously*
+                // before the next key is processed, so when a later transform posts
+                // a backspace, the character it deletes is already on screen.
+                // Suppressing and re-injecting every key instead makes the injected
+                // character asynchronous, so the first transform's backspace can
+                // fire before that character lands — producing an extra letter
+                // (`exit` → `eexit`, `hoongf` → `hoồng`).
+                if response.backspaces == 0 && response.insert == ch.to_string() {
+                    return Decision::Passthrough;
+                }
                 Decision::Emit(response)
             }
             // A word boundary (space, digit, punctuation): commit the word. If

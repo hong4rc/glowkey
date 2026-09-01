@@ -1,0 +1,14 @@
+# GlowKey — Vietnamese Telex input method for macOS.
+# Workspace root. The engine crate is platform-free and unit-testable on any OS;
+# the app crate is the macOS InputMethodKit shell (built via `scripts/build-app.sh`).
+[workspace]
+members = ["crates/glowkey-engine", "app"]
+resolver = "2"
+
+# Release profile tuned like the sibling `marau` project: small, fast, stripped.
+# An input method sits on the keystroke hot path, so favour a lean binary.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

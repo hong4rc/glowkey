@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>GlowKey</string>
+    <key>CFBundleDisplayName</key>
+    <string>GlowKey</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.glowkey.inputmethod.GlowKey</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>GlowKey</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- Runs as a background input method, not a windowed app. -->
+    <key>LSBackgroundOnly</key>
+    <true/>
+
+    <!-- InputMethodKit registration. The connection name MUST be exactly
+         "<bundle id>_Connection" and match CONNECTION_NAME in controller.rs,
+         or IMKServer registration fails silently. -->
+    <key>InputMethodConnectionName</key>
+    <string>io.glowkey.inputmethod.GlowKey_Connection</string>
+    <key>InputMethodServerControllerClass</key>
+    <string>GlowKeyController</string>
+
+    <key>tsInputMethodCharacterRepertoireKey</key>
+    <array>
+        <string>Latn</string>
+    </array>
+
+    <!-- Input modes shown under the input-source switcher. VN transforms;
+         a future EN mode maps here too. -->
+    <key>ComponentInputModeDict</key>
+    <dict>
+        <key>tsInputModeListKey</key>
+        <dict>
+            <key>io.glowkey.inputmethod.GlowKey.Vietnamese</key>
+            <dict>
+                <key>tsInputModePrimaryInScriptKey</key>
+                <string>smRoman</string>
+                <key>tsInputModeScriptKey</key>
+                <string>smRoman</string>
+                <key>tsInputModeIsVisibleKey</key>
+                <true/>
+                <key>TISIntendedLanguage</key>
+                <string>vi</string>
+                <key>tsInputModeAlternateMenuTitleKey</key>
+                <string>GlowKey — Tiếng Việt</string>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>

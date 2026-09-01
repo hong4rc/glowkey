@@ -1,0 +1,5 @@
+# vi 0.8.0 requires Rust 1.96+. Pin an explicit version so rustup auto-installs
+# it for this project without disturbing the machine's global default toolchain.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

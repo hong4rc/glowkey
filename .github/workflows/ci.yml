@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Engine logic is platform-free — prove it builds and passes on Linux, which
+  # also guards against macOS-specific code leaking into the engine crate.
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt -p glowkey-engine -- --check
+      - run: cargo clippy -p glowkey-engine --all-targets -- -D warnings
+      - run: cargo test -p glowkey-engine
+
+  # Full workspace, including the objc2 InputMethodKit shell, builds on macOS.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      # Privacy guard: the input method sees every keystroke, so it must not add a
+      # direct networking dependency. (CloudKit/CoreData are pulled in transitively
+      # by AppKit in every AppKit app and are not called; this checks that GlowKey
+      # itself links nothing that opens the network.)
+      - name: Assert no direct networking framework linked
+        run: |
+          cargo build -p glowkey
+          BIN=target/debug/GlowKey
+          if otool -L "$BIN" | grep -Ei '/Network\.framework|CFNetwork|/libcurl'; then
+            echo "ERROR: GlowKey links a networking framework — a keystroke-observing IME must not." >&2
+            exit 1
+          fi
+          echo "OK: no direct networking framework linked."

@@ -1,0 +1,24 @@
+[package]
+name = "glowkey"
+version = "0.1.0"
+description = "GlowKey — Vietnamese Telex input method for macOS (InputMethodKit shell)"
+edition = "2021"
+license = "MIT"
+
+# The macOS input method is a normal executable that runs an IMKServer instead of
+# a windowed app. It links only on macOS; on other platforms it builds an empty
+# stub so `cargo test` on the engine still works in CI on Linux.
+[[bin]]
+name = "GlowKey"
+path = "src/main.rs"
+
+[dependencies]
+glowkey-engine = { path = "../crates/glowkey-engine" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# All-Rust macOS-native shell via objc2, matching the sibling `marau` project's
+# pattern of calling Apple frameworks directly from Rust rather than through Swift.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSObject", "NSNotification", "NSRange", "NSValue"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWorkspace", "NSRunningApplication"] }
+objc2-input-method-kit = "0.3"

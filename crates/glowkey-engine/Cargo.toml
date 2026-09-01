@@ -1,0 +1,12 @@
+[package]
+name = "glowkey-engine"
+version = "0.1.0"
+description = "Platform-free Vietnamese Telex transformation engine for GlowKey"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+# vi 0.8.0 is MIT (LICENSE file is verbatim MIT text; crates.io shows
+# "non-standard" only because it declares license-file rather than an SPDX id).
+# See THIRD-PARTY-NOTICES.md — the notice must ship with any distribution.
+vi = "0.8"

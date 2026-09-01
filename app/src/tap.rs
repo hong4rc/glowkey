@@ -143,20 +143,29 @@ impl TapState {
             Decision::Passthrough => false,
             Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
             Decision::Emit(response) => {
-                // Circuit breaker: if this fires faster than human typing, stop.
-                if !self.circuit_ok() {
-                    return false;
-                }
-                if debug_enabled() {
-                    eprintln!(
-                        "GlowKey emit: backspaces={} insert={:?}",
-                        response.backspaces, response.insert
-                    );
-                }
-                emit(&self.source, &response);
+                self.emit_edit(&response);
                 true
             }
+            Decision::EmitThenPassthrough(response) => {
+                self.emit_edit(&response);
+                false // the boundary key still passes through to the host
+            }
         }
+    }
+
+    /// Emits one edit through the session-posting path, honoring the circuit breaker
+    /// and debug logging.
+    fn emit_edit(&self, response: &KeyResponse) {
+        if !self.circuit_ok() {
+            return;
+        }
+        if debug_enabled() {
+            eprintln!(
+                "GlowKey emit: backspaces={} insert={:?}",
+                response.backspaces, response.insert
+            );
+        }
+        emit(&self.source, response);
     }
 
     /// Resolves the frontmost app at a word start (not mid-word) and, on a change,
@@ -237,13 +246,14 @@ impl TapState {
                 // post-to-pid channel keeps it strictly ordered.
                 Decision::Emit(response)
             }
-            // A word boundary (space, digit, punctuation): the engine resets and
-            // reports the key unhandled. The characters already on screen are the
-            // finished word, so let the boundary key through.
-            Some(_) => {
-                session.process_key('\u{20}'); // any non-letter flushes the word
-                Decision::Passthrough
-            }
+            // A word boundary (space, digit, punctuation): commit the word. If
+            // auto-fix restores an invalid result to its raw keys, emit that edit
+            // and still let the boundary key through afterward; otherwise the word
+            // is already on screen and the boundary key just passes through.
+            Some(_) => match session.commit() {
+                Some(restore) => Decision::EmitThenPassthrough(restore),
+                None => Decision::Passthrough,
+            },
             None => Decision::Passthrough,
         }
     }
@@ -257,6 +267,9 @@ enum Decision {
     Consume,
     /// Suppress the original and apply this edit (backspaces + insert).
     Emit(KeyResponse),
+    /// Apply this edit (e.g. an auto-fix restore) and then let the original key
+    /// through — the boundary key that triggered the commit still types.
+    EmitThenPassthrough(KeyResponse),
 }
 
 /// macOS virtual key code for Space.
@@ -576,14 +589,19 @@ mod real_event_tests {
         for ch in input.chars() {
             let event = key_event(&state.source, ch);
             let ptr = NonNull::from(&*event);
+            let apply = |screen: &mut String, r: &KeyResponse| {
+                let units: Vec<u16> = screen.encode_utf16().collect();
+                let keep = units.len().saturating_sub(r.backspaces);
+                *screen = String::from_utf16(&units[..keep]).unwrap();
+                screen.push_str(&r.insert);
+            };
             match state.decide(ptr) {
                 Decision::Passthrough => screen.push(ch),
                 Decision::Consume => {}
-                Decision::Emit(r) => {
-                    let units: Vec<u16> = screen.encode_utf16().collect();
-                    let keep = units.len().saturating_sub(r.backspaces);
-                    screen = String::from_utf16(&units[..keep]).unwrap();
-                    screen.push_str(&r.insert);
+                Decision::Emit(r) => apply(&mut screen, &r),
+                Decision::EmitThenPassthrough(r) => {
+                    apply(&mut screen, &r);
+                    screen.push(ch); // the boundary key still types
                 }
             }
         }

@@ -10,3 +10,8 @@ license = "MIT"
 # "non-standard" only because it declares license-file rather than an SPDX id).
 # See THIRD-PARTY-NOTICES.md — the notice must ship with any distribution.
 vi = "0.8"
+# Settings (de)serialization to JSON. Small, standard, and the settings file is
+# user-inspectable. Kept in the engine so Settings + its (de)serialization stay
+# platform-free (the app crate only owns the file path and I/O).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

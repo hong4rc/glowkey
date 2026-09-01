@@ -15,11 +15,14 @@
 //! VN/EN mode — those are the shell's concern. When Vietnamese input is off, the
 //! shell simply never calls [`Engine::process_key`].
 
+use serde::{Deserialize, Serialize};
 use vi::methods::IncrementalBuffer;
 use vi::processor::AccentStyle;
 
+pub mod config;
 pub mod exclusion;
 
+pub use config::Settings;
 pub use exclusion::ExclusionList;
 
 /// Tone-mark placement convention.
@@ -27,7 +30,7 @@ pub use exclusion::ExclusionList;
 /// New style is the modern default (`hoà`, `thuý`); old style is the traditional
 /// convention (`hòa`, `thúy`). Mirrors [`AccentStyle`] but keeps `vi` out of the
 /// shell's type surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PlacementStyle {
     /// Modern orthography — the software default.
     #[default]
@@ -119,6 +122,13 @@ impl Engine {
     #[must_use]
     pub fn current_word(&self) -> &str {
         &self.rendered
+    }
+
+    /// The raw keystrokes of the word being composed, exactly as typed — what
+    /// auto-fix restores when the rendering is not valid Vietnamese.
+    #[must_use]
+    pub fn raw_string(&self) -> String {
+        self.raw.iter().collect()
     }
 
     /// Feeds one typed character to the engine.
@@ -218,7 +228,7 @@ fn is_syllable_char(ch: char) -> bool {
 }
 
 /// Whether the session currently transforms input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum InputMode {
     /// Vietnamese transformation is active.
     #[default]
@@ -243,6 +253,10 @@ pub struct Session {
     engine: Engine,
     mode: InputMode,
     exclusions: ExclusionList,
+    /// Placement style, kept so it can be snapshotted back into [`Settings`].
+    style: PlacementStyle,
+    /// Whether to restore invalid Vietnamese to raw keys at a word boundary.
+    auto_fix: bool,
     /// Bundle identifier of the frontmost application, set by the shell on focus
     /// change. `None` before the first application is known.
     current_bundle_id: Option<String>,
@@ -256,8 +270,41 @@ impl Session {
             engine: Engine::new(style),
             mode: InputMode::default(),
             exclusions,
+            style,
+            auto_fix: true,
             current_bundle_id: None,
         }
+    }
+
+    /// Builds a session from persisted [`Settings`].
+    #[must_use]
+    pub fn from_settings(settings: &Settings) -> Self {
+        let mut session = Self::new(settings.style, settings.exclusion_list());
+        session.mode = settings.default_mode;
+        session.auto_fix = settings.auto_fix;
+        session
+    }
+
+    /// Snapshots the user-controlled state back into [`Settings`] for saving.
+    #[must_use]
+    pub fn snapshot(&self) -> Settings {
+        Settings {
+            exclusions: self.exclusions.ids().map(String::from).collect(),
+            auto_fix: self.auto_fix,
+            style: self.style,
+            default_mode: self.mode,
+        }
+    }
+
+    /// Whether auto-fix (restore invalid Vietnamese to raw keys) is enabled.
+    #[must_use]
+    pub fn auto_fix(&self) -> bool {
+        self.auto_fix
+    }
+
+    /// Enables or disables auto-fix.
+    pub fn set_auto_fix(&mut self, on: bool) {
+        self.auto_fix = on;
     }
 
     /// Whether transformation is active *right now* — Vietnamese mode and the
@@ -340,7 +387,14 @@ impl Session {
 
     /// Changes the placement style for subsequent words.
     pub fn set_style(&mut self, style: PlacementStyle) {
+        self.style = style;
         self.engine.set_style(style);
+    }
+
+    /// The current placement style.
+    #[must_use]
+    pub fn style(&self) -> PlacementStyle {
+        self.style
     }
 
     /// Whether transformation is currently active (see [`is_active`](Self::is_active))
@@ -364,6 +418,33 @@ impl Session {
         word
     }
 
+    /// Finalizes the word at a boundary, applying auto-fix. If auto-fix is on and
+    /// the composed word is not valid Vietnamese, returns a restore edit that
+    /// replaces the rendering with the raw keystrokes (so `eĩt` becomes `exit`);
+    /// otherwise returns `None`. Always clears the engine afterward, so the shell
+    /// should call this once when it sees a word-boundary key, apply any returned
+    /// edit, then let the boundary key through.
+    pub fn commit(&mut self) -> Option<KeyResponse> {
+        let restore = if self.auto_fix && self.engine.is_composing() {
+            let rendered = self.engine.current_word();
+            if is_invalid_vietnamese(rendered) {
+                let raw = self.engine.raw_string();
+                // Only restore if it actually changes something.
+                (raw != rendered).then(|| KeyResponse {
+                    handled: true,
+                    backspaces: rendered.encode_utf16().count(),
+                    insert: raw,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        self.engine.reset();
+        restore
+    }
+
     /// Flushes any in-progress word without changing mode or focus.
     ///
     /// The engine's edits ([`KeyResponse::backspaces`]) assume the current word's
@@ -375,6 +456,21 @@ impl Session {
     pub fn flush(&mut self) {
         self.engine.reset();
     }
+}
+
+/// Whether `word` is a non-empty string that is not a valid Vietnamese syllable —
+/// the condition under which auto-fix restores the raw keystrokes. Uses `vi`'s
+/// syllable validator; a plain ASCII word that never transformed is treated as
+/// valid (nothing to fix) since it equals its raw input.
+fn is_invalid_vietnamese(word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    // A pure-ASCII word is what the user typed verbatim — leave it alone.
+    if word.is_ascii() {
+        return false;
+    }
+    !vi::validation::is_valid_syllable(word)
 }
 
 /// Computes the minimal edit turning `prev` into `next`: keep the common prefix,

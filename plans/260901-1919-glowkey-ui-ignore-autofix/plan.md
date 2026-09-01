@@ -112,11 +112,11 @@ changes are immediate.
 
 | # | Phase | Half | Status |
 |---|-------|------|--------|
-| 1 | [Settings & persistence](./phase-01-settings-persistence.md) | engine + shell, testable | Pending |
-| 2 | [Auto-fix restore](./phase-02-auto-fix-restore.md) | engine, testable | Pending |
-| 3 | [Menu bar UI](./phase-03-menu-bar-ui.md) | shell (objc2), GUI-verified | Pending |
-| 4 | [Preferences window](./phase-04-preferences-window.md) | shell (objc2), GUI-verified | Pending |
-| 5 | [Integration & live test](./phase-05-integration-and-live-test.md) | live | Pending |
+| 1 | [Settings & persistence](./phase-01-settings-persistence.md) | engine + shell, testable | ✅ Done |
+| 2 | [Auto-fix restore](./phase-02-auto-fix-restore.md) | engine, testable | ✅ Done |
+| 3 | [Menu bar UI](./phase-03-menu-bar-ui.md) | shell (objc2), GUI-verified | ✅ Done (code) |
+| 4 | [Preferences window](./phase-04-preferences-window.md) | shell (objc2), GUI-verified | ✅ Done (code) |
+| 5 | [Integration & live test](./phase-05-integration-and-live-test.md) | live | ⬜ Needs your run |
 
 ```
 1 (settings) ──> 2 (auto-fix) ──┐

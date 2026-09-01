@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Preferences window"
-status: pending
+status: completed
 priority: P1
 effort: "3-5d"
 dependencies: [3]

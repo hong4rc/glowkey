@@ -61,6 +61,14 @@ define_class!(
             self.state().toggle_auto_fix_and_save();
         }
 
+        #[unsafe(method(openSettings:))]
+        fn open_settings(&self, _sender: Option<&AnyObject>) {
+            // The Settings window (prefs_window) lands in the next phase; until
+            // then, log so the wiring is testable. Menu placement and the ⌘,
+            // shortcut are already correct per the UI design.
+            eprintln!("GlowKey: Settings… (window pending)");
+        }
+
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -94,35 +102,42 @@ impl MenuController {
         self.add_disabled(menu, &header, mtm);
         self.add_separator(menu, mtm);
 
-        // Enable/Disable for the current app.
+        // Enable/Disable Vietnamese for the current app (the quick per-app switch).
         let toggle_label = if excluded {
-            format!("Enable Vietnamese for {app_name}")
+            format!("Enable for “{app_name}”")
         } else {
-            format!("Disable Vietnamese for {app_name}")
+            format!("Disable for “{app_name}”")
         };
-        self.add_item(menu, &toggle_label, sel!(toggleCurrentApp:), false, mtm);
+        self.add_item(menu, &toggle_label, sel!(toggleCurrentApp:), false, "", mtm);
 
-        // VN/EN mode toggle.
+        self.add_separator(menu, mtm);
+
+        // VN/EN mode toggle. The ⌃⇧Space shortcut is handled by the tap, not the
+        // menu (GlowKey is a background agent), so it is shown as title text for
+        // discoverability rather than a real menu key equivalent.
         let mode_on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
         self.add_item(
             menu,
-            "Vietnamese mode (⌃⇧Space)",
+            "Vietnamese input (⌃⇧Space)",
             sel!(toggleMode:),
             mode_on,
+            "",
             mtm,
         );
 
         // Auto-fix toggle.
         self.add_item(
             menu,
-            "Auto-fix invalid words",
+            "Auto-fix English words",
             sel!(toggleAutoFix:),
             auto_fix,
+            "",
             mtm,
         );
 
         self.add_separator(menu, mtm);
-        self.add_item(menu, "Quit GlowKey", sel!(quit:), false, mtm);
+        self.add_item(menu, "Settings…", sel!(openSettings:), false, ",", mtm);
+        self.add_item(menu, "Quit GlowKey", sel!(quit:), false, "q", mtm);
     }
 
     fn add_item(
@@ -131,14 +146,15 @@ impl MenuController {
         title: &str,
         action: objc2::runtime::Sel,
         checked: bool,
+        key_equivalent: &str,
         mtm: MainThreadMarker,
-    ) {
+    ) -> Retained<NSMenuItem> {
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
                 &NSString::from_str(title),
                 Some(action),
-                &NSString::from_str(""),
+                &NSString::from_str(key_equivalent),
             )
         };
         unsafe { item.setTarget(Some(self)) };
@@ -147,6 +163,7 @@ impl MenuController {
             item.setState(1);
         }
         menu.addItem(&item);
+        item
     }
 
     fn add_disabled(&self, menu: &NSMenu, title: &str, mtm: MainThreadMarker) {

@@ -89,73 +89,96 @@ impl TapState {
         }
     }
 
-    /// Processes one key-down event. Returns `true` to consume it (the engine
-    /// transformed and re-emitted the text), or `false` to let it through.
+    /// Processes one key-down event and applies the result. Returns `true` to
+    /// consume the event (suppress the original), or `false` to let it through.
     fn handle_key_down(&self, event: NonNull<CGEvent>) -> bool {
+        self.refresh_frontmost_at_word_start();
+        match self.decide(event) {
+            Decision::Passthrough => false,
+            Decision::Emit(response) => {
+                emit(&self.source, &response);
+                true
+            }
+        }
+    }
+
+    /// Resolves the frontmost app at a word start (not mid-word) and, on a change,
+    /// tells the session — keeping the ignore list honest without a per-keystroke
+    /// workspace query. Separated from [`decide`](Self::decide) so the decision
+    /// logic is a pure function of the event and session state, and testable.
+    fn refresh_frontmost_at_word_start(&self) {
+        let Ok(mut session) = self.session.try_borrow_mut() else {
+            return;
+        };
+        if session.is_composing() {
+            return;
+        }
+        if let Some(bundle_id) = frontmost_bundle_id() {
+            let mut last = self.last_bundle_id.borrow_mut();
+            if last.as_deref() != Some(bundle_id.as_str()) {
+                session.set_frontmost_app(bundle_id.clone());
+                *last = Some(bundle_id);
+            }
+        }
+    }
+
+    /// Decides what to do with one key-down event: pass it through, or suppress it
+    /// and emit an edit. Pure with respect to the OS (no event synthesis, no
+    /// workspace query), so it can be driven by real `CGEvent`s in tests.
+    fn decide(&self, event: NonNull<CGEvent>) -> Decision {
         let flags = unsafe { CGEvent::flags(Some(event.as_ref())) };
         if is_shortcut(flags) {
-            return false; // ⌘/⌃/⌥ chords are shortcuts, not text
+            return Decision::Passthrough; // ⌘/⌃/⌥ chords are shortcuts, not text
         }
 
         let Ok(mut session) = self.session.try_borrow_mut() else {
-            return false;
+            return Decision::Passthrough;
         };
-
-        // Keep the ignore list honest without polling every keystroke: resolve the
-        // frontmost app only at a word start (not mid-word), which is cheap and
-        // still catches app switches at the boundaries where they matter.
-        if !session.is_composing() {
-            if let Some(bundle_id) = frontmost_bundle_id() {
-                let mut last = self.last_bundle_id.borrow_mut();
-                if last.as_deref() != Some(bundle_id.as_str()) {
-                    session.set_frontmost_app(bundle_id.clone());
-                    *last = Some(bundle_id);
-                }
-            }
-        }
-
         if !session.is_active() {
-            return false;
+            return Decision::Passthrough;
         }
 
         let keycode = integer_field(event, CGEventField::KeyboardEventKeycode);
         if keycode == KEY_CODE_DELETE {
             if !session.is_composing() {
-                return false; // nothing composing — let the host delete
+                return Decision::Passthrough; // nothing composing — let host delete
             }
-            let response = session.backspace();
-            drop(session);
-            emit(&self.source, &response);
-            return true;
+            return Decision::Emit(session.backspace());
         }
 
         match unicode_char(event) {
             Some(ch) if ch.is_ascii_alphabetic() => {
                 let response = session.process_key(ch);
                 if !response.handled {
-                    return false;
+                    return Decision::Passthrough;
                 }
                 // Fast path: when the engine only appends the character just typed
                 // (no diacritic, no reordering), let the original keystroke through
                 // untouched. This makes ordinary/English typing zero-overhead and
                 // shrinks the window for any event-ordering race.
                 if response.backspaces == 0 && response.insert == ch.to_string() {
-                    return false;
+                    return Decision::Passthrough;
                 }
-                drop(session);
-                emit(&self.source, &response);
-                true
+                Decision::Emit(response)
             }
             // A word boundary (space, digit, punctuation): the engine resets and
             // reports the key unhandled. The characters already on screen are the
             // finished word, so let the boundary key through.
             Some(_) => {
                 session.process_key('\u{20}'); // any non-letter flushes the word
-                false
+                Decision::Passthrough
             }
-            None => false,
+            None => Decision::Passthrough,
         }
     }
+}
+
+/// The outcome of processing one key event.
+enum Decision {
+    /// Let the original keystroke through unchanged.
+    Passthrough,
+    /// Suppress the original and apply this edit (backspaces + insert).
+    Emit(KeyResponse),
 }
 
 /// True when a shortcut modifier is held — Command, Control, or Option. Shift is
@@ -313,12 +336,21 @@ struct TapContext {
 /// Creates the event tap and runs the main loop. Returns without running if the
 /// Accessibility permission is missing (the tap cannot be created).
 pub fn run() {
-    if !accessibility_trusted() {
+    // Wait for Accessibility instead of exiting, so the app stays alive while the
+    // user grants it (add GlowKey.app in System Settings → Privacy & Security →
+    // Accessibility). Once granted the tap starts automatically; some macOS
+    // versions need a relaunch to pick up the grant, but polling covers the rest.
+    if !prompt_accessibility() {
+        eprintln!("GlowKey: waiting for Accessibility permission…");
         eprintln!(
-            "GlowKey needs Accessibility permission. Grant it in System Settings → \
-             Privacy & Security → Accessibility, then relaunch."
+            "  A prompt should have appeared. Enable GlowKey in System Settings → \
+             Privacy & Security → Accessibility, then it starts automatically."
         );
+        while !accessibility_trusted() {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     }
+    eprintln!("GlowKey: Accessibility granted — starting.");
 
     let Some(state) = TapState::new() else {
         eprintln!("GlowKey: failed to create the event source.");
@@ -369,4 +401,161 @@ fn accessibility_trusted() -> bool {
         fn AXIsProcessTrusted() -> bool;
     }
     unsafe { AXIsProcessTrusted() }
+}
+
+/// Shows the system Accessibility prompt and registers GlowKey in the
+/// Accessibility list, so the user can grant it with one click. Returns the
+/// current trust state.
+fn prompt_accessibility() -> bool {
+    use objc2_core_foundation::{
+        kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary,
+    };
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        static kAXTrustedCheckOptionPrompt: *const c_void; // CFStringRef
+        fn AXIsProcessTrustedWithOptions(options: *const c_void) -> bool;
+    }
+    unsafe {
+        // Build { kAXTrustedCheckOptionPrompt: true } and ask with a prompt.
+        let true_value = objc2_core_foundation::kCFBooleanTrue;
+        let key = kAXTrustedCheckOptionPrompt;
+        let value = true_value
+            .map(|b| (b as *const objc2_core_foundation::CFBoolean).cast::<c_void>())
+            .unwrap_or(std::ptr::null());
+        let mut keys = [key];
+        let mut values = [value];
+        let options = CFDictionary::new(
+            None,
+            keys.as_mut_ptr(),
+            values.as_mut_ptr(),
+            1,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        );
+        let options_ptr = options
+            .as_ref()
+            .map(|d| (d.as_ref() as *const objc2_core_foundation::CFDictionary).cast::<c_void>())
+            .unwrap_or(std::ptr::null());
+        AXIsProcessTrustedWithOptions(options_ptr)
+    }
+}
+
+#[cfg(test)]
+mod real_event_tests {
+    //! End-to-end tests driving the real tap decision path with real CoreGraphics
+    //! key events (real CGEvent objects, real Unicode decode, real engine). This
+    //! covers everything except the system-level tap install and event injection,
+    //! which require Accessibility permission a test process cannot grant.
+
+    use super::*;
+
+    /// Builds a real key-down CGEvent from GlowKey's source carrying `ch` as its
+    /// Unicode string (keycode 0, no modifiers) — what the tap would see for a
+    /// letter typed on the active layout.
+    fn key_event(source: &CGEventSource, ch: char) -> CFRetained<CGEvent> {
+        let event = CGEvent::new_keyboard_event(Some(source), 0, true).expect("event");
+        let utf16: Vec<u16> = ch.to_string().encode_utf16().collect();
+        unsafe {
+            CGEvent::keyboard_set_unicode_string(Some(&event), utf16.len() as u64, utf16.as_ptr());
+        }
+        event
+    }
+
+    /// Builds a real Backspace key-down event (virtual keycode 51).
+    fn backspace_event(source: &CGEventSource) -> CFRetained<CGEvent> {
+        CGEvent::new_keyboard_event(Some(source), KEY_CODE_DELETE as u16, true).expect("event")
+    }
+
+    /// Types `input` through the real `decide()` path and returns the resulting
+    /// on-screen text, applying each Decision exactly as the OS would.
+    fn type_via_tap(state: &TapState, input: &str) -> String {
+        let mut screen = String::new();
+        for ch in input.chars() {
+            let event = key_event(&state.source, ch);
+            let ptr = NonNull::from(&*event);
+            match state.decide(ptr) {
+                Decision::Passthrough => screen.push(ch),
+                Decision::Emit(r) => {
+                    let units: Vec<u16> = screen.encode_utf16().collect();
+                    let keep = units.len().saturating_sub(r.backspaces);
+                    screen = String::from_utf16(&units[..keep]).unwrap();
+                    screen.push_str(&r.insert);
+                }
+            }
+        }
+        screen
+    }
+
+    fn active_state() -> TapState {
+        let state = TapState::new().expect("event source");
+        // A non-excluded app so transformation is active.
+        state
+            .session
+            .borrow_mut()
+            .set_frontmost_app("com.apple.TextEdit");
+        state
+    }
+
+    #[test]
+    fn real_events_free_tone_placement() {
+        // The headline: real key events, tone key in any position → hồng.
+        assert_eq!(type_via_tap(&active_state(), "hoongf"), "hồng");
+        assert_eq!(type_via_tap(&active_state(), "hofong"), "hồng");
+        assert_eq!(type_via_tap(&active_state(), "hoonfg"), "hồng");
+        // The user's second example, exactly as typed:
+        assert_eq!(type_via_tap(&active_state(), "hofngo"), "hồng");
+    }
+
+    #[test]
+    fn real_events_words_and_english() {
+        assert_eq!(type_via_tap(&active_state(), "nguyeenx"), "nguyễn");
+        assert_eq!(type_via_tap(&active_state(), "dduwowcj"), "được");
+        assert_eq!(type_via_tap(&active_state(), "Hoongf"), "Hồng");
+        // English passes through untouched (fast path).
+        assert_eq!(type_via_tap(&active_state(), "hello"), "hello");
+    }
+
+    #[test]
+    fn real_events_boundary_commits_word() {
+        // Space is a boundary: the word is already on screen, space passes through.
+        assert_eq!(type_via_tap(&active_state(), "hoongf "), "hồng ");
+    }
+
+    #[test]
+    fn real_events_backspace() {
+        let state = active_state();
+        let mut screen = String::new();
+        for ch in "hoongf".chars() {
+            let event = key_event(&state.source, ch);
+            if let Decision::Emit(r) = state.decide(NonNull::from(&*event)) {
+                let units: Vec<u16> = screen.encode_utf16().collect();
+                let keep = units.len().saturating_sub(r.backspaces);
+                screen = String::from_utf16(&units[..keep]).unwrap();
+                screen.push_str(&r.insert);
+            } else {
+                screen.push(ch);
+            }
+        }
+        assert_eq!(screen, "hồng");
+
+        // A real Backspace event removes the tone.
+        let bs = backspace_event(&state.source);
+        if let Decision::Emit(r) = state.decide(NonNull::from(&*bs)) {
+            let units: Vec<u16> = screen.encode_utf16().collect();
+            let keep = units.len().saturating_sub(r.backspaces);
+            screen = String::from_utf16(&units[..keep]).unwrap();
+            screen.push_str(&r.insert);
+        }
+        assert_eq!(screen, "hông");
+    }
+
+    #[test]
+    fn real_events_excluded_app_passes_through() {
+        let state = TapState::new().expect("source");
+        state
+            .session
+            .borrow_mut()
+            .set_frontmost_app("com.apple.Terminal"); // default exclusion
+        assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
+    }
 }

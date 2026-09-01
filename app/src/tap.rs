@@ -27,9 +27,11 @@
 //! - Does not work in secure input fields (passwords): macOS withholds those
 //!   events from all event taps.
 //!
-//! NOTE: none of this can be unit-tested — it needs Accessibility granted and a
-//! running session. The engine crate carries the tested logic; this layer is
-//! verified by granting permission, running, and typing. See `docs/checkpoint.md`.
+//! The decision logic ([`TapState::decide`]) is a pure function of the event and
+//! session state and is unit-tested with real `CGEvent`s (see the tests below).
+//! Only the system-level parts — installing the tap, delivering synthesized events
+//! to an app — need Accessibility and a live session to verify. See
+//! `docs/checkpoint.md`.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -131,6 +133,7 @@ impl TapState {
         self.refresh_frontmost_at_word_start();
         match self.decide(event) {
             Decision::Passthrough => false,
+            Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
             Decision::Emit(response) => {
                 // Circuit breaker: if this fires faster than human typing, stop.
                 if !self.circuit_ok() {
@@ -164,11 +167,24 @@ impl TapState {
         }
     }
 
-    /// Decides what to do with one key-down event: pass it through, or suppress it
-    /// and emit an edit. Pure with respect to the OS (no event synthesis, no
-    /// workspace query), so it can be driven by real `CGEvent`s in tests.
+    /// Decides what to do with one key-down event: pass it through, suppress it, or
+    /// suppress it and emit an edit. Pure with respect to the OS (no event
+    /// synthesis, no workspace query), so it can be driven by real `CGEvent`s in
+    /// tests.
     fn decide(&self, event: NonNull<CGEvent>) -> Decision {
         let flags = unsafe { CGEvent::flags(Some(event.as_ref())) };
+        let keycode = integer_field(event, CGEventField::KeyboardEventKeycode);
+
+        // VN/EN toggle hotkey (⌃⇧Space): flip mode and consume the key so it does
+        // not type a space. Checked before the shortcut filter, since it is one.
+        if is_toggle_hotkey(flags, keycode) {
+            if let Ok(mut session) = self.session.try_borrow_mut() {
+                let mode = session.toggle_mode();
+                eprintln!("GlowKey: {mode:?} mode");
+            }
+            return Decision::Consume;
+        }
+
         if is_shortcut(flags) {
             return Decision::Passthrough; // ⌘/⌃/⌥ chords are shortcuts, not text
         }
@@ -180,7 +196,6 @@ impl TapState {
             return Decision::Passthrough;
         }
 
-        let keycode = integer_field(event, CGEventField::KeyboardEventKeycode);
         if keycode == KEY_CODE_DELETE {
             if !session.is_composing() {
                 return Decision::Passthrough; // nothing composing — let host delete
@@ -219,8 +234,27 @@ impl TapState {
 enum Decision {
     /// Let the original keystroke through unchanged.
     Passthrough,
+    /// Suppress the original with no output (e.g. the VN/EN toggle hotkey).
+    Consume,
     /// Suppress the original and apply this edit (backspaces + insert).
     Emit(KeyResponse),
+}
+
+/// macOS virtual key code for Space.
+const KEY_CODE_SPACE: i64 = 49;
+
+/// True when the event is the VN/EN toggle hotkey: Control+Shift+Space, with no
+/// Command or Option. Chosen to avoid clashing with common shortcuts and with the
+/// system input-source switcher.
+fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
+    if keycode != KEY_CODE_SPACE {
+        return false;
+    }
+    let control = flags.0 & CGEventFlags::MaskControl.0 != 0;
+    let shift = flags.0 & CGEventFlags::MaskShift.0 != 0;
+    let command = flags.0 & CGEventFlags::MaskCommand.0 != 0;
+    let option = flags.0 & CGEventFlags::MaskAlternate.0 != 0;
+    control && shift && !command && !option
 }
 
 /// True when a shortcut modifier is held — Command, Control, or Option. Shift is
@@ -523,6 +557,7 @@ mod real_event_tests {
             let ptr = NonNull::from(&*event);
             match state.decide(ptr) {
                 Decision::Passthrough => screen.push(ch),
+                Decision::Consume => {}
                 Decision::Emit(r) => {
                     let units: Vec<u16> = screen.encode_utf16().collect();
                     let keep = units.len().saturating_sub(r.backspaces);
@@ -605,5 +640,43 @@ mod real_event_tests {
             .borrow_mut()
             .set_frontmost_app("com.apple.Terminal"); // default exclusion
         assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
+    }
+
+    /// A real Control+Shift+Space key event.
+    fn toggle_event(source: &CGEventSource) -> CFRetained<CGEvent> {
+        let event =
+            CGEvent::new_keyboard_event(Some(source), KEY_CODE_SPACE as u16, true).expect("event");
+        let flags = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
+        CGEvent::set_flags(Some(&event), flags);
+        event
+    }
+
+    #[test]
+    fn real_events_toggle_hotkey_switches_mode() {
+        let state = active_state();
+        // Vietnamese by default: transforms.
+        assert_eq!(type_via_tap(&state, "hoongf"), "hồng");
+
+        // ⌃⇧Space toggles to English — and is consumed (types nothing).
+        let toggle = toggle_event(&state.source);
+        assert!(matches!(
+            state.decide(NonNull::from(&*toggle)),
+            Decision::Consume
+        ));
+        assert_eq!(
+            state.session.borrow().mode(),
+            glowkey_engine::InputMode::English
+        );
+
+        // Now the same keys pass through untransformed.
+        assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
+
+        // Toggle back to Vietnamese.
+        let toggle = toggle_event(&state.source);
+        assert!(matches!(
+            state.decide(NonNull::from(&*toggle)),
+            Decision::Consume
+        ));
+        assert_eq!(type_via_tap(&state, "hoongf"), "hồng");
     }
 }

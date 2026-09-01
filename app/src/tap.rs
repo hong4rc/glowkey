@@ -821,6 +821,8 @@ mod real_event_tests {
         assert_eq!(type_via_tap(&active_state(), "hoongf"), "hồng");
         assert_eq!(type_via_tap(&active_state(), "hofong"), "hồng");
         assert_eq!(type_via_tap(&active_state(), "hoonfg"), "hồng");
+        // Multi-transform word through the real emit path (w horns uo→ươ, f tones).
+        assert_eq!(type_via_tap(&active_state(), "nguoiwf"), "người");
         // The user's second example, exactly as typed:
         assert_eq!(type_via_tap(&active_state(), "hofngo"), "hồng");
     }

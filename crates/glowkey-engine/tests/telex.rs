@@ -53,6 +53,8 @@ fn immediate_circumflex() {
 fn hard_nuclei_and_onsets() {
     assert_eq!(type_word("nguyeenx"), "nguyễn");
     assert_eq!(type_word("dduwowcj"), "được");
+    // A single `w` after `uo` horns both vowels (uo → ươ), then the tone applies.
+    assert_eq!(type_word("nguoiwf"), "người");
     assert_eq!(type_word("quar"), "quả");
     assert_eq!(type_word("khuyru"), "khuỷu");
     assert_eq!(type_word("uyr"), "uỷ");

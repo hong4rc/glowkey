@@ -6,10 +6,10 @@
 //! so the platform shell can render the change with either marked text or an
 //! insert-plus-backspace sequence without caring which.
 //!
-//! Design (matches the surveyed shipping engines, notably `xkey`): keep one
-//! incremental buffer and push forward keys into it for the common case, but keep
-//! the raw keystroke log alongside so a backspace can rebuild the buffer from the
-//! keys minus the last one. Forward typing is cheap; backward editing is correct.
+//! Design (matches the surveyed shipping engines, notably `xkey`): keep the raw
+//! keystroke log for the word being typed and re-derive the whole rendering from
+//! it on every keystroke. At a word's length this costs nothing, and it gives one
+//! code path for forward typing, backspace, and case handling.
 //!
 //! The engine is intentionally ignorant of the per-application ignore list and of
 //! VN/EN mode — those are the shell's concern. When Vietnamese input is off, the
@@ -159,34 +159,41 @@ impl Engine {
 /// Transforms a raw keystroke sequence into its Vietnamese rendering.
 ///
 /// `vi` mishandles case for whole-word uppercase (e.g. `NGUYEENX` places the tone
-/// on the wrong vowel), so case is folded out before transformation and folded
-/// back after — the orthogonal-case approach `xkey` uses. The two case patterns
-/// users actually produce, ALL-CAPS and Title-case, are handled exactly; arbitrary
-/// interior mixed case (`hoOngf`) is best-effort.
+/// on the wrong vowel), so transformation runs on the lowercased keys and case is
+/// re-applied afterward. Crucially, when `vi` applied *no* Vietnamese
+/// transformation — the output equals the lowercased input — the original keys are
+/// emitted verbatim, so mixed-case words that are not Vietnamese (`iPhone`,
+/// `JavaScript`, `macOS`) keep their exact case instead of being flattened.
+/// For words that do transform, the two case patterns users actually produce,
+/// ALL-CAPS and Title-case, are handled exactly; other interior case is
+/// best-effort (nobody types `nGuyễn`).
 fn render(raw: &[char], style: PlacementStyle) -> String {
+    let lowered: String = raw.iter().map(|c| c.to_ascii_lowercase()).collect();
     let mut buffer = IncrementalBuffer::new_with_style(&vi::TELEX, style.into());
-    for ch in raw {
-        buffer.push(ch.to_ascii_lowercase());
+    for ch in lowered.chars() {
+        buffer.push(ch);
     }
-    let lower = buffer.view();
-    apply_case(lower, raw)
+    let out = buffer.view();
+
+    // No Vietnamese transformation occurred: emit the keys exactly as typed so all
+    // original case survives. This is the common case for English words.
+    if out == lowered {
+        return raw.iter().collect();
+    }
+
+    apply_case(out, raw)
 }
 
-/// Re-applies the case pattern of the raw keys to a lowercase rendering.
+/// Re-applies the raw keys' case pattern to a transformed lowercase rendering.
+///
+/// `raw` is always non-empty here (an empty or untransformed word takes the
+/// verbatim path in [`render`]) and contains only ASCII letters (only
+/// [`is_syllable_char`] keys reach the buffer).
 fn apply_case(lower: &str, raw: &[char]) -> String {
-    let letters: Vec<char> = raw
-        .iter()
-        .copied()
-        .filter(|c| c.is_ascii_alphabetic())
-        .collect();
-    if letters.is_empty() {
-        return lower.to_string();
-    }
-    let all_upper = letters.iter().all(|c| c.is_ascii_uppercase());
-    if all_upper {
+    if raw.iter().all(|c| c.is_ascii_uppercase()) {
         return lower.to_uppercase();
     }
-    if letters[0].is_ascii_uppercase() {
+    if raw[0].is_ascii_uppercase() {
         // Title-case: uppercase the first character of the rendering.
         let mut chars = lower.chars();
         return match chars.next() {
@@ -247,7 +254,14 @@ impl Session {
     }
 
     /// Whether transformation is active *right now* — Vietnamese mode and the
-    /// current application not excluded.
+    /// current application known and not excluded.
+    ///
+    /// Fails **closed**: until the shell has told the session which application is
+    /// frontmost (via [`set_frontmost_app`](Self::set_frontmost_app)), nothing
+    /// transforms. For a tool whose primary feature is *not* transforming in
+    /// excluded apps, an unknown app must not transform — otherwise a shell that
+    /// forgets to resolve the bundle id would transform everywhere, including the
+    /// terminals and editors the ignore list exists to protect.
     #[must_use]
     pub fn is_active(&self) -> bool {
         if self.mode == InputMode::English {
@@ -255,16 +269,19 @@ impl Session {
         }
         match &self.current_bundle_id {
             Some(id) => !self.exclusions.is_excluded(id),
-            None => true,
+            None => false,
         }
     }
 
     /// Processes a typed character, honoring exclusion and mode. When inactive the
-    /// key is always passed through untouched.
+    /// key passes through untouched and any in-progress word is flushed, so a
+    /// mid-word transition to inactive (e.g. the user excludes the current app)
+    /// cannot leave a stale diff baseline that later corrupts the document.
     pub fn process_key(&mut self, ch: char) -> KeyResponse {
         if self.is_active() {
             self.engine.process_key(ch)
         } else {
+            self.engine.reset();
             KeyResponse::passthrough()
         }
     }
@@ -274,6 +291,7 @@ impl Session {
         if self.is_active() {
             self.engine.backspace()
         } else {
+            self.engine.reset();
             KeyResponse::passthrough()
         }
     }
@@ -318,8 +336,14 @@ impl Session {
         self.engine.set_style(style);
     }
 
-    /// Flushes any in-progress word without changing mode or focus. Call when the
-    /// system commits composition or the input session deactivates.
+    /// Flushes any in-progress word without changing mode or focus.
+    ///
+    /// The engine's edits ([`KeyResponse::backspaces`]) assume the current word's
+    /// rendering is still the tail of the document. The shell **must** call this
+    /// whenever that stops being true — composition commit, session deactivation,
+    /// and any caret or selection move the engine did not cause (arrow keys, a
+    /// mouse click, a host-side autocorrect). Skipping it lets a later keystroke
+    /// delete text the engine never wrote.
     pub fn flush(&mut self) {
         self.engine.reset();
     }

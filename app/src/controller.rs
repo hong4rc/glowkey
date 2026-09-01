@@ -16,14 +16,9 @@ use std::cell::RefCell;
 use glowkey_engine::{ExclusionList, PlacementStyle, Session};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, AnyThread, DeclaredClass};
+use objc2::{define_class, msg_send, AnyThread, ClassType, DeclaredClass};
 use objc2_foundation::{NSObject, NSString};
 use objc2_input_method_kit::{IMKInputController, IMKServer};
-
-/// A syllable-length output buffer is generous; NFC Vietnamese syllables are
-/// short. Documented here to keep the constant near its rationale.
-#[allow(dead_code)]
-const MAX_SYLLABLE_UTF16: usize = 32;
 
 /// The connection name must exactly match `InputMethodConnectionName` in
 /// `Info.plist`, or the server fails to register (silently).
@@ -71,13 +66,22 @@ define_class!(
         /// Flush any in-progress word when composition is committed by the system.
         #[unsafe(method(commitComposition:))]
         fn commit_composition(&self, _sender: Option<&AnyObject>) {
-            self.ivars().session.borrow_mut().flush();
+            self.flush_session();
         }
 
-        /// Reset engine state when this input session becomes active.
+        /// Flush when this input session becomes active (focus moved here), so no
+        /// stale word from a previous field bleeds in.
         #[unsafe(method(activateServer:))]
         fn activate_server(&self, _sender: Option<&AnyObject>) {
+            self.flush_session();
             self.refresh_frontmost_app();
+        }
+
+        /// Flush when this input session is deactivated (focus left), so the diff
+        /// baseline never survives a focus change.
+        #[unsafe(method(deactivateServer:))]
+        fn deactivate_server(&self, _sender: Option<&AnyObject>) {
+            self.flush_session();
         }
     }
 );
@@ -94,8 +98,19 @@ impl GlowKeyController {
         false
     }
 
+    /// Flushes the session's in-progress word. Uses `try_borrow_mut` because IMK
+    /// can call lifecycle methods re-entrantly (an insert can trigger a commit);
+    /// a failed borrow means a flush is already underway, which is fine to skip.
+    fn flush_session(&self) {
+        if let Ok(mut session) = self.ivars().session.try_borrow_mut() {
+            session.flush();
+        }
+    }
+
     /// Update the engine with the frontmost application's bundle identifier, so the
-    /// ignore list applies. Wired against NSWorkspace in the next build.
+    /// ignore list applies. Wired against NSWorkspace in the next build; until then
+    /// the session's bundle id stays `None`, which fails closed (no transformation)
+    /// — the safe direction for a keystroke tool.
     fn refresh_frontmost_app(&self) {
         // Placeholder: bundle-id resolution lands with the rendering layer.
     }
@@ -114,6 +129,13 @@ impl ControllerState {
 
 /// Launches the input method server and runs the app's event loop.
 pub fn run() {
+    // Force the Objective-C runtime to register GlowKeyController. objc2 registers
+    // a define_class! class lazily on the first `class()` call; if nothing ever
+    // references it, IMK resolves `InputMethodServerControllerClass` to nil and no
+    // controller is ever created — a silent, total failure. This must happen
+    // before the server starts.
+    let _ = GlowKeyController::class();
+
     // Register the IMK server under the Info.plist connection name.
     let name = NSString::from_str(CONNECTION_NAME);
     let bundle_id = NSString::from_str("io.glowkey.inputmethod.GlowKey");
@@ -130,8 +152,30 @@ pub fn run() {
     }
 }
 
-// Compile-time guard that the class is a proper declared objc2 class.
+// Compile-time guard that the class is a proper declared objc2 class. Runtime
+// registration is forced in `run()` (see the `class()` call there).
 const _: () = {
     fn assert_declared<T: DeclaredClass>() {}
     let _ = assert_declared::<GlowKeyController>;
 };
+
+#[cfg(test)]
+mod registration_tests {
+    use super::GlowKeyController;
+    use objc2::ClassType;
+    use objc2_foundation::NSString;
+
+    #[test]
+    fn controller_class_registers_with_objc_runtime() {
+        // Before the fix, NSClassFromString("GlowKeyController") was nil because
+        // objc2 registers lazily and run() never referenced the class.
+        let _ = GlowKeyController::class();
+        let name = NSString::from_str("GlowKeyController");
+        let cls: *const std::ffi::c_void =
+            unsafe { objc2::ffi::objc_getClass(name.UTF8String() as *const _) as *const _ };
+        assert!(
+            !cls.is_null(),
+            "GlowKeyController must be registered with the Obj-C runtime"
+        );
+    }
+}

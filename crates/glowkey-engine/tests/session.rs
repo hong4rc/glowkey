@@ -36,6 +36,54 @@ fn transforms_in_a_normal_app() {
 }
 
 #[test]
+fn unknown_app_does_not_transform() {
+    // Fail closed: before the shell reports the frontmost app, nothing transforms.
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    assert!(!session.is_active());
+    assert_eq!(type_through(&mut session, "hoongf"), "hoongf");
+}
+
+#[test]
+fn excluding_current_app_mid_word_does_not_corrupt() {
+    // Type part of a word, then exclude the app mid-word. The next keys pass
+    // through and must not splice a tone mark into already-committed text.
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    session.set_frontmost_app("com.tinyspeck.slackmacgap");
+    let mut screen = String::new();
+    for ch in "hoo".chars() {
+        let r = session.process_key(ch);
+        if r.handled {
+            let units: Vec<u16> = screen.encode_utf16().collect();
+            let keep = units.len().saturating_sub(r.backspaces);
+            screen = String::from_utf16(&units[..keep]).unwrap();
+            screen.push_str(&r.insert);
+        } else {
+            screen.push(ch);
+        }
+    }
+    assert_eq!(screen, "hô");
+
+    // User excludes the current app, then keeps typing.
+    session.exclusions_mut().add("com.tinyspeck.slackmacgap");
+    for ch in "XYZ".chars() {
+        let r = session.process_key(ch);
+        assert!(!r.handled, "excluded app must pass keys through");
+        screen.push(ch);
+    }
+    // Un-exclude and type a tone key — it must start a fresh word, not edit "hô".
+    session.exclusions_mut().remove("com.tinyspeck.slackmacgap");
+    let r = session.process_key('f');
+    let units: Vec<u16> = screen.encode_utf16().collect();
+    let keep = units.len().saturating_sub(r.backspaces);
+    screen = String::from_utf16(&units[..keep]).unwrap();
+    screen.push_str(&r.insert);
+    assert_eq!(
+        screen, "hôXYZf",
+        "no character deleted or spliced mid-document"
+    );
+}
+
+#[test]
 fn excluded_app_never_transforms() {
     let mut session = session_with_excluded("com.apple.Terminal");
     session.set_frontmost_app("com.apple.Terminal");

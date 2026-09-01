@@ -65,6 +65,30 @@ fn uppercase_and_mixed_case() {
 }
 
 #[test]
+fn interior_capitals_survive_when_not_transformed() {
+    // Words with no Vietnamese transformation keep their exact original case —
+    // they must not be flattened to lowercase or title-case.
+    assert_eq!(type_word("iPhone"), "iPhone");
+    assert_eq!(type_word("JavaScript"), "JavaScript");
+    assert_eq!(type_word("macOS"), "macOS");
+    assert_eq!(type_word("PhD"), "PhD");
+    assert_eq!(type_word("GlowKey"), "GlowKey");
+}
+
+#[test]
+fn edits_apply_onto_pre_existing_text() {
+    // The diff edits must be correct even when the field already holds text before
+    // the word — the empty-screen assumption is where desync bugs hide.
+    let mut engine = Engine::new(PlacementStyle::New);
+    let mut screen = String::from("Hello ");
+    for ch in "hoongf".chars() {
+        let r = engine.process_key(ch);
+        apply(&mut screen, &r.insert, r.backspaces);
+    }
+    assert_eq!(screen, "Hello hồng");
+}
+
+#[test]
 fn word_boundary_passes_through() {
     // A space ends the word and is inserted verbatim after the transformed syllable.
     assert_eq!(type_word("hoongf "), "hồng ");

@@ -20,6 +20,37 @@ none of which can be done headlessly.
   privacy guard that fails if the binary ever links a networking framework),
   `PRIVACY.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`.
 
+## Adversarial review — fixed and outstanding
+
+A code review brute-forced 475k keystroke sequences. The engine core (diff,
+UTF-16 counting, NFC, case round-trip) came back **provably sound**. Five real
+defects were found at the boundaries; the fixable ones are fixed:
+
+- **Fixed — CRITICAL: the Obj-C class was never registered.** objc2 registers a
+  `define_class!` class lazily, and `run()` never referenced it, so IMK would have
+  resolved the controller to nil and been silently inert. `run()` now calls
+  `GlowKeyController::class()` before starting the server.
+- **Fixed — interior capitals were destroyed** (`iPhone`→`iphone`). Untransformed
+  words now emit their keys verbatim, preserving case. Tested.
+- **Fixed — excluding the current app mid-word corrupted the document.** The
+  session now flushes the engine on every inactive keystroke. Tested.
+- **Fixed — the ignore list failed open** (unknown app → transform). `is_active()`
+  now fails **closed**: nothing transforms until the shell reports the frontmost
+  app. Tested. (Consequence: the rendering layer *must* resolve the bundle id in
+  `activateServer:` or Vietnamese will not type at all — the safe direction.)
+
+Two items remain and both need the rendering layer, not the engine:
+
+- **The caret-invalidation contract (M3).** The engine's edits assume the current
+  word is still the document tail. `flush()` is now documented as mandatory on any
+  caret/selection move; `activateServer:`/`deactivateServer:` already flush. When
+  you wire `handleEvent:`, you must also flush on arrow keys and mouse clicks, or a
+  later keystroke can delete unrelated text. This is the same class of bug every
+  IMK input method has around mouse clicks.
+- **`www` → `ww` (upstream `vi`).** Typing `www.example.com` yields
+  `ww.example.com`. This is `vi`'s own Telex behavior, not an engine bug. Left as a
+  known limitation; the fix is a temp-off key or excluding the browser.
+
 ## What is NOT done — and why it waited for you
 
 ### 1. Phase 1 — verify the premise (do this first, ~1 hour, no code)

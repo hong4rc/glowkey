@@ -16,9 +16,10 @@
 //! Synthesized events are posted **directly to the target process**
 //! (`CGEventPostToPid`), which delivers them straight to the app and bypasses the
 //! session tap — so GlowKey's own output physically cannot re-enter its own tap.
-//! The no-feedback-loop guarantee is structural, not based on tagging. A circuit
-//! breaker latches transformation off if emits ever exceed a human typing rate, so
-//! any unforeseen runaway is capped rather than flooding the input system.
+//! The no-feedback-loop guarantee is structural, not based on tagging. A
+//! self-recovering circuit breaker additionally drops emits while the rate exceeds
+//! any human typing speed, so an unforeseen runaway is bounded rather than allowed
+//! to flood the input system.
 //!
 //! ## Constraints (inherent to the event-tap approach, same as EVKey)
 //!
@@ -38,7 +39,6 @@ use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use glowkey_engine::{ExclusionList, KeyResponse, PlacementStyle, Session};
@@ -52,14 +52,12 @@ use objc2_core_graphics::{
 /// macOS virtual key code for Delete/Backspace.
 const KEY_CODE_DELETE: i64 = 51;
 
-/// Tripped by the circuit breaker if GlowKey ever emits faster than a human could
-/// type — a runaway. Once set, transformation stops for the rest of the session so
-/// a bug can never flood the input system. Reset only by restarting.
-static DISABLED: AtomicBool = AtomicBool::new(false);
-
-/// Circuit-breaker thresholds: more than this many emits within the window is a
-/// runaway, not typing.
-const RUNAWAY_LIMIT: usize = 40;
+/// Circuit-breaker thresholds: more emits than this within the window is a runaway
+/// (a feedback loop), not human typing. Well above the fastest human — a real
+/// person tops out around 20 keystrokes/second. Post-to-pid already makes a loop
+/// structurally impossible; this is a bounded, self-recovering safety net, not a
+/// latch, so a burst of fast typing is never permanently disabled.
+const RUNAWAY_LIMIT: usize = 100;
 const RUNAWAY_WINDOW: Duration = Duration::from_millis(1000);
 
 /// Long-lived shell state, referenced from the C tap callback via a raw pointer.
@@ -92,12 +90,11 @@ impl TapState {
         })
     }
 
-    /// Records an emit and returns false if the rate indicates a runaway. On a trip
-    /// it latches [`DISABLED`] so no further transformation occurs this session.
+    /// Records an emit and returns false only if the *current* rate over the last
+    /// window exceeds the runaway limit. Self-recovering: once the rate drops back
+    /// under the limit, emits resume. No permanent latch, so fast human typing is
+    /// never disabled for the session.
     fn circuit_ok(&self) -> bool {
-        if DISABLED.load(Ordering::Relaxed) {
-            return false;
-        }
         let now = Instant::now();
         let mut times = self.recent_emits.borrow_mut();
         while times
@@ -107,15 +104,7 @@ impl TapState {
             times.pop_front();
         }
         times.push_back(now);
-        if times.len() > RUNAWAY_LIMIT {
-            DISABLED.store(true, Ordering::Relaxed);
-            eprintln!(
-                "GlowKey: runaway detected ({} emits/s) — transformation disabled. Restart to re-enable.",
-                times.len()
-            );
-            return false;
-        }
-        true
+        times.len() <= RUNAWAY_LIMIT
     }
 
     /// Flushes the in-progress word — the engine's edits assume the composing word
@@ -186,7 +175,13 @@ impl TapState {
         }
 
         if is_shortcut(flags) {
-            return Decision::Passthrough; // ⌘/⌃/⌥ chords are shortcuts, not text
+            // A shortcut may move the caret or change the selection (⌘A select-all,
+            // ⌘V paste, ⌘←). Flush so a later edit is not computed against a stale
+            // baseline, then let it through.
+            if let Ok(mut session) = self.session.try_borrow_mut() {
+                session.flush();
+            }
+            return Decision::Passthrough;
         }
 
         let Ok(mut session) = self.session.try_borrow_mut() else {
@@ -197,10 +192,11 @@ impl TapState {
         }
 
         if keycode == KEY_CODE_DELETE {
-            if !session.is_composing() {
-                return Decision::Passthrough; // nothing composing — let host delete
-            }
-            return Decision::Emit(session.backspace());
+            // Delete the last visible character like a normal editor (hồng →
+            // hồn) and stop composing, rather than undoing the last keystroke.
+            // The host performs the delete; we just re-sync.
+            session.flush();
+            return Decision::Passthrough;
         }
 
         match unicode_char(event) {
@@ -605,31 +601,37 @@ mod real_event_tests {
     }
 
     #[test]
-    fn real_events_backspace() {
+    fn real_events_backspace_deletes_last_visible_char() {
         let state = active_state();
-        let mut screen = String::new();
-        for ch in "hoongf".chars() {
-            let event = key_event(&state.source, ch);
-            if let Decision::Emit(r) = state.decide(NonNull::from(&*event)) {
-                let units: Vec<u16> = screen.encode_utf16().collect();
-                let keep = units.len().saturating_sub(r.backspaces);
-                screen = String::from_utf16(&units[..keep]).unwrap();
-                screen.push_str(&r.insert);
-            } else {
-                screen.push(ch);
-            }
-        }
-        assert_eq!(screen, "hồng");
+        assert_eq!(type_via_tap(&state, "hoongf"), "hồng");
+        assert!(state.session.borrow().is_composing());
 
-        // A real Backspace event removes the tone.
+        // Backspace passes through (the host deletes the last visible character,
+        // hồng → hồn) and the engine stops composing so it re-syncs.
         let bs = backspace_event(&state.source);
-        if let Decision::Emit(r) = state.decide(NonNull::from(&*bs)) {
-            let units: Vec<u16> = screen.encode_utf16().collect();
-            let keep = units.len().saturating_sub(r.backspaces);
-            screen = String::from_utf16(&units[..keep]).unwrap();
-            screen.push_str(&r.insert);
-        }
-        assert_eq!(screen, "hông");
+        assert!(matches!(
+            state.decide(NonNull::from(&*bs)),
+            Decision::Passthrough
+        ));
+        assert!(!state.session.borrow().is_composing());
+    }
+
+    #[test]
+    fn real_events_shortcut_flushes_engine() {
+        // ⌘A (select-all) changes the selection; the engine must flush so the next
+        // keystroke is not diffed against a stale baseline (the select-all → hoồng
+        // bug). A ⌘-shortcut passes through and clears composing state.
+        let state = active_state();
+        assert_eq!(type_via_tap(&state, "hoong"), "hông");
+        assert!(state.session.borrow().is_composing());
+
+        let event = CGEvent::new_keyboard_event(Some(&state.source), 0, true).expect("event");
+        CGEvent::set_flags(Some(&event), CGEventFlags(CGEventFlags::MaskCommand.0));
+        assert!(matches!(
+            state.decide(NonNull::from(&*event)),
+            Decision::Passthrough
+        ));
+        assert!(!state.session.borrow().is_composing());
     }
 
     #[test]

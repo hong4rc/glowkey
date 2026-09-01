@@ -192,6 +192,19 @@ impl TapState {
         match self.decide(event) {
             Decision::Passthrough => false,
             Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
+            Decision::ToggleApp => {
+                let excluded = self
+                    .session
+                    .try_borrow_mut()
+                    .map(|mut s| s.toggle_current_exclusion())
+                    .unwrap_or(false);
+                self.save_settings();
+                eprintln!(
+                    "GlowKey: {} Vietnamese for current app",
+                    if excluded { "disabled" } else { "enabled" }
+                );
+                true
+            }
             Decision::Emit(response) => {
                 self.emit_edit(&response);
                 true
@@ -254,6 +267,12 @@ impl TapState {
                 eprintln!("GlowKey: {mode:?} mode");
             }
             return Decision::Consume;
+        }
+
+        // Per-app toggle hotkey (⌃⇧E): enable/disable Vietnamese for the current
+        // app in one keystroke, without opening the menu.
+        if is_app_toggle_hotkey(flags, keycode) {
+            return Decision::ToggleApp;
         }
 
         if is_shortcut(flags) {
@@ -320,6 +339,8 @@ enum Decision {
     Passthrough,
     /// Suppress the original with no output (e.g. the VN/EN toggle hotkey).
     Consume,
+    /// Toggle the current app's ignore-list membership, then consume the key.
+    ToggleApp,
     /// Suppress the original and apply this edit (backspaces + insert).
     Emit(KeyResponse),
     /// Apply this edit (e.g. an auto-fix restore) and then let the original key
@@ -329,12 +350,13 @@ enum Decision {
 
 /// macOS virtual key code for Space.
 const KEY_CODE_SPACE: i64 = 49;
+/// macOS virtual key code for the letter E.
+const KEY_CODE_E: i64 = 14;
 
-/// True when the event is the VN/EN toggle hotkey: Control+Shift+Space, with no
-/// Command or Option. Chosen to avoid clashing with common shortcuts and with the
-/// system input-source switcher.
-fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
-    if keycode != KEY_CODE_SPACE {
+/// True when only Control and Shift are held (no Command or Option) and the key is
+/// `keycode` — the modifier pattern shared by GlowKey's ⌃⇧ hotkeys.
+fn is_ctrl_shift(flags: CGEventFlags, keycode: i64, target: i64) -> bool {
+    if keycode != target {
         return false;
     }
     let control = flags.0 & CGEventFlags::MaskControl.0 != 0;
@@ -342,6 +364,16 @@ fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
     let command = flags.0 & CGEventFlags::MaskCommand.0 != 0;
     let option = flags.0 & CGEventFlags::MaskAlternate.0 != 0;
     control && shift && !command && !option
+}
+
+/// The VN/EN toggle hotkey: ⌃⇧Space.
+fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
+    is_ctrl_shift(flags, keycode, KEY_CODE_SPACE)
+}
+
+/// The per-app enable/disable hotkey: ⌃⇧E.
+fn is_app_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
+    is_ctrl_shift(flags, keycode, KEY_CODE_E)
 }
 
 /// True when a shortcut modifier is held — Command, Control, or Option. Shift is
@@ -666,7 +698,7 @@ mod real_event_tests {
             };
             match state.decide(ptr) {
                 Decision::Passthrough => screen.push(ch),
-                Decision::Consume => {}
+                Decision::Consume | Decision::ToggleApp => {}
                 Decision::Emit(r) => apply(&mut screen, &r),
                 Decision::EmitThenPassthrough(r) => {
                     apply(&mut screen, &r);
@@ -756,13 +788,33 @@ mod real_event_tests {
         assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
     }
 
-    /// A real Control+Shift+Space key event.
-    fn toggle_event(source: &CGEventSource) -> CFRetained<CGEvent> {
-        let event =
-            CGEvent::new_keyboard_event(Some(source), KEY_CODE_SPACE as u16, true).expect("event");
+    /// A real ⌃⇧ + `keycode` key event.
+    fn ctrl_shift_event(source: &CGEventSource, keycode: u16) -> CFRetained<CGEvent> {
+        let event = CGEvent::new_keyboard_event(Some(source), keycode, true).expect("event");
         let flags = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
         CGEvent::set_flags(Some(&event), flags);
         event
+    }
+
+    /// A real Control+Shift+Space key event.
+    fn toggle_event(source: &CGEventSource) -> CFRetained<CGEvent> {
+        ctrl_shift_event(source, KEY_CODE_SPACE as u16)
+    }
+
+    #[test]
+    fn real_events_app_toggle_hotkey() {
+        // ⌃⇧E toggles the current app's ignore-list membership and consumes the key.
+        let state = active_state(); // frontmost = TextEdit, not excluded
+        assert_eq!(type_via_tap(&state, "hoongf"), "hồng");
+
+        let ev = ctrl_shift_event(&state.source, KEY_CODE_E as u16);
+        assert!(matches!(
+            state.decide(NonNull::from(&*ev)),
+            Decision::ToggleApp
+        ));
+        // Applying the toggle (as handle_key_down does) excludes TextEdit.
+        assert!(state.session.borrow_mut().toggle_current_exclusion());
+        assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
     }
 
     #[test]

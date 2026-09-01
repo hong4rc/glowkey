@@ -357,6 +357,25 @@ impl Session {
         self.engine.reset();
     }
 
+    /// The frontmost application's bundle identifier, if known.
+    #[must_use]
+    pub fn current_bundle_id(&self) -> Option<&str> {
+        self.current_bundle_id.as_deref()
+    }
+
+    /// Toggles the frontmost application in the ignore list and returns whether it
+    /// is now excluded. Backs the ⌃⇧E "toggle Vietnamese for this app" hotkey and
+    /// the menu's per-app action. No-op with no known frontmost app.
+    pub fn toggle_current_exclusion(&mut self) -> bool {
+        match self.current_bundle_id.clone() {
+            Some(id) => {
+                self.engine.reset();
+                self.exclusions.toggle(&id)
+            }
+            None => false,
+        }
+    }
+
     /// Toggles VN/EN mode and flushes the current word. Has no effect on whether an
     /// excluded application transforms — exclusion still wins.
     pub fn toggle_mode(&mut self) -> InputMode {

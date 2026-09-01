@@ -209,13 +209,13 @@ impl TapState {
                 if !response.handled {
                     return Decision::Passthrough;
                 }
-                // Fast path: when the engine only appends the character just typed
-                // (no diacritic, no reordering), let the original keystroke through
-                // untouched. This makes ordinary/English typing zero-overhead and
-                // shrinks the window for any event-ordering race.
-                if response.backspaces == 0 && response.insert == ch.to_string() {
-                    return Decision::Passthrough;
-                }
+                // Emit every handled letter through post-to-pid, even a plain
+                // append. Mixing channels — original keys via the event stream,
+                // edits via post-to-pid — races in apps that process input
+                // asynchronously (Chrome/Chromium): a backspace can land before or
+                // after the plain letters it depends on, dropping or duplicating a
+                // character. Routing all of a word's text through the single
+                // post-to-pid channel keeps it strictly ordered.
                 Decision::Emit(response)
             }
             // A word boundary (space, digit, punctuation): the engine resets and

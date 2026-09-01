@@ -280,5 +280,26 @@ pub fn install(
     }
 
     controller.update_glyph();
+    // Publish the controller so the tap can refresh the glyph after a hotkey
+    // toggle (⌃⇧Space / ⌃⇧E), which happens in the tap, not the menu.
+    CONTROLLER.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
     (item, controller)
+}
+
+thread_local! {
+    /// The installed menu controller, so [`refresh_glyph`] can update the menu-bar
+    /// glyph from the tap. Main-thread only; empty in tests (no menu is installed).
+    static CONTROLLER: RefCell<Option<Retained<MenuController>>> = const { RefCell::new(None) };
+}
+
+/// Refreshes the menu-bar `VN`/`EN` glyph to the live state. Called by the tap after
+/// a hotkey toggle so the persistent indicator matches the current mode/app, not
+/// only after an app switch or menu click. A no-op before the menu is installed
+/// (including under tests).
+pub fn refresh_glyph() {
+    CONTROLLER.with(|slot| {
+        if let Some(controller) = slot.borrow().as_ref() {
+            controller.update_glyph();
+        }
+    });
 }

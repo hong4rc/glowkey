@@ -295,6 +295,8 @@ impl TapState {
                     // Brief on-screen confirmation for the hotkey (no menu is open).
                     crate::hud::flash(if excluded { "EN" } else { "VN" });
                 }
+                // Keep the persistent menu-bar glyph in sync with the per-app toggle.
+                crate::menu_bar::refresh_glyph();
                 true
             }
             Decision::Emit(response) => {
@@ -361,6 +363,9 @@ impl TapState {
                 let on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
                 crate::hud::flash(if on { "VN" } else { "EN" });
             }
+            // Update the persistent menu-bar glyph too (the toggle happened here in
+            // the tap, not via the menu), so it reflects the current state.
+            crate::menu_bar::refresh_glyph();
             return Decision::Consume;
         }
 

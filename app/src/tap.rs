@@ -41,7 +41,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use glowkey_engine::{ExclusionList, KeyResponse, PlacementStyle, Session};
+use glowkey_engine::{KeyResponse, Session};
 use objc2_app_kit::NSWorkspace;
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFRetained, CFRunLoop};
 use objc2_core_graphics::{
@@ -78,7 +78,7 @@ const RUNAWAY_WINDOW: Duration = Duration::from_millis(1000);
 /// Long-lived shell state, referenced from the C tap callback via a raw pointer.
 /// The callback runs on the main run loop thread, so a `RefCell` is sufficient —
 /// no cross-thread access.
-struct TapState {
+pub(crate) struct TapState {
     session: RefCell<Session>,
     last_bundle_id: RefCell<Option<String>>,
     /// The tagged event source all synthesized events are created from.
@@ -88,18 +88,68 @@ struct TapState {
 }
 
 impl TapState {
+    /// Builds state with default settings (used in tests).
+    #[cfg(test)]
     fn new() -> Option<Self> {
+        Self::from_settings(&glowkey_engine::Settings::default())
+    }
+
+    /// Builds state with a session configured from persisted settings.
+    fn from_settings(settings: &glowkey_engine::Settings) -> Option<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)?;
         CGEventSource::set_user_data(Some(&source), GLOWKEY_TAG);
         Some(Self {
-            session: RefCell::new(Session::new(
-                PlacementStyle::New,
-                ExclusionList::with_defaults(),
-            )),
+            session: RefCell::new(Session::from_settings(settings)),
             last_bundle_id: RefCell::new(None),
             source,
             recent_emits: RefCell::new(VecDeque::new()),
         })
+    }
+
+    /// Snapshots the current session and writes it to the settings file. Called
+    /// after any user-driven change (menu toggle, preference edit).
+    pub fn save_settings(&self) {
+        if let Ok(session) = self.session.try_borrow() {
+            crate::settings_store::save(&session.snapshot());
+        }
+    }
+
+    /// Toggles VN/EN mode and saves. Used by the menu bar.
+    pub fn toggle_mode_and_save(&self) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.toggle_mode();
+        }
+        self.save_settings();
+    }
+
+    /// Toggles auto-fix and saves. Used by the menu bar.
+    pub fn toggle_auto_fix_and_save(&self) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            let on = session.auto_fix();
+            session.set_auto_fix(!on);
+        }
+        self.save_settings();
+    }
+
+    /// Toggles a bundle id in the ignore list and saves. Used by the menu bar's
+    /// "Enable/Disable for <App>" action.
+    pub fn toggle_app_exclusion_and_save(&self, bundle_id: &str) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.exclusions_mut().toggle(bundle_id);
+        }
+        self.save_settings();
+    }
+
+    /// Current state for menu labels: (mode, auto-fix on, is `bundle_id` excluded).
+    pub fn menu_state(&self, bundle_id: &str) -> (glowkey_engine::InputMode, bool, bool) {
+        match self.session.try_borrow() {
+            Ok(s) => (
+                s.mode(),
+                s.auto_fix(),
+                s.exclusions().is_excluded(bundle_id),
+            ),
+            Err(_) => (glowkey_engine::InputMode::Vietnamese, true, false),
+        }
     }
 
     /// Records an emit and returns false if the rate indicates a runaway; latches
@@ -468,7 +518,8 @@ pub fn run() {
     }
     eprintln!("GlowKey: Accessibility granted — starting.");
 
-    let Some(state) = TapState::new() else {
+    let settings = crate::settings_store::load();
+    let Some(state) = TapState::from_settings(&settings) else {
         eprintln!("GlowKey: failed to create the event source.");
         return;
     };
@@ -504,9 +555,22 @@ pub fn run() {
     unsafe { (*ctx).port.borrow_mut().replace(port.clone()) };
 
     let source = objc2_core_foundation::CFMachPort::new_run_loop_source(None, Some(&port), 0);
-    if let (Some(run_loop), Some(source)) = (CFRunLoop::current(), source) {
-        run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
-        CGEvent::tap_enable(&port, true);
+    let (Some(run_loop), Some(source)) = (CFRunLoop::current(), source) else {
+        return;
+    };
+    run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+    CGEvent::tap_enable(&port, true);
+
+    // Install the menu bar (shares the same leaked TapState) and run the AppKit
+    // event loop, which drives both the status item and the tap's run-loop source.
+    // The status item and controller are leaked so they live for the process.
+    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        let (item, controller) = crate::menu_bar::install(unsafe { &(*ctx).state }, mtm);
+        std::mem::forget(item);
+        std::mem::forget(controller);
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        app.run();
+    } else {
         CFRunLoop::run();
     }
 }

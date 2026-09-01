@@ -114,6 +114,13 @@ impl Engine {
         !self.raw.is_empty()
     }
 
+    /// The current rendering of the word being composed. This is what a
+    /// marked-text shell displays as the composing (underlined) text.
+    #[must_use]
+    pub fn current_word(&self) -> &str {
+        &self.rendered
+    }
+
     /// Feeds one typed character to the engine.
     ///
     /// A character that can extend a Vietnamese syllable (an ASCII letter) is added
@@ -334,6 +341,27 @@ impl Session {
     /// Changes the placement style for subsequent words.
     pub fn set_style(&mut self, style: PlacementStyle) {
         self.engine.set_style(style);
+    }
+
+    /// Whether transformation is currently active (see [`is_active`](Self::is_active))
+    /// AND a word is in progress — i.e. there is marked text on screen.
+    #[must_use]
+    pub fn is_composing(&self) -> bool {
+        self.engine.is_composing()
+    }
+
+    /// The current composing word for a marked-text shell to display.
+    #[must_use]
+    pub fn current_word(&self) -> &str {
+        self.engine.current_word()
+    }
+
+    /// Finalizes the composing word: returns its text and clears the engine, so the
+    /// shell can commit it (insert it as ordinary text) at a word boundary.
+    pub fn commit_word(&mut self) -> String {
+        let word = self.engine.current_word().to_string();
+        self.engine.reset();
+        word
     }
 
     /// Flushes any in-progress word without changing mode or focus.

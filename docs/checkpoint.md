@@ -13,12 +13,21 @@ none of which can be done headlessly.
   - Backspace replays raw keys; focus change flushes the word
 - **The per-app ignore list** (the primary feature) — tested, including the
   critical rule that **exclusion beats the VN/EN hotkey**.
-- **The all-Rust InputMethodKit shell** compiles and links against
-  `InputMethodKit.framework`. This was the biggest unknown — whether you can
-  subclass `IMKInputController` from Rust via objc2 — and the answer is yes.
-- App bundle scaffolding: `Info.plist`, `scripts/build-app.sh`, CI (including a
-  privacy guard that fails if the binary ever links a networking framework),
-  `PRIVACY.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`.
+- **The all-Rust InputMethodKit shell**, including the full keystroke rendering
+  layer, compiles clean. Subclassing `IMKInputController` from Rust via objc2
+  works. The shell decodes the `NSEvent`, resolves the client's bundle id for the
+  ignore list, advances the engine, and renders the composing word as **marked
+  text** (`setMarkedText`), committing with `insertText` at a word boundary.
+  Shortcut chords (⌘/⌃/⌥) are filtered so Save etc. are never eaten.
+- **`scripts/build-app.sh` produces a valid, installable `GlowKey.app`** —
+  universal (arm64 + x86_64), correct `Info.plist`, background-only. Verified
+  structurally; not yet verified by typing.
+- App scaffolding: CI (with a privacy guard that fails if the binary links a
+  networking framework), `PRIVACY.md`, `LICENSE`, `THIRD-PARTY-NOTICES.md`.
+
+**This means you can now install it and actually try typing** — see step 2 below.
+The rendering layer is written but has never been run, so treat the first install
+as the real test.
 
 ## Adversarial review — fixed and outstanding
 
@@ -70,22 +79,26 @@ the niche is occupied — consider just using it. Otherwise, GlowKey's niche is
 real: InputMethodKit's no-prompt, works-in-passwords behavior plus per-app control.
 Write the result into `docs/decisions/0000-why-glowkey.md`.
 
-### 2. The shell's rendering layer (needs a GUI to verify)
+### 2. Verify the rendering layer by typing (needs a GUI)
 
-`app/src/controller.rs` currently returns `false` from `handleEvent:client:` —
-it is **inert and safe**, so an installed build touches nothing. To make it type,
-the remaining conventional objc2 work is:
+The rendering layer in `app/src/controller.rs` is now **written and compiling**
+but has never actually run. It decodes the `NSEvent`, resolves the client's bundle
+id, advances the engine, and renders via marked text. Installing and typing is the
+real test — watch for these, which only a Mac can settle:
 
-- Decode the `NSEvent` in `handleEvent:client:` (keycode, characters, modifiers);
-  filter modifier chords (⌘/⌃/⌥) so shortcuts like ⌘S are never eaten.
-- Call `session.process_key(ch)` and render the returned `KeyResponse` to the
-  client via `insertText:replacementRange:` — or, preferred for compatibility,
-  `setMarkedText:...`. The engine already returns `backspaces` (UTF-16) + `insert`.
-- Resolve the frontmost bundle id (`NSWorkspace.frontmostApplication`) in
-  `activateServer:` and call `session.set_frontmost_app(id)` so the ignore list
-  applies. Verify it arrives **before** the first keystroke.
+- Does `hoongf` show `hồng` (as underlined composing text, committed on space)?
+- Does marked text render correctly in Chrome, VS Code, Slack, Word, Terminal? The
+  marked-text model should be widely compatible, but per-app behavior is exactly
+  what could not be tested.
+- Does the ignore list work — Vietnamese in Slack, raw ASCII in Terminal (a
+  default exclusion)? The bundle id is read from the client each keystroke.
+- Do ⌘S / ⌘C still work (shortcut filter)?
+- **Caret/mouse:** clicking mid-word then typing is the known-hard case. The engine
+  flushes on focus change but there is no arrow-key/mouse-click handling yet, so a
+  click mid-word could desync. If you see it, wire `flush()` on caret moves.
 
-None of this is unit-testable — it needs the install-and-type loop below.
+Debug with `log stream --predicate 'process == "GlowKey"'` (breakpoints don't work
+— `imklaunchagent` launches the process). Log no keystroke content.
 
 ### 3. Build, install, and actually type
 

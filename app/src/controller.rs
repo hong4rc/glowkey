@@ -1,10 +1,20 @@
 //! The macOS InputMethodKit shell: a Rust subclass of `IMKInputController` that
-//! feeds keystrokes to [`glowkey_engine`] and applies the resulting edits to the
-//! host application's text.
+//! feeds keystrokes to [`glowkey_engine`] and renders the result as marked
+//! (composing) text in the host application.
 //!
 //! This is the platform half. It owns no Vietnamese logic — every language
-//! decision lives in the engine crate. Its jobs are: receive key events, ask the
-//! engine what edit to make, and render that edit via the client's text protocol.
+//! decision lives in the engine crate. Its jobs are: decode key events, advance
+//! the engine, and show the composing word via the client's text protocol.
+//!
+//! ## Rendering model — marked text
+//!
+//! The word being typed is shown as marked (underlined) composing text via
+//! `setMarkedText:selectionRange:replacementRange:`. The host owns and redraws
+//! that region, so this works in every application that supports Chinese/Japanese/
+//! Korean input — a far larger and more reliable set than apps that honor an
+//! arbitrary `replacementRange` into already-committed text. At a word boundary the
+//! composing text is committed with `insertText:` and the boundary key passes
+//! through to the host.
 //!
 //! NOTE: InputMethodKit can only be exercised by installing the built `.app` into
 //! `~/Library/Input Methods/` and enabling it in System Settings — it cannot be
@@ -17,16 +27,37 @@ use glowkey_engine::{ExclusionList, PlacementStyle, Session};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, ClassType, DeclaredClass};
-use objc2_foundation::{NSObject, NSString};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+use objc2_foundation::{NSObject, NSRange, NSString};
 use objc2_input_method_kit::{IMKInputController, IMKServer};
 
 /// The connection name must exactly match `InputMethodConnectionName` in
 /// `Info.plist`, or the server fails to register (silently).
 const CONNECTION_NAME: &str = "io.glowkey.inputmethod.GlowKey_Connection";
 
+/// `NSNotFound` as an `NSUInteger` — `NSIntegerMax`. Passed as a range location to
+/// mean "the current marked text" for insert/replace operations.
+const NS_NOT_FOUND: usize = usize::MAX >> 1;
+
+/// macOS virtual key code for Delete/Backspace.
+const KEY_CODE_DELETE: u16 = 51;
+
+/// True when a shortcut modifier is held — Command, Control, or Option. Such
+/// events are shortcuts, not text, and must reach the host untouched. Shift is
+/// deliberately excluded: it produces uppercase letters.
+fn is_shortcut(mods: NSEventModifierFlags) -> bool {
+    let shortcut = NSEventModifierFlags::Command.0
+        | NSEventModifierFlags::Control.0
+        | NSEventModifierFlags::Option.0;
+    mods.0 & shortcut != 0
+}
+
 /// Per-controller state. One controller is created per text input session.
 pub struct ControllerState {
     session: RefCell<Session>,
+    /// Last bundle id seen from the client, so the engine is reset only when the
+    /// frontmost application actually changes.
+    last_bundle_id: RefCell<Option<String>>,
 }
 
 define_class!(
@@ -59,7 +90,7 @@ define_class!(
         /// Called by IMK for each event routed to this input method. Returning
         /// `true` consumes the event; `false` lets the host handle it.
         #[unsafe(method(handleEvent:client:))]
-        fn handle_event(&self, event: Option<&AnyObject>, client: Option<&AnyObject>) -> bool {
+        fn handle_event(&self, event: Option<&NSEvent>, client: Option<&AnyObject>) -> bool {
             self.handle_event_impl(event, client)
         }
 
@@ -74,7 +105,6 @@ define_class!(
         #[unsafe(method(activateServer:))]
         fn activate_server(&self, _sender: Option<&AnyObject>) {
             self.flush_session();
-            self.refresh_frontmost_app();
         }
 
         /// Flush when this input session is deactivated (focus left), so the diff
@@ -87,15 +117,97 @@ define_class!(
 );
 
 impl GlowKeyController {
-    /// The keystroke path. Currently a scaffold: decodes the event and asks the
-    /// engine for an edit. Rendering the edit to the client (insertText /
-    /// setMarkedText) is wired in the next build once the client protocol surface
-    /// is pinned; see docs/checkpoint.md.
-    fn handle_event_impl(&self, _event: Option<&AnyObject>, _client: Option<&AnyObject>) -> bool {
-        // Not yet consuming events — return false so the host is unaffected while
-        // the rendering layer is completed. This keeps an installed build inert
-        // and safe rather than eating keystrokes.
-        false
+    /// The keystroke path: decode the event, advance the engine, and render.
+    fn handle_event_impl(&self, event: Option<&NSEvent>, client: Option<&AnyObject>) -> bool {
+        let (Some(event), Some(client)) = (event, client) else {
+            return false;
+        };
+
+        // Only key-down events carry typed text.
+        if event.r#type() != NSEventType::KeyDown {
+            return false;
+        }
+
+        // Shortcuts (⌘/⌃/⌥ chords) must reach the host untouched — never let ⌘S
+        // arrive at the engine as tone key `s`.
+        if is_shortcut(event.modifierFlags()) {
+            return false;
+        }
+
+        let key = decode_key(event);
+
+        // A failed borrow means IMK re-entered mid-edit; skip rather than panic.
+        let Ok(mut session) = self.ivars().session.try_borrow_mut() else {
+            return false;
+        };
+
+        // Keep the ignore list honest: read the client's bundle id and, if the
+        // application changed, tell the session (which flushes and re-evaluates
+        // exclusion). Using the client's own id avoids any focus-timing race.
+        if let Some(bundle_id) = client_bundle_id(client) {
+            let mut last = self.ivars().last_bundle_id.borrow_mut();
+            if last.as_deref() != Some(bundle_id.as_str()) {
+                session.set_frontmost_app(bundle_id.clone());
+                *last = Some(bundle_id);
+            }
+        }
+
+        if !session.is_active() {
+            return false;
+        }
+
+        match key {
+            DecodedKey::Backspace => {
+                if !session.is_composing() {
+                    return false; // nothing composing — let the host delete
+                }
+                session.backspace();
+                let word = session.current_word().to_string();
+                self.render_marked(client, &word);
+                true
+            }
+            DecodedKey::Letter(ch) => {
+                session.process_key(ch);
+                let word = session.current_word().to_string();
+                self.render_marked(client, &word);
+                true
+            }
+            DecodedKey::Boundary => {
+                if session.is_composing() {
+                    let word = session.commit_word();
+                    self.commit_text(client, &word);
+                }
+                // Let the host insert the boundary character itself.
+                false
+            }
+            DecodedKey::Ignore => false,
+        }
+    }
+
+    /// Shows `text` as marked (composing) text, caret at the end. An empty string
+    /// clears the marked text.
+    fn render_marked(&self, client: &AnyObject, text: &str) {
+        let ns = NSString::from_str(text);
+        let caret = text.encode_utf16().count();
+        let selection = NSRange::new(caret, 0);
+        let replacement = NSRange::new(NS_NOT_FOUND, 0);
+        unsafe {
+            let _: () = msg_send![
+                client,
+                setMarkedText: &*ns,
+                selectionRange: selection,
+                replacementRange: replacement,
+            ];
+        }
+    }
+
+    /// Commits `text` as ordinary inserted text, replacing any marked text.
+    fn commit_text(&self, client: &AnyObject, text: &str) {
+        let ns = NSString::from_str(text);
+        let replacement = NSRange::new(NS_NOT_FOUND, 0);
+        unsafe {
+            let _: () = msg_send![client, insertText: &*ns, replacementRange: replacement];
+        }
     }
 
     /// Flushes the session's in-progress word. Uses `try_borrow_mut` because IMK
@@ -106,14 +218,45 @@ impl GlowKeyController {
             session.flush();
         }
     }
+}
 
-    /// Update the engine with the frontmost application's bundle identifier, so the
-    /// ignore list applies. Wired against NSWorkspace in the next build; until then
-    /// the session's bundle id stays `None`, which fails closed (no transformation)
-    /// — the safe direction for a keystroke tool.
-    fn refresh_frontmost_app(&self) {
-        // Placeholder: bundle-id resolution lands with the rendering layer.
+/// A decoded key event, reduced to what the engine cares about.
+enum DecodedKey {
+    /// An ASCII letter that can extend a Vietnamese syllable.
+    Letter(char),
+    /// The Delete/Backspace key.
+    Backspace,
+    /// A printable non-letter that ends a word (space, digit, punctuation).
+    Boundary,
+    /// Anything the engine should not see (function keys, arrows, etc.).
+    Ignore,
+}
+
+/// Decodes an `NSEvent` key-down into a [`DecodedKey`].
+fn decode_key(event: &NSEvent) -> DecodedKey {
+    if event.keyCode() == KEY_CODE_DELETE {
+        return DecodedKey::Backspace;
     }
+    let Some(chars) = event.characters() else {
+        return DecodedKey::Ignore;
+    };
+    let s = chars.to_string();
+    let Some(ch) = s.chars().next() else {
+        return DecodedKey::Ignore;
+    };
+    if ch.is_ascii_alphabetic() {
+        DecodedKey::Letter(ch)
+    } else if ch.is_control() {
+        DecodedKey::Ignore
+    } else {
+        DecodedKey::Boundary
+    }
+}
+
+/// Reads the client's application bundle identifier via `IMKTextInput`.
+fn client_bundle_id(client: &AnyObject) -> Option<String> {
+    let ns: Option<Retained<NSString>> = unsafe { msg_send![client, bundleIdentifier] };
+    ns.map(|s| s.to_string())
 }
 
 impl ControllerState {
@@ -123,6 +266,7 @@ impl ControllerState {
                 PlacementStyle::New,
                 ExclusionList::with_defaults(),
             )),
+            last_bundle_id: RefCell::new(None),
         }
     }
 }

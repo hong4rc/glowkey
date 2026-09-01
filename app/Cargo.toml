@@ -19,6 +19,6 @@ glowkey-engine = { path = "../crates/glowkey-engine" }
 # All-Rust macOS-native shell via objc2, matching the sibling `marau` project's
 # pattern of calling Apple frameworks directly from Rust rather than through Swift.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSObject", "NSNotification", "NSRange", "NSValue"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWorkspace", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSObject", "NSNotification", "NSRange", "NSValue", "NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSResponder", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWorkspace", "NSRunningApplication"] }
 objc2-input-method-kit = "0.3"

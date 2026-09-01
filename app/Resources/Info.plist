@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>GlowKey</string>
     <key>CFBundleIdentifier</key>
-    <string>io.glowkey.inputmethod.GlowKey</string>
+    <string>io.glowkey.GlowKey</string>
     <key>CFBundleVersion</key>
     <string>0.1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -19,44 +19,12 @@
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
 
-    <!-- Agent app: no Dock icon, but may show a menu-bar item and preference
-         windows (the ignore-list editor). LSBackgroundOnly would forbid all UI. -->
+    <!-- Agent app: no Dock icon, may show a menu-bar item and preference windows.
+         GlowKey is NOT an input method — it is a background agent that installs a
+         CGEventTap to wrap the active keyboard layout with Vietnamese, like EVKey.
+         It requires an Accessibility permission (added in System Settings on first
+         run) and, like all event taps, does not operate in secure/password fields. -->
     <key>LSUIElement</key>
     <true/>
-
-    <!-- InputMethodKit registration. The connection name MUST be exactly
-         "<bundle id>_Connection" and match CONNECTION_NAME in controller.rs,
-         or IMKServer registration fails silently. -->
-    <key>InputMethodConnectionName</key>
-    <string>io.glowkey.inputmethod.GlowKey_Connection</string>
-    <key>InputMethodServerControllerClass</key>
-    <string>GlowKeyController</string>
-
-    <key>tsInputMethodCharacterRepertoireKey</key>
-    <array>
-        <string>Latn</string>
-    </array>
-
-    <!-- Input modes shown under the input-source switcher. VN transforms;
-         a future EN mode maps here too. -->
-    <key>ComponentInputModeDict</key>
-    <dict>
-        <key>tsInputModeListKey</key>
-        <dict>
-            <key>io.glowkey.inputmethod.GlowKey.Vietnamese</key>
-            <dict>
-                <key>tsInputModePrimaryInScriptKey</key>
-                <string>smRoman</string>
-                <key>tsInputModeScriptKey</key>
-                <string>smRoman</string>
-                <key>tsInputModeIsVisibleKey</key>
-                <true/>
-                <key>TISIntendedLanguage</key>
-                <string>vi</string>
-                <key>tsInputModeAlternateMenuTitleKey</key>
-                <string>GlowKey — Tiếng Việt</string>
-            </dict>
-        </dict>
-    </dict>
 </dict>
 </plist>

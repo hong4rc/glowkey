@@ -18,7 +18,13 @@ glowkey-engine = { path = "../crates/glowkey-engine" }
 [target.'cfg(target_os = "macos")'.dependencies]
 # All-Rust macOS-native shell via objc2, matching the sibling `marau` project's
 # pattern of calling Apple frameworks directly from Rust rather than through Swift.
+#
+# GlowKey wraps the active keyboard layout with a CGEventTap (like EVKey/OpenKey):
+# it intercepts key events after the system layout maps them, adds Vietnamese, and
+# re-emits the result. This keeps the user's Colemak/US layout live and requires an
+# Accessibility permission (it does not work in secure/password fields).
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSObject", "NSNotification", "NSRange", "NSValue", "NSGeometry"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSEvent", "NSResponder", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWorkspace", "NSRunningApplication"] }
-objc2-input-method-kit = "0.3"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSDictionary"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem"] }
+objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGEventSource", "CGError"] }
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }

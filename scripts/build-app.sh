@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Builds GlowKey.app — a macOS input method bundle — from the Rust binary.
+# Builds GlowKey.app — a background agent that wraps the keyboard layout with
+# Vietnamese via a CGEventTap (like EVKey) — from the Rust binary.
 #
-# Produces build/GlowKey.app. Install it by copying to ~/Library/Input Methods/
-# and enabling under System Settings → Keyboard → Input Sources. See
-# docs/checkpoint.md for the full first-run walkthrough.
+# Produces build/GlowKey.app. Run it, grant Accessibility when prompted, and it
+# adds Vietnamese on top of your current layout. See docs/checkpoint.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,9 +36,13 @@ lipo -create -output "$APP/Contents/MacOS/GlowKey" \
 cp "$ROOT/app/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/" 2>/dev/null || true
 
+# Ad-hoc sign so macOS lets it request Accessibility and run.
+codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
+
 echo "==> Done: $APP"
 echo "    Architectures: $(lipo -archs "$APP/Contents/MacOS/GlowKey")"
 echo ""
-echo "To install for the current user:"
-echo "    cp -R \"$APP\" ~/Library/Input\\ Methods/"
-echo "    # then log out/in, and enable under System Settings → Keyboard → Input Sources"
+echo "To run it:"
+echo "    open \"$APP\"   # or: \"$APP/Contents/MacOS/GlowKey\" to see logs in the terminal"
+echo "    # Grant Accessibility when prompted (System Settings → Privacy & Security"
+echo "    #  → Accessibility), then it wraps your current layout with Vietnamese."

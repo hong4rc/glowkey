@@ -1,22 +1,23 @@
-//! GlowKey macOS input method entry point.
+//! GlowKey macOS entry point.
 //!
-//! On macOS this launches an `IMKServer` and registers a Rust subclass of
-//! `IMKInputController` (see [`controller`]) — an all-Rust InputMethodKit shell in
-//! the style of the sibling `marau` project, which calls Apple frameworks directly
-//! through `objc2` rather than through Swift.
+//! GlowKey is a background agent (no Dock icon) that wraps the active keyboard
+//! layout with Vietnamese Telex, in the style of EVKey/OpenKey: it installs a
+//! `CGEventTap`, so the user's Colemak/US layout stays live and Vietnamese is added
+//! on top. See [`tap`]. Requires an Accessibility permission; it does not operate in
+//! secure/password fields.
 //!
 //! On other platforms it builds as a stub so the workspace (and the tested engine
 //! crate) compiles in CI without a macOS SDK.
 
 #[cfg(target_os = "macos")]
-mod controller;
+mod tap;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    controller::run();
+    tap::run();
 }
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("GlowKey is a macOS input method; this platform builds the engine only.");
+    eprintln!("GlowKey is a macOS agent; this platform builds the engine only.");
 }

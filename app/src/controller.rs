@@ -94,24 +94,28 @@ define_class!(
             self.handle_event_impl(event, client)
         }
 
-        /// Flush any in-progress word when composition is committed by the system.
+        /// Commit the in-progress word when the system ends composition — e.g. the
+        /// user clicks outside the composing region. The `sender` is the client, so
+        /// insert the word rather than silently dropping it. (Resetting without
+        /// inserting would lose whatever the user had typed.)
         #[unsafe(method(commitComposition:))]
-        fn commit_composition(&self, _sender: Option<&AnyObject>) {
-            self.flush_session();
+        fn commit_composition(&self, sender: Option<&AnyObject>) {
+            self.commit_session(sender);
         }
 
         /// Flush when this input session becomes active (focus moved here), so no
-        /// stale word from a previous field bleeds in.
+        /// stale word from a previous field bleeds in. Nothing to commit — a newly
+        /// activated session has no in-progress word.
         #[unsafe(method(activateServer:))]
         fn activate_server(&self, _sender: Option<&AnyObject>) {
             self.flush_session();
         }
 
-        /// Flush when this input session is deactivated (focus left), so the diff
-        /// baseline never survives a focus change.
+        /// Commit the in-progress word when this session is deactivated (focus
+        /// left), so switching apps or fields mid-word does not discard it.
         #[unsafe(method(deactivateServer:))]
-        fn deactivate_server(&self, _sender: Option<&AnyObject>) {
-            self.flush_session();
+        fn deactivate_server(&self, sender: Option<&AnyObject>) {
+            self.commit_session(sender);
         }
     }
 );
@@ -210,9 +214,32 @@ impl GlowKeyController {
         }
     }
 
-    /// Flushes the session's in-progress word. Uses `try_borrow_mut` because IMK
-    /// can call lifecycle methods re-entrantly (an insert can trigger a commit);
-    /// a failed borrow means a flush is already underway, which is fine to skip.
+    /// Commits any in-progress word to `sender` (the client), then clears state.
+    /// Used when the system ends composition or deactivates the session — the word
+    /// must be inserted, not dropped. Falls back to a plain flush if there is no
+    /// client to insert into.
+    fn commit_session(&self, sender: Option<&AnyObject>) {
+        let Some(client) = sender else {
+            self.flush_session();
+            return;
+        };
+        // Take the word and release the borrow before the ObjC call, which can
+        // re-enter this controller.
+        let word = {
+            let Ok(mut session) = self.ivars().session.try_borrow_mut() else {
+                return;
+            };
+            if !session.is_composing() {
+                return;
+            }
+            session.commit_word()
+        };
+        self.commit_text(client, &word);
+    }
+
+    /// Flushes the session's in-progress word without inserting it. Uses
+    /// `try_borrow_mut` because IMK can call lifecycle methods re-entrantly; a
+    /// failed borrow means a flush is already underway, which is fine to skip.
     fn flush_session(&self) {
         if let Ok(mut session) = self.ivars().session.try_borrow_mut() {
             session.flush();
@@ -246,9 +273,17 @@ fn decode_key(event: &NSEvent) -> DecodedKey {
     };
     if ch.is_ascii_alphabetic() {
         DecodedKey::Letter(ch)
+    } else if matches!(ch, '\r' | '\n' | '\t' | '\u{1b}') {
+        // Return, Enter, Tab, and Escape end a word — they must commit the
+        // composing text before passing through, not be ignored (which would
+        // strand or drop the in-progress word).
+        DecodedKey::Boundary
     } else if ch.is_control() {
         DecodedKey::Ignore
     } else {
+        // Space, digits, punctuation, and function keys (Private-Use-Area, e.g.
+        // arrows) end the word. Committing on an arrow also clears the diff
+        // baseline, which avoids the stale-baseline bug on caret moves.
         DecodedKey::Boundary
     }
 }

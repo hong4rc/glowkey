@@ -19,8 +19,9 @@
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
 
-    <!-- Runs as a background input method, not a windowed app. -->
-    <key>LSBackgroundOnly</key>
+    <!-- Agent app: no Dock icon, but may show a menu-bar item and preference
+         windows (the ignore-list editor). LSBackgroundOnly would forbid all UI. -->
+    <key>LSUIElement</key>
     <true/>
 
     <!-- InputMethodKit registration. The connection name MUST be exactly

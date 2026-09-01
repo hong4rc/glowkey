@@ -97,6 +97,22 @@ real test — watch for these, which only a Mac can settle:
   flushes on focus change but there is no arrow-key/mouse-click handling yet, so a
   click mid-word could desync. If you see it, wire `flush()` on caret moves.
 
+Two review rounds hardened this layer. The FFI/objc2 surface was found **sound**
+(correct selectors, no memory-safety or borrow hazards); three word-loss bugs were
+fixed: Return/Tab/Escape now commit the word instead of dropping it,
+`commitComposition:`/`deactivateServer:` now insert the word instead of discarding
+it on click-away or app-switch, and the plist uses `LSUIElement` (not
+`LSBackgroundOnly`) so the future settings UI can appear.
+
+**Still needs on-device confirmation** (a reviewer flagged these as only
+settleable on a Mac):
+- That `handleEvent:client:` is actually the method IMK calls (vs `inputText:`) —
+  if keystrokes don't reach the engine at all, that's why. Confirm first.
+- Whether hosts auto-commit marked text on composition end — the fix inserts
+  explicitly, but test typing mid-word then clicking away / Cmd-Tab.
+- Marked-text-unsupported clients (password fields, some terminals/Electron): a
+  consumed letter could vanish. Test a password field and Terminal specifically.
+
 Debug with `log stream --predicate 'process == "GlowKey"'` (breakpoints don't work
 — `imklaunchagent` launches the process). Log no keystroke content.
 

@@ -21,6 +21,11 @@ pub struct Settings {
     /// Tone-mark placement style.
     #[serde(default)]
     pub style: PlacementStyle,
+    /// Whether to open the Settings window when the app launches (like EVKey/Unikey
+    /// showing their control panel on start). Default on, so a new user sees the
+    /// controls; toggled off from the window itself once they know it.
+    #[serde(default = "default_true")]
+    pub open_settings_at_launch: bool,
 }
 
 impl Default for Settings {
@@ -29,6 +34,7 @@ impl Default for Settings {
             exclusions: default_exclusions(),
             auto_fix: true,
             style: PlacementStyle::default(),
+            open_settings_at_launch: true,
         }
     }
 }
@@ -75,6 +81,7 @@ mod tests {
             exclusions: vec!["com.apple.Terminal".into(), "com.example.app".into()],
             auto_fix: false,
             style: PlacementStyle::Old,
+            open_settings_at_launch: false,
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);

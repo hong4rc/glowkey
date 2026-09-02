@@ -72,6 +72,15 @@ define_class!(
             self.state().set_auto_fix_and_save(state == NSControlStateValueOn);
         }
 
+        /// "Open at launch" checkbox toggled.
+        #[unsafe(method(openAtLaunchChanged:))]
+        fn open_at_launch_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_open_settings_at_launch_and_save(state == NSControlStateValueOn);
+        }
+
         /// Remove-app button clicked; its tag indexes the current `apps` list.
         #[unsafe(method(removeApp:))]
         fn remove_app(&self, sender: Option<&AnyObject>) {
@@ -184,6 +193,26 @@ impl PrefsController {
         // Leading-align arranged subviews (NSLayoutAttribute::Leading == 5).
         unsafe {
             let _: () = msg_send![&root, setAlignment: 5isize];
+        }
+
+        // ===== General =====
+        root.addArrangedSubview(&self.header("General", mtm));
+        let open_at_launch: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Open this window at launch"),
+                Some(self.as_ref()),
+                Some(sel!(openAtLaunchChanged:)),
+                mtm,
+            )
+        };
+        open_at_launch.setState(if self.state().open_settings_at_launch() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        root.addArrangedSubview(&open_at_launch);
+        unsafe {
+            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*open_at_launch];
         }
 
         // ===== Typing =====

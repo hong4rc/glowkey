@@ -218,6 +218,22 @@ impl TapState {
         self.save_settings();
     }
 
+    /// Whether the Settings window should open on launch.
+    pub fn open_settings_at_launch(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.open_settings_at_launch())
+            .unwrap_or(true)
+    }
+
+    /// Sets the "open Settings on launch" preference and saves.
+    pub fn set_open_settings_at_launch_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_open_settings_at_launch(on);
+        }
+        self.save_settings();
+    }
+
     /// The current tone-placement style. Drives the Settings segmented control.
     pub fn style(&self) -> glowkey_engine::PlacementStyle {
         self.session
@@ -772,9 +788,15 @@ pub fn run() {
     // event loop, which drives both the status item and the tap's run-loop source.
     // The status item and controller are leaked so they live for the process.
     if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
-        let (item, controller) = crate::menu_bar::install(unsafe { &(*ctx).state }, mtm);
+        let state_ptr: *const TapState = unsafe { &(*ctx).state };
+        let (item, controller) = crate::menu_bar::install(unsafe { &*state_ptr }, mtm);
         std::mem::forget(item);
         std::mem::forget(controller);
+        // Show the Settings window on launch (like EVKey/Unikey opening their
+        // control panel), unless the user has turned that off in Settings.
+        if unsafe { (*state_ptr).open_settings_at_launch() } {
+            crate::prefs_window::show(state_ptr, mtm);
+        }
         let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
         app.run();
     } else {

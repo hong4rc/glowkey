@@ -280,6 +280,8 @@ pub struct Session {
     /// event: a backspace deleting the trailing boundary re-composes it; anything
     /// else clears it. Enables `hồng`␣⌫`z` → `hông`.
     last_committed: Option<(Vec<char>, String)>,
+    /// Persisted preference: open the Settings window on launch.
+    open_settings_at_launch: bool,
 }
 
 impl Session {
@@ -294,6 +296,7 @@ impl Session {
             auto_fix: true,
             current_bundle_id: None,
             last_committed: None,
+            open_settings_at_launch: true,
         }
     }
 
@@ -306,6 +309,7 @@ impl Session {
         // auto-fix, and tone style persist.
         let mut session = Self::new(settings.style, settings.exclusion_list());
         session.auto_fix = settings.auto_fix;
+        session.open_settings_at_launch = settings.open_settings_at_launch;
         session
     }
 
@@ -316,7 +320,19 @@ impl Session {
             exclusions: self.exclusions.ids().map(String::from).collect(),
             auto_fix: self.auto_fix,
             style: self.style,
+            open_settings_at_launch: self.open_settings_at_launch,
         }
+    }
+
+    /// Whether to open the Settings window on launch.
+    #[must_use]
+    pub fn open_settings_at_launch(&self) -> bool {
+        self.open_settings_at_launch
+    }
+
+    /// Sets the "open Settings on launch" preference.
+    pub fn set_open_settings_at_launch(&mut self, on: bool) {
+        self.open_settings_at_launch = on;
     }
 
     /// Whether auto-fix (restore invalid Vietnamese to raw keys) is enabled.

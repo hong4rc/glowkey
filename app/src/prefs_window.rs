@@ -37,6 +37,9 @@ use crate::tap::TapState;
 pub struct PrefsIvars {
     state: *const TapState,
     window: RefCell<Option<Retained<NSWindow>>>,
+    /// Separate window holding the excluded-app list, so it stays off the main
+    /// Settings pane (advanced/rare, opened via "Manage Excluded Apps…").
+    excluded_window: RefCell<Option<Retained<NSWindow>>>,
     list_stack: RefCell<Option<Retained<NSStackView>>>,
     apps: RefCell<Vec<String>>,
 }
@@ -106,6 +109,21 @@ define_class!(
             }
         }
 
+        /// Opens the separate Excluded-Apps window (built on first use).
+        #[unsafe(method(manageExcludedApps:))]
+        fn manage_excluded_apps(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            if self.ivars().excluded_window.borrow().is_none() {
+                self.build_excluded_window(mtm);
+            }
+            self.refresh_list();
+            if let Some(window) = self.ivars().excluded_window.borrow().as_ref() {
+                window.center();
+                window.makeKeyAndOrderFront(None);
+            }
+            NSApplication::sharedApplication(mtm).activate();
+        }
+
         /// "Add App…" — open a file picker on /Applications and disable Vietnamese
         /// for each app chosen (resolving its bundle id).
         #[unsafe(method(addApp:))]
@@ -149,6 +167,7 @@ impl PrefsController {
         let this = Self::alloc(mtm).set_ivars(PrefsIvars {
             state,
             window: RefCell::new(None),
+            excluded_window: RefCell::new(None),
             list_stack: RefCell::new(None),
             apps: RefCell::new(Vec::new()),
         });
@@ -161,7 +180,8 @@ impl PrefsController {
         if self.ivars().window.borrow().is_none() {
             self.build_window(mtm);
         }
-        self.refresh_list();
+        // The excluded-app list lives in its own window now, so nothing to refresh
+        // here — the main pane holds only the everyday settings.
         if let Some(window) = self.ivars().window.borrow().as_ref() {
             window.center();
             window.makeKeyAndOrderFront(None);
@@ -294,24 +314,63 @@ impl PrefsController {
         }
 
         // ===== Excluded apps =====
+        // The list itself lives in its own window (advanced/rare) so it does not
+        // clutter the everyday settings; this is just the entry point.
         root.addArrangedSubview(&self.header("Excluded apps", mtm));
+        root.addArrangedSubview(&self.caption(
+            "Apps where GlowKey stays off — terminals & editors by default, so it never\nmangles commands. Toggle the current app anytime with ⌃⇧E.",
+            mtm,
+        ));
+        let manage_button: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Manage Excluded Apps…"),
+                Some(self.as_ref()),
+                Some(sel!(manageExcludedApps:)),
+                mtm,
+            )
+        };
+        root.addArrangedSubview(&manage_button);
+
+        window.setContentView(Some(&root));
+        *self.ivars().window.borrow_mut() = Some(window);
+    }
+
+    /// Builds the separate "Excluded Apps" window on first use: a caption, the
+    /// "Add App…" picker, and the app list.
+    fn build_excluded_window(&self, mtm: MainThreadMarker) {
+        let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(420.0, 380.0));
+        let style = NSWindowStyleMask::Titled
+            | NSWindowStyleMask::Closable
+            | NSWindowStyleMask::Miniaturizable;
+        let window: Retained<NSWindow> = unsafe {
+            let alloc = NSWindow::alloc(mtm);
+            msg_send![
+                alloc,
+                initWithContentRect: content,
+                styleMask: style,
+                backing: NSBackingStoreType::Buffered,
+                defer: false,
+            ]
+        };
+        window.setTitle(&NSString::from_str("Excluded Apps"));
+
+        let root = NSStackView::new(mtm);
+        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        root.setSpacing(8.0);
+        root.setEdgeInsets(NSEdgeInsets {
+            top: 20.0,
+            left: 20.0,
+            bottom: 20.0,
+            right: 20.0,
+        });
+        unsafe {
+            let _: () = msg_send![&root, setAlignment: 5isize];
+        }
+
         root.addArrangedSubview(&self.caption(
             "GlowKey types plain keys in these apps. Add one below, from the menu bar\n(“Disable for …”), or with ⌃⇧E while in the app.",
             mtm,
         ));
-
-        let list = NSStackView::new(mtm);
-        list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        list.setSpacing(2.0);
-        unsafe {
-            let _: () = msg_send![&list, setAlignment: 5isize];
-        }
-        root.addArrangedSubview(&list);
-        *self.ivars().list_stack.borrow_mut() = Some(list.clone());
-        unsafe {
-            let _: () = msg_send![&root, setCustomSpacing: 8.0f64, afterView: &*list];
-        }
-
         let add_button: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
                 &NSString::from_str("Add App…"),
@@ -322,8 +381,17 @@ impl PrefsController {
         };
         root.addArrangedSubview(&add_button);
 
+        let list = NSStackView::new(mtm);
+        list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        list.setSpacing(2.0);
+        unsafe {
+            let _: () = msg_send![&list, setAlignment: 5isize];
+        }
+        root.addArrangedSubview(&list);
+        *self.ivars().list_stack.borrow_mut() = Some(list);
+
         window.setContentView(Some(&root));
-        *self.ivars().window.borrow_mut() = Some(window);
+        *self.ivars().excluded_window.borrow_mut() = Some(window);
     }
 
     /// Rebuilds the excluded-app rows from the live ignore list.

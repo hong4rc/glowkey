@@ -15,9 +15,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
-    NSModalResponseOK, NSOpenPanel, NSSegmentSwitchTracking, NSSegmentedControl, NSStackView,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlStateValueOff,
+    NSControlStateValueOn, NSFont, NSModalResponseOK, NSOpenPanel, NSSegmentSwitchTracking,
+    NSSegmentedControl, NSStackView, NSTextAlignment, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSBundle, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString, NSURL,
@@ -169,27 +170,26 @@ impl PrefsController {
         };
         window.setTitle(&NSString::from_str("GlowKey Settings"));
 
-        // Outer vertical stack fills the content view.
+        // Outer vertical stack fills the content view. Tight rhythm within a group;
+        // larger custom gaps separate the two groups (set below).
         let root = NSStackView::new(mtm);
-        {
-            root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-            root.setSpacing(10.0);
-            root.setEdgeInsets(NSEdgeInsets {
-                top: 20.0,
-                left: 20.0,
-                bottom: 20.0,
-                right: 20.0,
-            });
-        }
-        // Left-align arranged subviews (NSLayoutAttribute::Leading == 5).
+        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        root.setSpacing(6.0);
+        root.setEdgeInsets(NSEdgeInsets {
+            top: 20.0,
+            left: 20.0,
+            bottom: 20.0,
+            right: 20.0,
+        });
+        // Leading-align arranged subviews (NSLayoutAttribute::Leading == 5).
         unsafe {
             let _: () = msg_send![&root, setAlignment: 5isize];
         }
 
-        // --- Typing section ---
-        self.add_section_header(&root, "Typing", mtm);
+        // ===== Typing =====
+        root.addArrangedSubview(&self.header("Typing", mtm));
 
-        // Tone marks: Modern (hoà) / Classic (hòa).
+        // Tone marks — aligned label + segmented control.
         let labels = NSArray::from_retained_slice(&[
             NSString::from_str("Modern  hoà"),
             NSString::from_str("Classic  hòa"),
@@ -203,41 +203,61 @@ impl PrefsController {
                 mtm,
             )
         };
-        let selected = if self.state().style() == PlacementStyle::New {
+        seg.setSelectedSegment(if self.state().style() == PlacementStyle::New {
             0
         } else {
             1
-        };
-        seg.setSelectedSegment(selected);
-        self.add_row(&root, "Tone marks", &seg, mtm);
+        });
+        root.addArrangedSubview(&self.form_row("Tone marks", &seg, mtm));
 
-        // Auto-fix checkbox with help text.
+        // Auto-fix — a full-width checkbox with a secondary caption beneath it.
         let checkbox: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Auto-fix words that aren’t Vietnamese"),
+                &NSString::from_str("Auto-fix non-Vietnamese words"),
                 Some(self.as_ref()),
                 Some(sel!(autoFixChanged:)),
                 mtm,
             )
         };
-        let state = if self.state().auto_fix() {
+        checkbox.setState(if self.state().auto_fix() {
             NSControlStateValueOn
         } else {
             NSControlStateValueOff
-        };
-        checkbox.setState(state);
+        });
         root.addArrangedSubview(&checkbox);
-        self.add_help(&root, "Types “exit” instead of “eĩt”.", mtm);
-
-        self.add_help(&root, "Toggle Vietnamese / English:  ⌃⇧Space", mtm);
-
-        // --- Excluded apps section ---
-        self.add_section_header(&root, "Excluded apps", mtm);
-        self.add_help(
-            &root,
-            "GlowKey won’t type Vietnamese in these apps. Add one below, from the menu\nbar (“Disable for …”), or with ⌃⇧E while in the app.",
+        root.addArrangedSubview(&self.caption(
+            "Restores the raw keys when the result isn’t valid Vietnamese — types “exit”, not “eĩt”.",
             mtm,
-        );
+        ));
+
+        // Shortcut — read-only, in the aligned form.
+        let shortcut = self.value_label("⌃⇧Space   ·   turn Vietnamese on or off", mtm);
+        let typing_last = self.form_row("Shortcut", &shortcut, mtm);
+        root.addArrangedSubview(&typing_last);
+
+        // Group separation: a larger gap before the next section header.
+        unsafe {
+            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*typing_last];
+        }
+
+        // ===== Excluded apps =====
+        root.addArrangedSubview(&self.header("Excluded apps", mtm));
+        root.addArrangedSubview(&self.caption(
+            "GlowKey types plain keys in these apps. Add one below, from the menu bar\n(“Disable for …”), or with ⌃⇧E while in the app.",
+            mtm,
+        ));
+
+        let list = NSStackView::new(mtm);
+        list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        list.setSpacing(2.0);
+        unsafe {
+            let _: () = msg_send![&list, setAlignment: 5isize];
+        }
+        root.addArrangedSubview(&list);
+        *self.ivars().list_stack.borrow_mut() = Some(list.clone());
+        unsafe {
+            let _: () = msg_send![&root, setCustomSpacing: 8.0f64, afterView: &*list];
+        }
 
         let add_button: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
@@ -248,15 +268,6 @@ impl PrefsController {
             )
         };
         root.addArrangedSubview(&add_button);
-
-        let list = NSStackView::new(mtm);
-        unsafe {
-            list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-            list.setSpacing(4.0);
-            let _: () = msg_send![&list, setAlignment: 5isize];
-            root.addArrangedSubview(&list);
-        }
-        *self.ivars().list_stack.borrow_mut() = Some(list);
 
         window.setContentView(Some(&root));
         *self.ivars().window.borrow_mut() = Some(window);
@@ -281,18 +292,20 @@ impl PrefsController {
         *self.ivars().apps.borrow_mut() = ids.clone();
 
         if ids.is_empty() {
-            let empty = self.make_label("No apps excluded.", mtm);
-            list.addArrangedSubview(&empty);
+            list.addArrangedSubview(&self.caption("No apps excluded.", mtm));
             return;
         }
 
         for (index, id) in ids.iter().enumerate() {
             let row = NSStackView::new(mtm);
-            {
-                row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-                row.setSpacing(8.0);
-            }
+            row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+            row.setSpacing(8.0);
+
+            // App name in a fixed-width column so the Remove buttons line up.
             let name = self.make_label(&display_name(id), mtm);
+            let width = name.widthAnchor().constraintEqualToConstant(250.0);
+            width.setActive(true);
+
             let remove: Retained<NSButton> = unsafe {
                 NSButton::buttonWithTitle_target_action(
                     &NSString::from_str("Remove"),
@@ -303,43 +316,70 @@ impl PrefsController {
             };
             unsafe {
                 let _: () = msg_send![&remove, setTag: index as isize];
-                row.addArrangedSubview(&remove);
-                row.addArrangedSubview(&name);
-                list.addArrangedSubview(&row);
+                // NSControlSizeSmall == 1 — a compact secondary button.
+                let _: () = msg_send![&remove, setControlSize: 1usize];
             }
+            row.addArrangedSubview(&name);
+            row.addArrangedSubview(&remove);
+            list.addArrangedSubview(&row);
         }
     }
 
-    // --- small view helpers ---
+    // --- small view helpers (type hierarchy: header / label / caption) ---
 
+    /// A plain primary-color label.
     fn make_label(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
         NSTextField::labelWithString(&NSString::from_str(text), mtm)
     }
 
-    fn add_section_header(&self, stack: &NSStackView, text: &str, mtm: MainThreadMarker) {
+    /// A bold group header (e.g. "Typing").
+    fn header(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
         let label = self.make_label(text, mtm);
-        stack.addArrangedSubview(&label);
+        label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
+        label
     }
 
-    fn add_help(&self, stack: &NSStackView, text: &str, mtm: MainThreadMarker) {
+    /// A smaller secondary-color caption for explanatory text.
+    fn caption(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
         let label = self.make_label(text, mtm);
-        stack.addArrangedSubview(&label);
+        label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        label
     }
 
-    fn add_row(&self, stack: &NSStackView, title: &str, control: &NSView, mtm: MainThreadMarker) {
+    /// A regular value label (e.g. the read-only shortcut text).
+    fn value_label(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
+        self.make_label(text, mtm)
+    }
+
+    /// One aligned form row: a fixed-width, right-aligned label followed by its
+    /// control — the two-column macOS settings form. The fixed label width lines the
+    /// controls up across rows.
+    fn form_row(
+        &self,
+        title: &str,
+        control: &NSView,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSStackView> {
         let row = NSStackView::new(mtm);
-        {
-            row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-            row.setSpacing(8.0);
-        }
+        row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        row.setSpacing(8.0);
+
         let label = self.make_label(title, mtm);
-        {
-            row.addArrangedSubview(&label);
-            row.addArrangedSubview(control);
-            stack.addArrangedSubview(&row);
-        }
+        label.setAlignment(NSTextAlignment::Right);
+        let width = label
+            .widthAnchor()
+            .constraintEqualToConstant(LABEL_COLUMN_WIDTH);
+        width.setActive(true);
+
+        row.addArrangedSubview(&label);
+        row.addArrangedSubview(control);
+        row
     }
 }
+
+/// Width of the right-aligned label column in the aligned form rows.
+const LABEL_COLUMN_WIDTH: f64 = 92.0;
 
 /// A readable name for a bundle id: the last dotted component, title-cased, since
 /// GlowKey does not persist display names — only bundle ids — in settings.
@@ -350,7 +390,7 @@ fn display_name(bundle_id: &str) -> String {
     }
     let mut chars = leaf.chars();
     let first = chars.next().unwrap();
-    format!("{}{}  ({bundle_id})", first.to_uppercase(), chars.as_str())
+    format!("{}{}", first.to_uppercase(), chars.as_str())
 }
 
 thread_local! {

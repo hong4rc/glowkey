@@ -25,7 +25,7 @@ glowkey-engine = { path = "../crates/glowkey-engine" }
 # Accessibility permission (it does not work in secure/password fields).
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSObject", "NSDictionary", "NSGeometry", "NSURL", "NSBundle"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSTextField", "NSSegmentedControl", "NSStackView", "NSLayoutConstraint", "NSUserInterfaceLayout", "NSCell", "NSText", "NSFont", "NSPanel", "NSSavePanel", "NSOpenPanel"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSWorkspace", "NSRunningApplication", "NSStatusBar", "NSStatusItem", "NSMenu", "NSMenuItem", "NSWindow", "NSResponder", "NSView", "NSControl", "NSButton", "NSTextField", "NSSegmentedControl", "NSStackView", "NSLayoutConstraint", "NSUserInterfaceLayout", "NSCell", "NSText", "NSFont", "NSPanel", "NSSavePanel", "NSOpenPanel", "NSColor", "NSLayoutAnchor"] }
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGEventSource", "CGError"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase", "CFDictionary", "CFNumber"] }
 objc2-service-management = "0.3"

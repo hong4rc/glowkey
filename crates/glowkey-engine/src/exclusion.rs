@@ -105,6 +105,8 @@ pub const DEFAULT_EXCLUSIONS: &[&str] = &[
     "dev.warp.Warp-Stable",
     "net.kovidgoyal.kitty",
     "com.github.wez.wezterm",
+    "com.mitchellh.ghostty",
+    "org.alacritty",
 ];
 
 #[cfg(test)]

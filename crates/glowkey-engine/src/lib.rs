@@ -131,6 +131,21 @@ impl Engine {
         self.raw.iter().collect()
     }
 
+    /// A copy of the raw keystrokes, for remembering a just-committed word so it can
+    /// be re-composed if its trailing boundary is deleted.
+    #[must_use]
+    pub fn raw_vec(&self) -> Vec<char> {
+        self.raw.clone()
+    }
+
+    /// Re-enters composing with a previously committed word's `raw` keys and its
+    /// on-screen `rendered` form, so the next keystrokes keep editing it (Telex
+    /// re-composition after the trailing boundary is backspaced).
+    pub fn restore(&mut self, raw: Vec<char>, rendered: String) {
+        self.raw = raw;
+        self.rendered = rendered;
+    }
+
     /// Feeds one typed character to the engine.
     ///
     /// A character that can extend a Vietnamese syllable (an ASCII letter) is added
@@ -260,6 +275,11 @@ pub struct Session {
     /// Bundle identifier of the frontmost application, set by the shell on focus
     /// change. `None` before the first application is known.
     current_bundle_id: Option<String>,
+    /// The word most recently committed at a boundary, as `(raw keys, on-screen
+    /// text)`. Set only for a valid committed word, and consumed by the very next
+    /// event: a backspace deleting the trailing boundary re-composes it; anything
+    /// else clears it. Enables `hồng`␣⌫`z` → `hông`.
+    last_committed: Option<(Vec<char>, String)>,
 }
 
 impl Session {
@@ -273,6 +293,7 @@ impl Session {
             style,
             auto_fix: true,
             current_bundle_id: None,
+            last_committed: None,
         }
     }
 
@@ -332,6 +353,8 @@ impl Session {
     /// mid-word transition to inactive (e.g. the user excludes the current app)
     /// cannot leave a stale diff baseline that later corrupts the document.
     pub fn process_key(&mut self, ch: char) -> KeyResponse {
+        // Any typed key ends the re-composition window opened by the last commit.
+        self.last_committed = None;
         if self.is_active() {
             self.engine.process_key(ch)
         } else {
@@ -470,8 +493,38 @@ impl Session {
         } else {
             None
         };
+        // Remember a *valid* committed word (not one that was auto-fixed back to raw)
+        // so that deleting the boundary that follows re-composes it.
+        self.last_committed = if restore.is_none() && self.engine.is_composing() {
+            Some((
+                self.engine.raw_vec(),
+                self.engine.current_word().to_string(),
+            ))
+        } else {
+            None
+        };
         self.engine.reset();
         restore
+    }
+
+    /// On a Backspace that deletes the boundary immediately after a just-committed
+    /// word, restores that word into the composing buffer so the following keys keep
+    /// editing it — Telex re-composition, e.g. `hồng`␣⌫`z` → `hông`. Returns whether
+    /// it restored (the caller still passes the Backspace through so the host deletes
+    /// the boundary character). A no-op while composing or with nothing remembered.
+    pub fn recompose_after_boundary_backspace(&mut self) -> bool {
+        if self.engine.is_composing() {
+            // Mid-word backspace: a normal delete, not a boundary re-composition.
+            self.last_committed = None;
+            return false;
+        }
+        match self.last_committed.take() {
+            Some((raw, rendered)) => {
+                self.engine.restore(raw, rendered);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Flushes any in-progress word without changing mode or focus.
@@ -484,6 +537,7 @@ impl Session {
     /// delete text the engine never wrote.
     pub fn flush(&mut self) {
         self.engine.reset();
+        self.last_committed = None;
     }
 }
 

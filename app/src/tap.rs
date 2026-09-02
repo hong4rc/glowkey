@@ -439,10 +439,14 @@ impl TapState {
         }
 
         if keycode == KEY_CODE_DELETE {
-            // Delete the last visible character like a normal editor (hồng →
-            // hồn) and stop composing, rather than undoing the last keystroke.
-            // The host performs the delete; we just re-sync.
-            session.flush();
+            // If this Backspace deletes the boundary right after a just-committed
+            // word, re-compose that word so the next keys keep editing it
+            // (hồng␣⌫z → hông). Otherwise delete the last visible character like a
+            // normal editor (hồng → hồn) and stop composing. Either way the host
+            // performs the delete; we only re-sync the engine.
+            if !session.recompose_after_boundary_backspace() {
+                session.flush();
+            }
             return Decision::Passthrough;
         }
 
@@ -481,6 +485,7 @@ impl TapState {
 }
 
 /// The outcome of processing one key event.
+#[derive(Debug)]
 enum Decision {
     /// Let the original keystroke through unchanged.
     Passthrough,
@@ -893,6 +898,64 @@ mod real_event_tests {
     fn real_events_boundary_commits_word() {
         // Space is a boundary: the word is already on screen, space passes through.
         assert_eq!(type_via_tap(&active_state(), "hoongf "), "hồng ");
+        // Without deleting the space, a following key starts a NEW word — z is
+        // literal, not a modifier of the previous word.
+        assert_eq!(type_via_tap(&active_state(), "hoongf z"), "hồng z");
+    }
+
+    #[test]
+    fn real_events_recompose_after_space_backspace() {
+        // hồng, Space, Backspace (delete the space), then z (Telex tone-clear) must
+        // re-compose the previous word: hồng + z → hông.
+        let state = active_state();
+        let mut screen = String::new();
+        let apply = |screen: &mut String, r: &KeyResponse| {
+            let units: Vec<u16> = screen.encode_utf16().collect();
+            let keep = units.len().saturating_sub(r.backspaces);
+            *screen = String::from_utf16(&units[..keep]).unwrap();
+            screen.push_str(&r.insert);
+        };
+
+        for ch in "hoongf".chars() {
+            let event = key_event(&state.source, ch);
+            match state.decide(NonNull::from(&*event)) {
+                Decision::Passthrough => screen.push(ch),
+                Decision::Emit(r) => apply(&mut screen, &r),
+                other => panic!("unexpected {other:?} for {ch}"),
+            }
+        }
+        assert_eq!(screen, "hồng");
+
+        // Space — boundary commits the (valid) word and passes through.
+        let space = key_event(&state.source, ' ');
+        match state.decide(NonNull::from(&*space)) {
+            Decision::Passthrough => screen.push(' '),
+            Decision::EmitThenPassthrough(r) => {
+                apply(&mut screen, &r);
+                screen.push(' ');
+            }
+            other => panic!("unexpected {other:?} for space"),
+        }
+        assert_eq!(screen, "hồng ");
+
+        // Backspace — passes through (host deletes the space); engine re-composes.
+        let backspace = backspace_event(&state.source);
+        match state.decide(NonNull::from(&*backspace)) {
+            Decision::Passthrough => {
+                screen.pop(); // host deletes the trailing space
+            }
+            other => panic!("backspace should pass through, got {other:?}"),
+        }
+        assert_eq!(screen, "hồng");
+
+        // z — now edits the re-composed word: hồng → hông.
+        let z = key_event(&state.source, 'z');
+        match state.decide(NonNull::from(&*z)) {
+            Decision::Emit(r) => apply(&mut screen, &r),
+            Decision::Passthrough => screen.push('z'),
+            other => panic!("unexpected {other:?} for z"),
+        }
+        assert_eq!(screen, "hông");
     }
 
     #[test]

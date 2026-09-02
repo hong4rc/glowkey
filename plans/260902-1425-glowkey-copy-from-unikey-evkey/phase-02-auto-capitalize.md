@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Auto-capitalize sentence start"
-status: pending
+status: completed
 priority: P2
 effort: "2h"
 dependencies: []

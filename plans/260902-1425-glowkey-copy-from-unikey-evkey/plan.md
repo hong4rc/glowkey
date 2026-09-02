@@ -1,6 +1,6 @@
 ---
 title: "GlowKey — features worth copying from Unikey / EVKey"
-status: pending
+status: completed
 created: 2026-09-02
 branch: main
 ---
@@ -42,10 +42,10 @@ visible, not lost.
 ## Phases (only the worthwhile copies)
 | # | Phase | Value | Effort | Status |
 |---|-------|-------|--------|--------|
-| 1 | [VNI input method](./phase-01-vni-input-method.md) | High | ~2h | pending |
-| 2 | [Auto-capitalize sentence](./phase-02-auto-capitalize.md) | Medium | ~2h | pending |
-| 3 | [Configurable toggle hotkey](./phase-03-configurable-hotkey.md) | Medium | ~3h | pending |
-| 4 | [About window](./phase-04-about-window.md) | Low | ~1h | pending |
+| 1 | [VNI input method](./phase-01-vni-input-method.md) | High | ~2h | ✅ done |
+| 2 | [Auto-capitalize sentence](./phase-02-auto-capitalize.md) | Medium | ~2h | ✅ done |
+| 3 | [Configurable toggle hotkey](./phase-03-configurable-hotkey.md) | Medium | ~3h | ✅ done |
+| 4 | [About window](./phase-04-about-window.md) | Low | ~1h | ✅ done |
 
 ## Acceptance criteria
 - A Settings "Input method" control switches Telex ⇄ VNI; typing follows it; persists.

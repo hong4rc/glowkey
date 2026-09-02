@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "About window"
-status: pending
+status: completed
 priority: P3
 effort: "1h"
 dependencies: []

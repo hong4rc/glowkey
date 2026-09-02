@@ -43,6 +43,13 @@ pub fn save(settings: &Settings) {
         eprintln!("GlowKey: could not create settings dir: {e}");
         return;
     }
+    // Keep one backup of the previous file. `Settings::from_json` falls back to
+    // FULL defaults on any parse error (e.g. an older build reading a newer
+    // enum variant), and the next save would then overwrite the user's file with
+    // defaults — the .bak preserves what was there for manual recovery.
+    if path.exists() {
+        let _ = fs::copy(&path, path.with_extension("json.bak"));
+    }
     let tmp = path.with_extension("json.tmp");
     if let Err(e) = fs::write(&tmp, settings.to_json()) {
         eprintln!("GlowKey: could not write settings: {e}");

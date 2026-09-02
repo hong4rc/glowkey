@@ -68,7 +68,11 @@ fn handle() -> Option<&'static Mutex<File>> {
 
 /// Appends one line to the log (and echoes to stderr when `GLOWKEY_DEBUG` is set).
 /// Never panics; a logging failure is swallowed so it cannot disturb input.
+/// Under `cargo test` it does nothing — tests must not write the user's real log.
 pub fn log(message: &str) {
+    if cfg!(test) {
+        return;
+    }
     let line = format!(
         "#{:<5} +{:8.3}s  {}\n",
         next_seq(),

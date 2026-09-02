@@ -151,8 +151,13 @@ impl TapState {
 
     /// Records the frontmost application on the session, so the ignore list and
     /// VN/EN state reflect an app switch immediately (not only at the next word
-    /// start). Called by the menu controller's app-activation observer.
+    /// start). Called by the menu controller's app-activation observer. Switching
+    /// to another app also cancels an armed hotkey recording — the recorder only
+    /// makes sense while GlowKey's own Settings window is in front.
     pub fn set_frontmost_app(&self, bundle_id: &str) {
+        if own_bundle_id().as_deref() != Some(bundle_id) {
+            self.cancel_hotkey_recording();
+        }
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.set_frontmost_app(bundle_id);
         }
@@ -425,8 +430,10 @@ impl TapState {
 
     /// Flushes the in-progress word — the engine's edits assume the composing word
     /// is still the document tail, so this must run when the caret may have moved
-    /// (a mouse click).
+    /// (a mouse click). A click also cancels an armed hotkey recording: the user
+    /// has moved on, and a forgotten recorder must not capture a later ⌃/⌥ combo.
     fn flush(&self) {
+        self.cancel_hotkey_recording();
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.flush();
         }
@@ -456,7 +463,11 @@ impl TapState {
                         .try_borrow_mut()
                         .map(|mut s| s.toggle_app_exclusion(&bundle_id))
                         .unwrap_or(ExclusionToggle::Excluded);
-                    self.save_settings();
+                    // A session-only suspension changes nothing persisted — by
+                    // design the snapshot still excludes the terminal.
+                    if outcome != ExclusionToggle::EnabledSessionOnly {
+                        self.save_settings();
+                    }
                     let described = match outcome {
                         ExclusionToggle::Excluded => "disabled",
                         ExclusionToggle::Enabled => "enabled",
@@ -541,7 +552,7 @@ impl TapState {
                 .borrow()
                 .as_deref()
                 .is_some_and(is_chromium_browser);
-            if chromium && crate::ax::focused_has_selection() {
+            if chromium && crate::ax::focused_text_field_has_selection() {
                 crate::log::log("OMNIBOX trailing selection detected — clearing with ⌦");
                 post_key(&self.source, KEY_CODE_FORWARD_DELETE as u16, true);
                 post_key(&self.source, KEY_CODE_FORWARD_DELETE as u16, false);
@@ -702,9 +713,23 @@ impl TapState {
         }
     }
 
-    /// One step of hotkey recording: Escape cancels; a key-down with ⌃ or ⌥ (and
-    /// without ⌘ — system shortcuts stay system shortcuts) becomes the new custom
-    /// toggle hotkey and is saved. Anything else is swallowed while recording.
+    /// Cancels an in-progress hotkey recording (Esc, a mouse click, or an app
+    /// switch). No-op when not recording.
+    pub fn cancel_hotkey_recording(&self) {
+        let mut recording = self.recording_hotkey.borrow_mut();
+        if *recording {
+            *recording = false;
+            drop(recording);
+            crate::log::log("HOTKEY recording cancelled");
+            crate::prefs_window::hotkey_recording_done();
+        }
+    }
+
+    /// One step of hotkey recording. Only key-downs that could BE the hotkey are
+    /// intercepted: a ⌃/⌥ combo (without ⌘) is captured; Escape cancels. Every
+    /// other key — plain typing, shifted letters, all ⌘ shortcuts (⌘Q, ⌘Tab,
+    /// ⌘S…) — passes through untouched, so an armed-and-forgotten recording can
+    /// never lock the keyboard. ⌃⇧E is rejected: it is the per-app toggle.
     fn capture_hotkey(
         &self,
         event: NonNull<CGEvent>,
@@ -712,9 +737,7 @@ impl TapState {
         keycode: i64,
     ) -> Decision {
         if keycode == KEY_CODE_ESCAPE {
-            *self.recording_hotkey.borrow_mut() = false;
-            crate::log::log("HOTKEY recording cancelled");
-            crate::prefs_window::hotkey_recording_done();
+            self.cancel_hotkey_recording();
             return Decision::Consume;
         }
         let control = flags.0 & CGEventFlags::MaskControl.0 != 0;
@@ -722,15 +745,27 @@ impl TapState {
         let option = flags.0 & CGEventFlags::MaskAlternate.0 != 0;
         let command = flags.0 & CGEventFlags::MaskCommand.0 != 0;
         if command || (!control && !option) {
-            // Not a usable combo (needs ⌃ or ⌥, never ⌘): keep waiting.
+            // Not a candidate combo: let it through so typing and every ⌘
+            // shortcut keep working while the recorder is armed.
+            return Decision::Passthrough;
+        }
+        if is_app_toggle_hotkey(flags, keycode) {
+            // ⌃⇧E is the built-in per-app toggle; recording it would shadow that
+            // feature with no warning. Swallow and keep waiting.
+            crate::log::log("HOTKEY ⌃⇧E is reserved (per-app toggle) — pick another combo");
             return Decision::Consume;
         }
         // Display character: with Control held the event's Unicode string is a
-        // control code (⌃A → U+0001), so map it back to its letter.
-        let key_char = match unicode_char(event) {
-            Some(c) if ('\x01'..='\x1a').contains(&c) => ((c as u8 - 1) + b'A') as char,
-            Some(c) if !c.is_control() => c.to_ascii_uppercase(),
-            _ => '?',
+        // control code (⌃A → U+0001), so map it back to its letter; Space by
+        // keycode (its char can be NUL under modifiers).
+        let key_char = if keycode == KEY_CODE_SPACE {
+            ' '
+        } else {
+            match unicode_char(event) {
+                Some(c) if ('\x01'..='\x1a').contains(&c) => ((c as u8 - 1) + b'A') as char,
+                Some(c) if !c.is_control() => c.to_ascii_uppercase(),
+                _ => '?',
+            }
         };
         let preset = HotkeyPreset::Custom {
             control,
@@ -739,9 +774,13 @@ impl TapState {
             keycode,
             key_char,
         };
-        if let Ok(mut session) = self.session.try_borrow_mut() {
-            session.set_toggle_hotkey(preset);
-        }
+        let Ok(mut session) = self.session.try_borrow_mut() else {
+            // Could not store the combo — stay armed rather than silently ending
+            // the recording with the old hotkey still in effect.
+            return Decision::Consume;
+        };
+        session.set_toggle_hotkey(preset);
+        drop(session);
         *self.recording_hotkey.borrow_mut() = false;
         // Persistence happens in handle_key_down (decide stays disk-free for tests).
         crate::log::log(&format!("HOTKEY recorded {preset:?}"));
@@ -897,6 +936,18 @@ fn post_string(source: &CGEventSource, text: &str) {
         }
         CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
     }
+}
+
+/// GlowKey's own bundle identifier (None when running unbundled, e.g. tests).
+fn own_bundle_id() -> Option<String> {
+    use std::sync::OnceLock;
+    static OWN: OnceLock<Option<String>> = OnceLock::new();
+    OWN.get_or_init(|| {
+        objc2_foundation::NSBundle::mainBundle()
+            .bundleIdentifier()
+            .map(|s| s.to_string())
+    })
+    .clone()
 }
 
 /// Bundle identifier of the frontmost application, for the ignore list.
@@ -1439,13 +1490,31 @@ mod real_event_tests {
         state.begin_hotkey_recording();
         assert!(state.is_recording_hotkey());
 
-        // A plain letter is swallowed and recording continues (needs ⌃ or ⌥).
+        // A plain letter passes through (typing must never be blocked by an
+        // armed recorder) and recording continues.
         let plain = key_event(&state.source, 'k');
         assert!(matches!(
             state.decide(NonNull::from(&*plain)),
+            Decision::Passthrough
+        ));
+        assert!(state.is_recording_hotkey());
+
+        // ⌘ shortcuts pass through too (⌘Q/⌘Tab must keep working).
+        let cmd = flagged_event(&state.source, 12, CGEventFlags(CGEventFlags::MaskCommand.0));
+        assert!(matches!(
+            state.decide(NonNull::from(&*cmd)),
+            Decision::Passthrough
+        ));
+        assert!(state.is_recording_hotkey());
+
+        // ⌃⇧E is reserved for the per-app toggle: swallowed, still recording.
+        let reserved = ctrl_shift_event(&state.source, KEY_CODE_E as u16);
+        assert!(matches!(
+            state.decide(NonNull::from(&*reserved)),
             Decision::Consume
         ));
         assert!(state.is_recording_hotkey());
+        assert_eq!(state.toggle_hotkey(), HotkeyPreset::CtrlShiftSpace);
 
         // ⌃⌥K (keycode 40) becomes the custom hotkey and ends recording.
         let combo = flagged_event(
@@ -1505,6 +1574,17 @@ mod real_event_tests {
         ));
         assert!(!state.is_recording_hotkey());
         // The preset is unchanged.
+        assert_eq!(state.toggle_hotkey(), HotkeyPreset::CtrlShiftSpace);
+    }
+
+    #[test]
+    fn hotkey_recording_cancelled_by_mouse_click() {
+        // A mouse click (the tap's flush path) cancels an armed recorder, so a
+        // forgotten recording cannot capture a later ⌃/⌥ combo.
+        let state = active_state();
+        state.begin_hotkey_recording();
+        state.flush();
+        assert!(!state.is_recording_hotkey());
         assert_eq!(state.toggle_hotkey(), HotkeyPreset::CtrlShiftSpace);
     }
 

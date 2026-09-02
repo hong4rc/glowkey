@@ -71,12 +71,15 @@ Cargo workspace:
 - **Caret-navigation flush**: arrows/Home/End/Page flush the diff baseline.
 - **Auto-capitalize** first letter of each sentence (opt-in).
 - **Configurable toggle hotkey** (⌃⇧Space / ⌃Space / ⌥Space / ⌃⇧Z) **plus a
-  recorder**: "Record Custom…" in Settings captures the next ⌃/⌥ combo
-  (`HotkeyPreset::Custom`; Esc cancels; ⌘ not allowed).
+  recorder**: the "Custom…" segment in Settings arms a recorder that captures the
+  next ⌃/⌥ combo (`HotkeyPreset::Custom`). Safety: while armed, only ⌃/⌥ combos
+  are intercepted — plain typing and every ⌘ shortcut pass through; Esc, any
+  mouse click, or switching apps cancels; ⌃⇧E is rejected (reserved for the
+  per-app toggle).
 - **Chromium omnibox guard**: before emitting backspaces in a Chromium browser,
-  one AX check (`AXSelectedText` non-empty?) detects the omnibox's
-  inline-autocomplete trailing selection and clears it with a forward-delete
-  (`app/src/ax.rs`). Normal fields have no selection → provably untouched.
+  one AX check (focused element is an `AXTextField` with non-empty
+  `AXSelectedText`) detects the omnibox's inline-autocomplete trailing selection
+  and clears it with a forward-delete (`app/src/ax.rs`). Best-effort — see §6.1.
 - **Exclusion tombstones**: `removed_default_exclusions` in settings; at load the
   effective list is `saved ∪ (defaults − tombstones)`, so new shipped defaults
   reach old settings files without resurrecting deliberate removals.
@@ -109,24 +112,35 @@ Cargo workspace:
 
 ## 6. KNOWN ISSUES / STATUS (updated 2026-09-02, second session)
 
-1. **Chrome/Edge omnibox** — FIX SHIPPED, needs live verification. The guard
-   (`tap.rs::emit_edit` + `ax.rs`): when an edit with backspaces is about to land
-   in a Chromium browser AND the focused element's `AXSelectedText` is non-empty,
-   post one forward-delete to clear the inline-autocomplete selection first. In a
-   normal field the selection is empty → nothing posted; ⌦ is also a no-op at
-   text end. Scoped by bundle-id prefix (`CHROMIUM_BUNDLE_PREFIXES`). If it
-   misbehaves, the log line "OMNIBOX trailing selection detected" shows each fire.
+1. **Chrome/Edge omnibox** — MITIGATION SHIPPED (best-effort, not a proof), needs
+   live verification. The guard (`tap.rs::emit_edit` + `ax.rs`): when an edit
+   with backspaces is about to land in a Chromium browser AND the focused element
+   is an `AXTextField` with non-empty `AXSelectedText`, post one forward-delete
+   to clear the inline-autocomplete selection first. Normal fields (empty
+   selection) and non-text-field surfaces (web content, contenteditable) are
+   untouched. Known residual: the AX read races Chrome's async renderer path, so
+   a stale answer can occasionally skip or misfire the guard — it converts a
+   deterministic bug into a rare timing one. Adds up to 2–3 AX IPC round-trips
+   (50 ms cap, typ. sub-ms) per *transforming* keystroke in Chromium apps only,
+   and querying AX makes Chromium keep its accessibility tree on. Log line
+   "OMNIBOX trailing selection detected" marks each fire; "AX guard unavailable"
+   (once per run) marks a dead guard.
 2. **Terminals** — HARDENED. ⌃⇧E in a known terminal (`TERMINAL_EXCLUSIONS`) now
    un-excludes for the session only (HUD "VI ⚠"); restart re-excludes. Shipped
    defaults merge into old settings files at load (tombstones in
    `removed_default_exclusions`), so `org.alacritty` etc. self-heal. Permanent
    removal is still possible, but only via the Excluded Apps window.
 3. **English/Telex ambiguity** — MITIGATED by the opt-in "Restore common English
-   words" (curated list, `english.rs`). Still inherent in principle: the option
-   trades `was`→`ứa` for `cats`→`cát`, hence default off.
+   words" (curated list, `english.rs`). Still inherent in principle, and the
+   trade-off is wide: with the option ON, syllables typed with a trailing tone
+   key that collide with listed words become untypeable in that key order —
+   á→as, í→is, ú→us, ò→of, ỏ→or, mã→max, sĩ→six, thú→thus, cả→car, hải→hair,
+   tả→tar, cát→cats, sét→sets… That is exactly why it is OFF by default; the
+   Settings caption states it. No per-word escape hatch exists yet (a
+   "press-the-tone-key-again to reject" would be the Unikey-style fix).
 4. **All GUI is unverifiable headless** (unchanged) — new controls to eyeball:
-   English-restore checkbox, "Record Custom…" + "Current: …" hotkey row, "VI ⚠"
-   HUD variant.
+   English-restore checkbox, the 5-segment hotkey picker ("Custom…" arms the
+   recorder; the caption row shows "Current: …"), "VI ⚠" HUD variant.
 5. **Accessibility re-grant after rebuild** — the ad-hoc re-sign drops the grant;
    after `build-app.sh` the relaunched app waits at the permission gate until the
    user re-enables it in System Settings → Privacy & Security → Accessibility.

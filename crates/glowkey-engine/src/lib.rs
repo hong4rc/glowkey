@@ -765,7 +765,8 @@ impl Session {
                 });
             }
         }
-        let restore = if self.engine.is_composing() {
+        let restore = if (self.auto_fix || self.restore_english_words) && self.engine.is_composing()
+        {
             let rendered = self.engine.current_word().to_string();
             let raw = self.engine.raw_string();
             // Two independent reasons to restore the raw keys:

@@ -94,10 +94,12 @@ impl ExclusionList {
     }
 
     /// Adds a bundle identifier. Returns true if it was newly added. Clears any
-    /// tombstone or session suspension for it — an explicit add always wins.
+    /// session suspension. A tombstone is deliberately KEPT: it only suppresses
+    /// the defaults merge at load, and an explicit entry wins over it anyway —
+    /// clearing it would let an accidental toggle pair (remove + re-add) silently
+    /// destroy the user's recorded removal of a default.
     pub fn add(&mut self, bundle_id: impl Into<String>) -> bool {
         let bundle_id = bundle_id.into();
-        self.removed_defaults.remove(&bundle_id);
         self.session_removed.remove(&bundle_id);
         self.bundle_ids.insert(bundle_id)
     }
@@ -138,17 +140,6 @@ impl ExclusionList {
         self.removed_defaults.iter().map(String::as_str)
     }
 
-    /// Toggles a bundle identifier, returning its new excluded state. Backs the
-    /// menu bar's "Exclude current application" / its inverse.
-    pub fn toggle(&mut self, bundle_id: &str) -> bool {
-        if self.remove(bundle_id) {
-            false
-        } else {
-            self.add(bundle_id.to_string());
-            true
-        }
-    }
-
     /// The excluded bundle identifiers, sorted — for persistence and for the editor.
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.bundle_ids.iter().map(String::as_str)
@@ -175,10 +166,12 @@ pub const TERMINAL_EXCLUSIONS: &[&str] = &[
     "com.apple.Terminal",
     "com.googlecode.iterm2",
     "dev.warp.Warp-Stable",
+    "dev.warp.Warp-Preview",
     "net.kovidgoyal.kitty",
     "com.github.wez.wezterm",
     "com.mitchellh.ghostty",
     "org.alacritty",
+    "co.zeit.hyper",
 ];
 
 /// Whether this bundle identifier is a known terminal (see [`TERMINAL_EXCLUSIONS`]).
@@ -198,10 +191,12 @@ pub const DEFAULT_EXCLUSIONS: &[&str] = &[
     "com.jetbrains.pycharm",
     "com.jetbrains.WebStorm",
     "dev.warp.Warp-Stable",
+    "dev.warp.Warp-Preview",
     "net.kovidgoyal.kitty",
     "com.github.wez.wezterm",
     "com.mitchellh.ghostty",
     "org.alacritty",
+    "co.zeit.hyper",
 ];
 
 #[cfg(test)]
@@ -227,12 +222,22 @@ mod tests {
     }
 
     #[test]
-    fn toggle_flips_state() {
-        let mut list = ExclusionList::new();
-        assert!(list.toggle("com.example.app")); // now excluded
-        assert!(list.is_excluded("com.example.app"));
-        assert!(!list.toggle("com.example.app")); // now included
-        assert!(!list.is_excluded("com.example.app"));
+    fn tombstone_survives_a_remove_add_pair() {
+        // A deliberate removal must not be silently destroyed by a later
+        // add/remove pair (e.g. two accidental ⌃⇧E presses).
+        let mut list = ExclusionList::with_defaults();
+        list.remove("com.googlecode.iterm2"); // deliberate, tombstoned
+        list.add("com.googlecode.iterm2"); // toggled back on
+        list.remove("com.googlecode.iterm2"); // and off again
+        assert!(list
+            .removed_default_ids()
+            .any(|id| id == "com.googlecode.iterm2"));
+        // A fresh load must not resurrect it via the defaults merge.
+        let reloaded = ExclusionList::from_saved(
+            list.ids().map(String::from).collect::<Vec<_>>(),
+            list.removed_default_ids().map(String::from).collect::<Vec<_>>(),
+        );
+        assert!(!reloaded.is_excluded("com.googlecode.iterm2"));
     }
 
     #[test]
@@ -269,13 +274,15 @@ mod tests {
         assert!(list.remove("com.microsoft.VSCode"));
         let tombstones: Vec<&str> = list.removed_default_ids().collect();
         assert_eq!(tombstones, vec!["com.microsoft.VSCode"]);
-        // Re-adding clears the tombstone.
+        // Re-adding keeps the tombstone (the explicit entry wins over it anyway,
+        // and it must survive an accidental remove/add pair).
         list.add("com.microsoft.VSCode");
-        assert_eq!(list.removed_default_ids().count(), 0);
+        assert!(list.is_excluded("com.microsoft.VSCode"));
+        assert_eq!(list.removed_default_ids().count(), 1);
         // A non-default removal never tombstones.
         list.add("com.example.app");
         list.remove("com.example.app");
-        assert_eq!(list.removed_default_ids().count(), 0);
+        assert_eq!(list.removed_default_ids().count(), 1);
     }
 
     #[test]

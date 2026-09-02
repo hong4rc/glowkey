@@ -91,33 +91,33 @@ define_class!(
             self.state().set_input_method_and_save(method);
         }
 
-        /// Toggle-hotkey preset changed (0..=3).
+        /// Toggle-hotkey segment clicked (0..=3 presets; 4 = "Custom…" arms the
+        /// recorder — the tap captures the next ⌃/⌥ combo, Esc cancels).
         #[unsafe(method(hotkeyChanged:))]
         fn hotkey_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
             let preset = match seg {
+                0 => HotkeyPreset::CtrlShiftSpace,
                 1 => HotkeyPreset::CtrlSpace,
                 2 => HotkeyPreset::OptionSpace,
                 3 => HotkeyPreset::CtrlShiftZ,
-                _ => HotkeyPreset::CtrlShiftSpace,
+                _ => {
+                    // "Custom…": arm the recorder. The label is the prompt; the
+                    // segment snaps to the real state when recording ends.
+                    if !self.state().is_recording_hotkey() {
+                        self.state().begin_hotkey_recording();
+                        if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
+                            label.setStringValue(&NSString::from_str(
+                                "Press a ⌃/⌥ combo… (Esc cancels)",
+                            ));
+                        }
+                    }
+                    return;
+                }
             };
             self.state().set_toggle_hotkey_and_save(preset);
             self.refresh_hotkey_ui();
-        }
-
-        /// "Record Custom…" clicked: the tap captures the next ⌃/⌥ combo.
-        #[unsafe(method(recordHotkey:))]
-        fn record_hotkey(&self, _sender: Option<&AnyObject>) {
-            if self.state().is_recording_hotkey() {
-                return; // already waiting for a combo
-            }
-            self.state().begin_hotkey_recording();
-            if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
-                label.setStringValue(&NSString::from_str(
-                    "Press the new hotkey (⌃ or ⌥ required) — Esc cancels…",
-                ));
-            }
         }
 
         /// "Restore common English words" checkbox toggled.
@@ -322,7 +322,9 @@ impl PrefsController {
 
     /// Constructs the window and its static controls once.
     fn build_window(&self, mtm: MainThreadMarker) {
-        let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 420.0));
+        // Sized for the full stack (this grew with the English-restore caption and
+        // the hotkey recorder row) — an NSStackView compresses silently if short.
+        let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 540.0));
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
             | NSWindowStyleMask::Miniaturizable;
@@ -486,16 +488,18 @@ impl PrefsController {
         });
         root.addArrangedSubview(&english);
         root.addArrangedSubview(&self.caption(
-            "For mixed English typing: “was” stays “was”, not “ứa”. Trade-off: Vietnamese\nwords typed with a trailing tone key (cats → cát) then need another key order.",
+            "For mixed English typing: “was” stays “was”, not “ứa”. Trade-off: syllables\nsharing keys with listed words (á→as, í→is, cát→cats, cả→car, hải→hair)\nthen need a different key order or the EN toggle.",
             mtm,
         ));
 
-        // Toggle hotkey — a preset picker plus a recorder for a custom combo.
+        // Toggle hotkey — presets plus "Custom…", which arms the recorder (the
+        // tap captures the next ⌃/⌥ combo; Esc, a click, or an app switch cancel).
         let hotkey_labels = NSArray::from_retained_slice(&[
             NSString::from_str("⌃⇧Space"),
             NSString::from_str("⌃Space"),
             NSString::from_str("⌥Space"),
             NSString::from_str("⌃⇧Z"),
+            NSString::from_str("Custom…"),
         ]);
         let hotkey_seg: Retained<NSSegmentedControl> = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
@@ -508,7 +512,7 @@ impl PrefsController {
         };
         root.addArrangedSubview(&self.form_row("Toggle key", &hotkey_seg, mtm));
 
-        // Recorder row: [Record Custom…] [Current: ⌃⇧Space]
+        // Status row under the picker: "Current: ⌃⇧Space" / the recording prompt.
         let record_row = NSStackView::new(mtm);
         record_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         record_row.setSpacing(8.0);
@@ -517,17 +521,8 @@ impl PrefsController {
             .widthAnchor()
             .constraintEqualToConstant(LABEL_COLUMN_WIDTH);
         spacer_width.setActive(true);
-        let record_button: Retained<NSButton> = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Record Custom…"),
-                Some(self.as_ref()),
-                Some(sel!(recordHotkey:)),
-                mtm,
-            )
-        };
         let hotkey_label = self.caption("", mtm);
         record_row.addArrangedSubview(&spacer);
-        record_row.addArrangedSubview(&record_button);
         record_row.addArrangedSubview(&hotkey_label);
         root.addArrangedSubview(&record_row);
         *self.ivars().hotkey_seg.borrow_mut() = Some(hotkey_seg);
@@ -825,12 +820,14 @@ impl PrefsController {
     fn refresh_hotkey_ui(&self) {
         let preset = self.state().toggle_hotkey();
         if let Some(seg) = self.ivars().hotkey_seg.borrow().as_ref() {
+            // Always a real segment — a SelectOne segmented control does not
+            // reliably support clearing the selection with -1.
             let selected: isize = match preset {
                 HotkeyPreset::CtrlShiftSpace => 0,
                 HotkeyPreset::CtrlSpace => 1,
                 HotkeyPreset::OptionSpace => 2,
                 HotkeyPreset::CtrlShiftZ => 3,
-                HotkeyPreset::Custom { .. } => -1, // custom: no segment selected
+                HotkeyPreset::Custom { .. } => 4,
             };
             seg.setSelectedSegment(selected);
         }
@@ -960,8 +957,12 @@ pub fn show(state: *const TapState, mtm: MainThreadMarker) {
 /// (including under tests, where no controller is installed).
 pub fn hotkey_recording_done() {
     CONTROLLER.with(|slot| {
-        if let Some(controller) = slot.borrow().as_ref() {
-            controller.refresh_hotkey_ui();
+        // try_borrow: this can be reached re-entrantly if AppKit pumps the run
+        // loop while show() still holds the slot mutably.
+        if let Ok(slot) = slot.try_borrow() {
+            if let Some(controller) = slot.as_ref() {
+                controller.refresh_hotkey_ui();
+            }
         }
     });
 }

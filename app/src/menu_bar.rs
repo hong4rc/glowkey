@@ -109,6 +109,12 @@ define_class!(
             crate::prefs_window::show(self.ivars().state, mtm);
         }
 
+        #[unsafe(method(aboutGlowKey:))]
+        fn about_glowkey(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            crate::about_window::show(mtm);
+        }
+
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -218,6 +224,7 @@ impl MenuController {
 
         self.add_separator(menu, mtm);
         self.add_item(menu, "Settings…", sel!(openSettings:), false, ",", mtm);
+        self.add_item(menu, "About GlowKey", sel!(aboutGlowKey:), false, "", mtm);
         self.add_item(menu, "Quit GlowKey", sel!(quit:), false, "q", mtm);
     }
 

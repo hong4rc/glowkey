@@ -10,6 +10,8 @@
 //! crate) compiles in CI without a macOS SDK.
 
 #[cfg(target_os = "macos")]
+mod about_window;
+#[cfg(target_os = "macos")]
 mod app_info;
 #[cfg(target_os = "macos")]
 mod hud;

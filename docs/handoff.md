@@ -188,8 +188,9 @@ bash scripts/dev-run.sh                  # stop + rebuild + relaunch w/ GLOWKEY_
 
 - Plans: `plans/260901-1919-...` (UI/ignore/auto-fix), `plans/260902-1230-...`
   (remaining fixes + deferred omnibox), `plans/260902-1425-...` (Unikey/EVKey copy).
-- Decisions: `docs/decisions/000{1,2,3}-*.md`. Checkpoint: `docs/checkpoint.md`.
-  UI design: `docs/ui-design.md`.
+- Decisions: `docs/decisions/0001`–`0005` (all-Rust objc2; CGEventTap wrap;
+  omnibox AX guard; terminal exclusion hardening; opt-in English restore).
+  UI design: `docs/ui-design.md`. Checkpoint: superseded pointer only.
 
 ## 11. Suggested next steps for a new session
 

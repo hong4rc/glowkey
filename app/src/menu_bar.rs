@@ -15,7 +15,7 @@ use objc2_app_kit::{
     NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
     NSVariableStatusItemLength, NSWorkspace,
 };
-use objc2_foundation::{MainThreadMarker, NSString};
+use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
 use std::cell::RefCell;
 
@@ -87,6 +87,22 @@ define_class!(
             self.state().reset();
         }
 
+        #[unsafe(method(revealLog:))]
+        fn reveal_log(&self, _sender: Option<&AnyObject>) {
+            // Reveal the log file in Finder so it is easy to grab when reporting an
+            // issue. Selects the file if it exists, else opens its folder.
+            let Some(path) = crate::log::path() else { return };
+            let workspace = NSWorkspace::sharedWorkspace();
+            if path.exists() {
+                let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+                let urls = NSArray::from_retained_slice(&[url]);
+                workspace.activateFileViewerSelectingURLs(&urls);
+            } else if let Some(dir) = path.parent() {
+                let url = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
+                workspace.openURL(&url);
+            }
+        }
+
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -109,9 +125,9 @@ impl MenuController {
     }
 
     /// Refreshes the menu bar glyph to reflect whether Vietnamese is active for the
-    /// frontmost app: `VN` when on, `EN` when off (English mode or excluded app).
+    /// frontmost app: `VI` when on, `EN` when off (English mode or excluded app).
     fn update_glyph(&self) {
-        let title = if self.state().is_active() { "VN" } else { "EN" };
+        let title = if self.state().is_active() { "VI" } else { "EN" };
         let mtm = MainThreadMarker::from(self);
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             if let Some(button) = item.button(mtm) {
@@ -187,6 +203,14 @@ impl MenuController {
             menu,
             "Reset input (if stuck)",
             sel!(resetEngine:),
+            false,
+            "",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            "Reveal Log in Finder",
+            sel!(revealLog:),
             false,
             "",
             mtm,

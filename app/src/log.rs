@@ -31,7 +31,9 @@ fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-fn log_path() -> Option<PathBuf> {
+/// The log file's path (`~/Library/Logs/GlowKey/glowkey.log`), if `HOME` is known.
+/// Public so the menu can reveal it in Finder.
+pub fn path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let mut path = PathBuf::from(home);
     path.push("Library/Logs/GlowKey/glowkey.log");
@@ -43,7 +45,7 @@ fn log_path() -> Option<PathBuf> {
 fn handle() -> Option<&'static Mutex<File>> {
     static FILE: OnceLock<Option<Mutex<File>>> = OnceLock::new();
     FILE.get_or_init(|| {
-        let path = log_path()?;
+        let path = path()?;
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }

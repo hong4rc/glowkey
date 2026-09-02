@@ -450,6 +450,14 @@ impl TapState {
             return Decision::Passthrough;
         }
 
+        if is_caret_move(keycode) {
+            // Arrow / Home / End / Page keys move the caret without our knowledge,
+            // so the engine's diff baseline (and any re-composition memory) is now
+            // stale. Flush and let the key through — same contract as a mouse click.
+            session.flush();
+            return Decision::Passthrough;
+        }
+
         match unicode_char(event) {
             Some(ch) if ch.is_ascii_alphabetic() => {
                 let response = session.process_key(ch);
@@ -498,6 +506,14 @@ enum Decision {
     /// Apply this edit (e.g. an auto-fix restore) and then let the original key
     /// through — the boundary key that triggered the commit still types.
     EmitThenPassthrough(KeyResponse),
+}
+
+/// Whether `keycode` is a caret-navigation key (arrows, Home/End, Page Up/Down).
+/// These move the insertion point without any text change, so GlowKey must flush
+/// its diff baseline when one is pressed.
+fn is_caret_move(keycode: i64) -> bool {
+    // Left 123, Right 124, Down 125, Up 126, Home 115, End 119, PgUp 116, PgDn 121.
+    matches!(keycode, 123 | 124 | 125 | 126 | 115 | 116 | 119 | 121)
 }
 
 /// macOS virtual key code for Space.
@@ -837,6 +853,12 @@ mod real_event_tests {
         CGEvent::new_keyboard_event(Some(source), KEY_CODE_DELETE as u16, true).expect("event")
     }
 
+    /// Builds a real key-down event for a caret-navigation key by virtual keycode
+    /// (e.g. Left = 123), with no Unicode string — as the tap sees an arrow key.
+    fn nav_event(source: &CGEventSource, keycode: u16) -> CFRetained<CGEvent> {
+        CGEvent::new_keyboard_event(Some(source), keycode, true).expect("event")
+    }
+
     /// Types `input` through the real `decide()` path and returns the resulting
     /// on-screen text, applying each Decision exactly as the OS would.
     fn type_via_tap(state: &TapState, input: &str) -> String {
@@ -901,6 +923,28 @@ mod real_event_tests {
         // Without deleting the space, a following key starts a NEW word — z is
         // literal, not a modifier of the previous word.
         assert_eq!(type_via_tap(&active_state(), "hoongf z"), "hồng z");
+    }
+
+    #[test]
+    fn real_events_arrow_key_flushes_engine() {
+        // An arrow key mid-word must flush (so a stale baseline can't corrupt later
+        // edits) and pass through — never emit an edit.
+        let state = active_state();
+        for ch in "hoo".chars() {
+            let event = key_event(&state.source, ch);
+            let _ = state.decide(NonNull::from(&*event));
+        }
+        assert!(state.session.borrow().is_composing());
+
+        let left = nav_event(&state.source, 123); // Left arrow
+        assert!(matches!(
+            state.decide(NonNull::from(&*left)),
+            Decision::Passthrough
+        ));
+        assert!(
+            !state.session.borrow().is_composing(),
+            "arrow key must flush the composing word"
+        );
     }
 
     #[test]

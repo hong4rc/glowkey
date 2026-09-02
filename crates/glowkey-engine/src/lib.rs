@@ -300,8 +300,11 @@ impl Session {
     /// Builds a session from persisted [`Settings`].
     #[must_use]
     pub fn from_settings(settings: &Settings) -> Self {
+        // Mode is deliberately NOT restored: GlowKey always launches in Vietnamese
+        // (the point of the app). ⌃⇧Space is a session-only toggle, so an accidental
+        // toggle can never leave the app launching disabled. Only the ignore list,
+        // auto-fix, and tone style persist.
         let mut session = Self::new(settings.style, settings.exclusion_list());
-        session.mode = settings.default_mode;
         session.auto_fix = settings.auto_fix;
         session
     }
@@ -313,7 +316,6 @@ impl Session {
             exclusions: self.exclusions.ids().map(String::from).collect(),
             auto_fix: self.auto_fix,
             style: self.style,
-            default_mode: self.mode,
         }
     }
 

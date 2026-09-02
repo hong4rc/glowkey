@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExclusionList, InputMode, PlacementStyle};
+use crate::{ExclusionList, PlacementStyle};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,9 +21,6 @@ pub struct Settings {
     /// Tone-mark placement style.
     #[serde(default)]
     pub style: PlacementStyle,
-    /// Mode a newly focused (non-excluded) app starts in.
-    #[serde(default)]
-    pub default_mode: InputMode,
 }
 
 impl Default for Settings {
@@ -32,7 +29,6 @@ impl Default for Settings {
             exclusions: default_exclusions(),
             auto_fix: true,
             style: PlacementStyle::default(),
-            default_mode: InputMode::default(),
         }
     }
 }
@@ -79,7 +75,6 @@ mod tests {
             exclusions: vec!["com.apple.Terminal".into(), "com.example.app".into()],
             auto_fix: false,
             style: PlacementStyle::Old,
-            default_mode: InputMode::English,
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);
@@ -105,5 +100,14 @@ mod tests {
         let s = Settings::default();
         assert!(s.auto_fix);
         assert!(s.exclusions.iter().any(|id| id == "com.apple.Terminal"));
+    }
+
+    #[test]
+    fn legacy_default_mode_key_is_ignored() {
+        // Old files persisted a `default_mode`; it is no longer a field. Loading
+        // must still succeed (unknown key ignored) and keep the other settings.
+        let s = Settings::from_json(r#"{"auto_fix": false, "default_mode": "English"}"#);
+        assert!(!s.auto_fix);
+        assert_eq!(s.style, PlacementStyle::default());
     }
 }

@@ -314,6 +314,11 @@ pub struct Session {
     last_committed: Option<(Vec<char>, String)>,
     /// Persisted preference: open the Settings window on launch.
     open_settings_at_launch: bool,
+    /// Capitalize the first letter of each sentence.
+    auto_capitalize: bool,
+    /// True when the next typed letter starts a sentence (document start, or after
+    /// `.`/`!`/`?`). Consumed by the first letter of the following word.
+    pending_capital: bool,
 }
 
 impl Session {
@@ -329,6 +334,8 @@ impl Session {
             current_bundle_id: None,
             last_committed: None,
             open_settings_at_launch: true,
+            auto_capitalize: false,
+            pending_capital: true,
         }
     }
 
@@ -342,6 +349,7 @@ impl Session {
         let mut session = Self::new(settings.style, settings.exclusion_list());
         session.auto_fix = settings.auto_fix;
         session.open_settings_at_launch = settings.open_settings_at_launch;
+        session.auto_capitalize = settings.auto_capitalize;
         session.engine.set_method(settings.input_method);
         session
     }
@@ -355,6 +363,7 @@ impl Session {
             style: self.style,
             open_settings_at_launch: self.open_settings_at_launch,
             input_method: self.engine.method(),
+            auto_capitalize: self.auto_capitalize,
         }
     }
 
@@ -419,11 +428,46 @@ impl Session {
         // Any typed key ends the re-composition window opened by the last commit.
         self.last_committed = None;
         if self.is_active() {
+            let ch = self.maybe_capitalize(ch);
             self.engine.process_key(ch)
         } else {
             self.engine.reset();
             KeyResponse::passthrough()
         }
+    }
+
+    /// Applies sentence-start capitalization to the first letter of a word when the
+    /// option is on. Consumes the pending-capital flag on the first letter typed.
+    fn maybe_capitalize(&mut self, ch: char) -> char {
+        if !ch.is_ascii_alphabetic() || self.engine.is_composing() {
+            return ch; // not the first letter of a word
+        }
+        let out = if self.auto_capitalize && self.pending_capital {
+            ch.to_ascii_uppercase()
+        } else {
+            ch
+        };
+        self.pending_capital = false;
+        out
+    }
+
+    /// Notes a word-boundary character so the next sentence can be capitalized:
+    /// `.`/`!`/`?` starts a new sentence. Called by the shell at a boundary.
+    pub fn note_boundary(&mut self, ch: char) {
+        if matches!(ch, '.' | '!' | '?') {
+            self.pending_capital = true;
+        }
+    }
+
+    /// Whether auto-capitalize is on.
+    #[must_use]
+    pub fn auto_capitalize(&self) -> bool {
+        self.auto_capitalize
+    }
+
+    /// Sets auto-capitalize.
+    pub fn set_auto_capitalize(&mut self, on: bool) {
+        self.auto_capitalize = on;
     }
 
     /// Processes a Backspace, honoring exclusion and mode.
@@ -601,6 +645,9 @@ impl Session {
     pub fn flush(&mut self) {
         self.engine.reset();
         self.last_committed = None;
+        // A caret move / click lands us in unknown context; don't guess a sentence
+        // start, so the next letter is not wrongly capitalized.
+        self.pending_capital = false;
     }
 }
 

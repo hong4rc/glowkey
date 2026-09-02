@@ -210,6 +210,22 @@ impl TapState {
             .unwrap_or(true)
     }
 
+    /// Whether auto-capitalize (first letter of each sentence) is on.
+    pub fn auto_capitalize(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.auto_capitalize())
+            .unwrap_or(false)
+    }
+
+    /// Sets auto-capitalize and saves.
+    pub fn set_auto_capitalize_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_auto_capitalize(on);
+        }
+        self.save_settings();
+    }
+
     /// Sets auto-fix on/off explicitly and saves. Used by the Settings checkbox.
     pub fn set_auto_fix_and_save(&self, on: bool) {
         if let Ok(mut session) = self.session.try_borrow_mut() {
@@ -519,14 +535,19 @@ impl TapState {
                 // character it deletes. This is how EVKey/OpenKey drive the document.
                 Decision::Emit(response)
             }
-            // A word boundary (space, digit, punctuation): commit the word. If
+            // A word boundary (space, punctuation, Telex digit): commit the word. If
             // auto-fix restores an invalid result to its raw keys, emit that edit
             // and still let the boundary key through afterward; otherwise the word
             // is already on screen and the boundary key just passes through.
-            Some(_) => match session.commit() {
-                Some(restore) => Decision::EmitThenPassthrough(restore),
-                None => Decision::Passthrough,
-            },
+            Some(ch) => {
+                let restore = session.commit();
+                // Sentence-ending punctuation primes the next word for capitalization.
+                session.note_boundary(ch);
+                match restore {
+                    Some(restore) => Decision::EmitThenPassthrough(restore),
+                    None => Decision::Passthrough,
+                }
+            }
             None => Decision::Passthrough,
         }
     }

@@ -88,6 +88,15 @@ define_class!(
             self.state().set_auto_fix_and_save(state == NSControlStateValueOn);
         }
 
+        /// Auto-capitalize checkbox toggled.
+        #[unsafe(method(autoCapitalizeChanged:))]
+        fn auto_capitalize_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_auto_capitalize_and_save(state == NSControlStateValueOn);
+        }
+
         /// "Open at launch" checkbox toggled.
         #[unsafe(method(openAtLaunchChanged:))]
         fn open_at_launch_changed(&self, sender: Option<&AnyObject>) {
@@ -334,6 +343,22 @@ impl PrefsController {
             "Restores the raw keys when the result isn’t valid Vietnamese — types “exit”, not “eĩt”.",
             mtm,
         ));
+
+        // Auto-capitalize — a full-width checkbox with a secondary caption.
+        let capitalize: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Auto-capitalize first letter of each sentence"),
+                Some(self.as_ref()),
+                Some(sel!(autoCapitalizeChanged:)),
+                mtm,
+            )
+        };
+        capitalize.setState(if self.state().auto_capitalize() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        root.addArrangedSubview(&capitalize);
 
         // Shortcut — read-only, in the aligned form.
         let shortcut = self.value_label("⌃⇧Space   ·   turn Vietnamese on or off", mtm);

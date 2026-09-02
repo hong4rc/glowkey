@@ -105,3 +105,47 @@ fn ambiguous_english_that_maps_to_valid_vietnamese_is_kept() {
     let mut s = active_session(true);
     assert_eq!(type_then_commit(&mut s, "was"), "ứa");
 }
+
+#[test]
+fn auto_capitalize_sentence_start() {
+    // Simulate the shell flow: process letters, and at each boundary char commit()
+    // then note_boundary(). Capitalize first letter of the doc and after . ! ?.
+    fn run(cap: bool, input: &str) -> String {
+        let mut s = active_session(true);
+        s.set_auto_capitalize(cap);
+        let mut screen = String::new();
+        let apply = |screen: &mut String, bs: usize, ins: &str| {
+            let u: Vec<u16> = screen.encode_utf16().collect();
+            let k = u.len().saturating_sub(bs);
+            *screen = String::from_utf16(&u[..k]).unwrap();
+            screen.push_str(ins);
+        };
+        for ch in input.chars() {
+            if ch.is_ascii_alphabetic() {
+                let r = s.process_key(ch);
+                if r.handled {
+                    apply(&mut screen, r.backspaces, &r.insert);
+                } else {
+                    screen.push(ch);
+                }
+            } else {
+                if let Some(restore) = s.commit() {
+                    apply(&mut screen, restore.backspaces, &restore.insert);
+                }
+                s.note_boundary(ch);
+                screen.push(ch);
+            }
+        }
+        screen
+    }
+    // Telex-safe words (no tone/diacritic trigger letters) so only capitalization
+    // changes the text.
+    assert_eq!(
+        run(true, "hi man. big cat! top van? go"),
+        "Hi man. Big cat! Top van? Go"
+    );
+    // Off: no capitalization.
+    assert_eq!(run(false, "hi man. big cat"), "hi man. big cat");
+    // Vietnamese first letter still capitalizes: "chaof" → Chào at sentence start.
+    assert_eq!(run(true, "chaof"), "Chào");
+}

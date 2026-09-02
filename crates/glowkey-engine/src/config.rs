@@ -24,6 +24,10 @@ pub struct Settings {
     /// Keyboard input method (Telex or VNI).
     #[serde(default)]
     pub input_method: InputMethod,
+    /// Capitalize the first letter of each sentence (Unikey's "Viết hoa chữ đầu
+    /// câu"). Off by default.
+    #[serde(default)]
+    pub auto_capitalize: bool,
     /// Whether to open the Settings window when the app launches (like EVKey/Unikey
     /// showing their control panel on start). Default on, so a new user sees the
     /// controls; toggled off from the window itself once they know it.
@@ -38,6 +42,7 @@ impl Default for Settings {
             auto_fix: true,
             style: PlacementStyle::default(),
             input_method: InputMethod::default(),
+            auto_capitalize: false,
             open_settings_at_launch: true,
         }
     }
@@ -86,6 +91,7 @@ mod tests {
             auto_fix: false,
             style: PlacementStyle::Old,
             input_method: InputMethod::Vni,
+            auto_capitalize: true,
             open_settings_at_launch: false,
         };
         let restored = Settings::from_json(&settings.to_json());

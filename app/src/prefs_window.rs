@@ -81,6 +81,14 @@ define_class!(
                 .set_open_settings_at_launch_and_save(state == NSControlStateValueOn);
         }
 
+        /// "Launch at login" checkbox toggled (mirrors the menu item).
+        #[unsafe(method(launchAtLoginChanged:))]
+        fn launch_at_login_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            crate::login_item::set_enabled(state == NSControlStateValueOn);
+        }
+
         /// Remove-app button clicked; its tag indexes the current `apps` list.
         #[unsafe(method(removeApp:))]
         fn remove_app(&self, sender: Option<&AnyObject>) {
@@ -197,6 +205,22 @@ impl PrefsController {
 
         // ===== General =====
         root.addArrangedSubview(&self.header("General", mtm));
+
+        let launch_at_login: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Launch GlowKey at login"),
+                Some(self.as_ref()),
+                Some(sel!(launchAtLoginChanged:)),
+                mtm,
+            )
+        };
+        launch_at_login.setState(if crate::login_item::is_enabled() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        root.addArrangedSubview(&launch_at_login);
+
         let open_at_launch: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
                 &NSString::from_str("Open this window at launch"),

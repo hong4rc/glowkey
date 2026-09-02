@@ -26,7 +26,7 @@ use objc2_foundation::{
 
 use std::cell::RefCell;
 
-use glowkey_engine::PlacementStyle;
+use glowkey_engine::{InputMethod, PlacementStyle};
 
 use crate::tap::TapState;
 
@@ -65,6 +65,19 @@ define_class!(
                 PlacementStyle::Old
             };
             self.state().set_style_and_save(style);
+        }
+
+        /// Input method changed on the segmented control (0 = Telex, 1 = VNI).
+        #[unsafe(method(inputMethodChanged:))]
+        fn input_method_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let seg: isize = unsafe { msg_send![sender, selectedSegment] };
+            let method = if seg == 0 {
+                InputMethod::Telex
+            } else {
+                InputMethod::Vni
+            };
+            self.state().set_input_method_and_save(method);
         }
 
         /// Auto-fix checkbox toggled.
@@ -261,6 +274,25 @@ impl PrefsController {
 
         // ===== Typing =====
         root.addArrangedSubview(&self.header("Typing", mtm));
+
+        // Input method — Telex / VNI.
+        let method_labels =
+            NSArray::from_retained_slice(&[NSString::from_str("Telex"), NSString::from_str("VNI")]);
+        let method_seg: Retained<NSSegmentedControl> = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &method_labels,
+                NSSegmentSwitchTracking::SelectOne,
+                Some(self.as_ref()),
+                Some(sel!(inputMethodChanged:)),
+                mtm,
+            )
+        };
+        method_seg.setSelectedSegment(if self.state().input_method() == InputMethod::Telex {
+            0
+        } else {
+            1
+        });
+        root.addArrangedSubview(&self.form_row("Input method", &method_seg, mtm));
 
         // Tone marks — aligned label + segmented control.
         let labels = NSArray::from_retained_slice(&[

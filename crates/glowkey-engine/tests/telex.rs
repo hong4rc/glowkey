@@ -143,3 +143,29 @@ fn old_style_placement_differs() {
     assert_eq!(render(&mut new_engine, "hoaf"), "hoà");
     assert_eq!(render(&mut old_engine, "hoaf"), "hòa");
 }
+
+#[test]
+fn vni_input_method() {
+    // VNI: digits carry tone/diacritic. viet65 → việt, a6 → â, o7 → ơ, d9 → đ.
+    use glowkey_engine::InputMethod;
+    fn type_vni(input: &str) -> String {
+        let mut e = Engine::new(PlacementStyle::New);
+        e.set_method(InputMethod::Vni);
+        let mut screen = String::new();
+        for ch in input.chars() {
+            let r = e.process_key(ch);
+            if r.handled {
+                apply(&mut screen, &r.insert, r.backspaces);
+            } else {
+                screen.push(ch);
+            }
+        }
+        screen
+    }
+    assert_eq!(type_vni("a6"), "â");
+    assert_eq!(type_vni("o7"), "ơ");
+    assert_eq!(type_vni("d9"), "đ");
+    assert_eq!(type_vni("viet65"), "việt");
+    // Telex still works unchanged on a default engine.
+    assert_eq!(type_word("hoongf"), "hồng");
+}

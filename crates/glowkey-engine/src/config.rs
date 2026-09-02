@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExclusionList, PlacementStyle};
+use crate::{ExclusionList, InputMethod, PlacementStyle};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,9 @@ pub struct Settings {
     /// Tone-mark placement style.
     #[serde(default)]
     pub style: PlacementStyle,
+    /// Keyboard input method (Telex or VNI).
+    #[serde(default)]
+    pub input_method: InputMethod,
     /// Whether to open the Settings window when the app launches (like EVKey/Unikey
     /// showing their control panel on start). Default on, so a new user sees the
     /// controls; toggled off from the window itself once they know it.
@@ -34,6 +37,7 @@ impl Default for Settings {
             exclusions: default_exclusions(),
             auto_fix: true,
             style: PlacementStyle::default(),
+            input_method: InputMethod::default(),
             open_settings_at_launch: true,
         }
     }
@@ -81,6 +85,7 @@ mod tests {
             exclusions: vec!["com.apple.Terminal".into(), "com.example.app".into()],
             auto_fix: false,
             style: PlacementStyle::Old,
+            input_method: InputMethod::Vni,
             open_settings_at_launch: false,
         };
         let restored = Settings::from_json(&settings.to_json());

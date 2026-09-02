@@ -48,6 +48,17 @@ impl From<PlacementStyle> for AccentStyle {
     }
 }
 
+/// The keyboard input method for Vietnamese, as in Unikey/EVKey. Telex uses letter
+/// keys (`aa`→â, `f`→huyền); VNI uses digits (`a6`→â, `2`→huyền).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum InputMethod {
+    /// Telex — the software default.
+    #[default]
+    Telex,
+    /// VNI — tone and diacritic digits.
+    Vni,
+}
+
 /// The edit the shell must apply to the document for one keystroke.
 ///
 /// `backspaces` counts **UTF-16 code units** to delete from the end of the text
@@ -80,6 +91,8 @@ impl KeyResponse {
 /// hybrid the surveyed shipping engines converge on.
 pub struct Engine {
     style: PlacementStyle,
+    /// Telex or VNI — which key definition drives the transformation.
+    method: InputMethod,
     /// Raw keystrokes of the word being typed, in their original case.
     raw: Vec<char>,
     /// The text currently on screen for this word — the diff baseline.
@@ -92,6 +105,7 @@ impl Engine {
     pub fn new(style: PlacementStyle) -> Self {
         Self {
             style,
+            method: InputMethod::default(),
             raw: Vec::new(),
             rendered: String::new(),
         }
@@ -101,6 +115,12 @@ impl Engine {
     pub fn set_style(&mut self, style: PlacementStyle) {
         self.style = style;
         // Any in-progress word keeps its style; flush so the next word uses the new one.
+        self.reset();
+    }
+
+    /// Changes the input method (Telex/VNI). Flushes so the next word uses it.
+    pub fn set_method(&mut self, method: InputMethod) {
+        self.method = method;
         self.reset();
     }
 
@@ -138,6 +158,12 @@ impl Engine {
         self.raw.clone()
     }
 
+    /// The current input method (Telex/VNI).
+    #[must_use]
+    pub fn method(&self) -> InputMethod {
+        self.method
+    }
+
     /// Re-enters composing with a previously committed word's `raw` keys and its
     /// on-screen `rendered` form, so the next keystrokes keep editing it (Telex
     /// re-composition after the trailing boundary is backspaced).
@@ -153,13 +179,21 @@ impl Engine {
     /// boundary: the engine flushes and reports the key as unhandled so the host
     /// inserts it verbatim.
     pub fn process_key(&mut self, ch: char) -> KeyResponse {
-        if !is_syllable_char(ch) {
-            // Word boundary (space, digit, punctuation). Commit and hand the key back.
+        if !self.is_syllable_char(ch) {
+            // Word boundary (space, punctuation — and digits in Telex). Commit and
+            // hand the key back.
             self.reset();
             return KeyResponse::passthrough();
         }
         self.raw.push(ch);
         self.rerender()
+    }
+
+    /// Whether `ch` can extend the current word. Letters always; digits only in VNI,
+    /// where they carry tone and diacritic marks (`a6`→â, `viet65`→việt).
+    #[must_use]
+    pub fn is_syllable_char(&self, ch: char) -> bool {
+        ch.is_ascii_alphabetic() || (self.method == InputMethod::Vni && ch.is_ascii_digit())
     }
 
     /// Handles a Backspace keystroke while a word is being composed.
@@ -181,7 +215,7 @@ impl Engine {
     /// Re-derives the rendered word from the raw key log and returns the edit that
     /// turns the previous rendering into the new one.
     fn rerender(&mut self) -> KeyResponse {
-        let next = render(&self.raw, self.style);
+        let next = render(&self.raw, self.style, self.method);
         let response = diff(&self.rendered, &next);
         self.rendered = next;
         response
@@ -199,9 +233,13 @@ impl Engine {
 /// For words that do transform, the two case patterns users actually produce,
 /// ALL-CAPS and Title-case, are handled exactly; other interior case is
 /// best-effort (nobody types `nGuyễn`).
-fn render(raw: &[char], style: PlacementStyle) -> String {
+fn render(raw: &[char], style: PlacementStyle, method: InputMethod) -> String {
     let lowered: String = raw.iter().map(|c| c.to_ascii_lowercase()).collect();
-    let mut buffer = IncrementalBuffer::new_with_style(&vi::TELEX, style.into());
+    let definition = match method {
+        InputMethod::Telex => &vi::TELEX,
+        InputMethod::Vni => &vi::VNI,
+    };
+    let mut buffer = IncrementalBuffer::new_with_style(definition, style.into());
     for ch in lowered.chars() {
         buffer.push(ch);
     }
@@ -234,12 +272,6 @@ fn apply_case(lower: &str, raw: &[char]) -> String {
         };
     }
     lower.to_string()
-}
-
-/// True when `ch` can be part of a Vietnamese syllable typed in Telex — i.e. an
-/// ASCII letter. Everything else (space, digit, punctuation) ends the word.
-fn is_syllable_char(ch: char) -> bool {
-    ch.is_ascii_alphabetic()
 }
 
 /// Whether the session currently transforms input.
@@ -306,10 +338,11 @@ impl Session {
         // Mode is deliberately NOT restored: GlowKey always launches in Vietnamese
         // (the point of the app). ⌃⇧Space is a session-only toggle, so an accidental
         // toggle can never leave the app launching disabled. Only the ignore list,
-        // auto-fix, and tone style persist.
+        // auto-fix, tone style, and input method persist.
         let mut session = Self::new(settings.style, settings.exclusion_list());
         session.auto_fix = settings.auto_fix;
         session.open_settings_at_launch = settings.open_settings_at_launch;
+        session.engine.set_method(settings.input_method);
         session
     }
 
@@ -321,7 +354,19 @@ impl Session {
             auto_fix: self.auto_fix,
             style: self.style,
             open_settings_at_launch: self.open_settings_at_launch,
+            input_method: self.engine.method(),
         }
+    }
+
+    /// The current input method (Telex/VNI). Drives the Settings control.
+    #[must_use]
+    pub fn input_method(&self) -> InputMethod {
+        self.engine.method()
+    }
+
+    /// Sets the input method (Telex/VNI). Flushes the in-progress word.
+    pub fn set_input_method(&mut self, method: InputMethod) {
+        self.engine.set_method(method);
     }
 
     /// Whether to open the Settings window on launch.

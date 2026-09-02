@@ -234,6 +234,22 @@ impl TapState {
         self.save_settings();
     }
 
+    /// The current input method (Telex/VNI). Drives the Settings control.
+    pub fn input_method(&self) -> glowkey_engine::InputMethod {
+        self.session
+            .try_borrow()
+            .map(|s| s.input_method())
+            .unwrap_or(glowkey_engine::InputMethod::Telex)
+    }
+
+    /// Sets the input method (Telex/VNI) and saves.
+    pub fn set_input_method_and_save(&self, method: glowkey_engine::InputMethod) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_input_method(method);
+        }
+        self.save_settings();
+    }
+
     /// The current tone-placement style. Drives the Settings segmented control.
     pub fn style(&self) -> glowkey_engine::PlacementStyle {
         self.session
@@ -474,8 +490,16 @@ impl TapState {
             return Decision::Passthrough;
         }
 
+        // A word-extending character is a letter always, plus a digit in VNI (where
+        // digits carry tone/diacritic marks — `viet65` → việt). Everything else is a
+        // word boundary.
+        let is_word_char = |ch: char| {
+            ch.is_ascii_alphabetic()
+                || (ch.is_ascii_digit()
+                    && session.input_method() == glowkey_engine::InputMethod::Vni)
+        };
         match unicode_char(event) {
-            Some(ch) if ch.is_ascii_alphabetic() => {
+            Some(ch) if is_word_char(ch) => {
                 let response = session.process_key(ch);
                 if !response.handled {
                     return Decision::Passthrough;

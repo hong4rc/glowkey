@@ -265,6 +265,7 @@ impl TapState {
         times.push_back(now);
         if times.len() > RUNAWAY_LIMIT {
             DISABLED.store(true, Ordering::Relaxed);
+            crate::log::log("RUNAWAY circuit breaker latched — input disabled until reset");
             eprintln!("GlowKey: runaway detected — transformation disabled. Restart to re-enable.");
             return false;
         }
@@ -284,7 +285,9 @@ impl TapState {
     /// consume the event (suppress the original), or `false` to let it through.
     fn handle_key_down(&self, event: NonNull<CGEvent>) -> bool {
         self.refresh_frontmost_at_word_start();
-        match self.decide(event) {
+        let decision = self.decide(event);
+        self.log_key(event, &decision);
+        match decision {
             Decision::Passthrough => false,
             Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
             Decision::ToggleApp => {
@@ -301,6 +304,10 @@ impl TapState {
                         "GlowKey: {} Vietnamese for “{name}”",
                         if excluded { "disabled" } else { "enabled" }
                     );
+                    crate::log::log(&format!(
+                        "TOGGLE app {name:?} -> {}",
+                        if excluded { "disabled" } else { "enabled" }
+                    ));
                     // Brief on-screen confirmation for the hotkey (no menu is open).
                     crate::hud::flash(if excluded { "EN" } else { "VN" });
                 }
@@ -317,6 +324,35 @@ impl TapState {
                 false // the boundary key still passes through to the host
             }
         }
+    }
+
+    /// Records one handled key and its decision to the log file, so a reported issue
+    /// can be traced from the log without a live repro.
+    fn log_key(&self, event: NonNull<CGEvent>, decision: &Decision) {
+        let ch = unicode_char(event);
+        let code = integer_field(event, CGEventField::KeyboardEventKeycode);
+        let app = self.last_bundle_id.borrow().clone().unwrap_or_default();
+        let (raw, rendered, mode, active) = match self.session.try_borrow() {
+            Ok(session) => session.debug_state(),
+            Err(_) => (
+                String::new(),
+                String::new(),
+                glowkey_engine::InputMode::Vietnamese,
+                false,
+            ),
+        };
+        let decision = match decision {
+            Decision::Passthrough => "Passthrough".to_string(),
+            Decision::Consume => "Consume".to_string(),
+            Decision::ToggleApp => "ToggleApp".to_string(),
+            Decision::Emit(r) => format!("Emit bs={} ins={:?}", r.backspaces, r.insert),
+            Decision::EmitThenPassthrough(r) => {
+                format!("EmitThenPassthrough bs={} ins={:?}", r.backspaces, r.insert)
+            }
+        };
+        crate::log::log(&format!(
+            "KEY {ch:?} code={code} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
+        ));
     }
 
     /// Emits one edit through the session-posting path, honoring the circuit breaker
@@ -368,6 +404,7 @@ impl TapState {
             if let Ok(mut session) = self.session.try_borrow_mut() {
                 let mode = session.toggle_mode();
                 eprintln!("GlowKey: {mode:?} mode");
+                crate::log::log(&format!("TOGGLE mode -> {mode:?}"));
                 // Brief on-screen confirmation for the hotkey (no menu is open).
                 let on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
                 crate::hud::flash(if on { "VN" } else { "EN" });
@@ -664,6 +701,7 @@ pub fn run() {
         }
     }
     eprintln!("GlowKey: Accessibility granted — starting.");
+    crate::log::log("STARTUP Accessibility granted — starting");
 
     let settings = crate::settings_store::load();
     let Some(state) = TapState::from_settings(&settings) else {
@@ -694,6 +732,7 @@ pub fn run() {
     };
 
     let Some(port) = port else {
+        crate::log::log("TAP FAILED to create (Accessibility not granted?)");
         eprintln!("GlowKey: failed to create the event tap (Accessibility not granted?).");
         return;
     };

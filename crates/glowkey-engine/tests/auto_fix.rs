@@ -85,3 +85,23 @@ fn batch_of_real_words_not_restored() {
         assert_eq!(type_then_commit(&mut s, keys), expected, "input {keys}");
     }
 }
+
+#[test]
+fn restores_english_words_with_w() {
+    // `w` is a Telex transform key (w→ư), so English words starting with w mangle
+    // mid-word (work → ưởk) but auto-fix restores them at the boundary.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "work"), "work");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "word"), "word");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "weight"), "weight");
+}
+
+#[test]
+fn ambiguous_english_that_maps_to_valid_vietnamese_is_kept() {
+    // "was" → "ứa" is a *valid* Vietnamese syllable, so auto-fix cannot know it was
+    // meant as English and keeps it. Documents the inherent Telex/English ambiguity.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "was"), "ứa");
+}

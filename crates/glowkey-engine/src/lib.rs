@@ -426,6 +426,19 @@ impl Session {
         self.engine.current_word()
     }
 
+    /// A diagnostic snapshot for logging: `(raw keys, rendered word, mode, active)`.
+    /// Lets the shell record engine state alongside each emit without exposing the
+    /// engine internals.
+    #[must_use]
+    pub fn debug_state(&self) -> (String, String, InputMode, bool) {
+        (
+            self.engine.raw_string(),
+            self.engine.current_word().to_string(),
+            self.mode(),
+            self.is_active(),
+        )
+    }
+
     /// Finalizes the composing word: returns its text and clears the engine, so the
     /// shell can commit it (insert it as ordinary text) at a word boundary.
     pub fn commit_word(&mut self) -> String {

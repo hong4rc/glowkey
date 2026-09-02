@@ -10,9 +10,22 @@ use std::collections::BTreeSet;
 /// The set of application bundle identifiers where Vietnamese input is suppressed.
 ///
 /// Ordered for stable, deterministic serialization when the shell persists it.
+///
+/// Two auxiliary sets refine the persisted `bundle_ids`:
+/// - `removed_defaults` (persisted): defaults the user deliberately removed. At
+///   load, the effective list is `saved ∪ (DEFAULT_EXCLUSIONS − removed_defaults)`,
+///   so a default added in a new release reaches existing settings files without
+///   resurrecting ones the user removed on purpose.
+/// - `session_removed` (never persisted): exclusions suspended until restart —
+///   used when a known terminal is un-excluded by hotkey, so an accidental ⌃⇧E in
+///   a terminal cannot permanently disable its protection.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExclusionList {
     bundle_ids: BTreeSet<String>,
+    /// Default exclusions the user deliberately removed (tombstones, persisted).
+    removed_defaults: BTreeSet<String>,
+    /// Exclusions suspended for this session only (not persisted).
+    session_removed: BTreeSet<String>,
 }
 
 impl ExclusionList {
@@ -41,6 +54,33 @@ impl ExclusionList {
     {
         Self {
             bundle_ids: ids.into_iter().map(Into::into).collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Builds the effective list from a settings file: the saved ids, plus every
+    /// shipped default the user has not deliberately removed. This is how a
+    /// default added in a new release (e.g. a new terminal) reaches settings
+    /// files written before it existed.
+    pub fn from_saved<I, S, J, T>(ids: I, removed_defaults: J) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+        J: IntoIterator<Item = T>,
+        T: Into<String>,
+    {
+        let removed_defaults: BTreeSet<String> =
+            removed_defaults.into_iter().map(Into::into).collect();
+        let mut bundle_ids: BTreeSet<String> = ids.into_iter().map(Into::into).collect();
+        for id in DEFAULT_EXCLUSIONS {
+            if !removed_defaults.contains(*id) {
+                bundle_ids.insert((*id).to_string());
+            }
+        }
+        Self {
+            bundle_ids,
+            removed_defaults,
+            session_removed: BTreeSet::new(),
         }
     }
 
@@ -50,17 +90,52 @@ impl ExclusionList {
     /// engine. It must be the first decision, ahead of mode and of memory.
     #[must_use]
     pub fn is_excluded(&self, bundle_id: &str) -> bool {
-        self.bundle_ids.contains(bundle_id)
+        self.bundle_ids.contains(bundle_id) && !self.session_removed.contains(bundle_id)
     }
 
-    /// Adds a bundle identifier. Returns true if it was newly added.
+    /// Adds a bundle identifier. Returns true if it was newly added. Clears any
+    /// tombstone or session suspension for it — an explicit add always wins.
     pub fn add(&mut self, bundle_id: impl Into<String>) -> bool {
-        self.bundle_ids.insert(bundle_id.into())
+        let bundle_id = bundle_id.into();
+        self.removed_defaults.remove(&bundle_id);
+        self.session_removed.remove(&bundle_id);
+        self.bundle_ids.insert(bundle_id)
     }
 
-    /// Removes a bundle identifier. Returns true if it was present.
+    /// Removes a bundle identifier permanently. Returns true if it was present.
+    /// A removed shipped default is tombstoned so a later load does not re-add it.
     pub fn remove(&mut self, bundle_id: &str) -> bool {
+        self.session_removed.remove(bundle_id);
+        if DEFAULT_EXCLUSIONS.contains(&bundle_id) {
+            self.removed_defaults.insert(bundle_id.to_string());
+        }
         self.bundle_ids.remove(bundle_id)
+    }
+
+    /// Suspends an exclusion until restart: the app stops being excluded now, but
+    /// the persisted list still contains it, so the next launch re-excludes it.
+    /// Used for known terminals un-excluded by hotkey. No-op if not excluded.
+    pub fn suspend_for_session(&mut self, bundle_id: &str) {
+        if self.bundle_ids.contains(bundle_id) {
+            self.session_removed.insert(bundle_id.to_string());
+        }
+    }
+
+    /// Lifts a session suspension (the app is excluded again). Returns whether a
+    /// suspension existed.
+    pub fn resume(&mut self, bundle_id: &str) -> bool {
+        self.session_removed.remove(bundle_id)
+    }
+
+    /// Whether this app's exclusion is currently suspended for the session.
+    #[must_use]
+    pub fn is_session_suspended(&self, bundle_id: &str) -> bool {
+        self.session_removed.contains(bundle_id)
+    }
+
+    /// The tombstoned defaults (deliberately removed by the user), for persistence.
+    pub fn removed_default_ids(&self) -> impl Iterator<Item = &str> {
+        self.removed_defaults.iter().map(String::as_str)
     }
 
     /// Toggles a bundle identifier, returning its new excluded state. Backs the
@@ -90,6 +165,26 @@ impl ExclusionList {
     pub fn is_empty(&self) -> bool {
         self.bundle_ids.is_empty()
     }
+}
+
+/// Terminal applications. Synthetic backspaces cannot delete inside a PTY (the
+/// shell owns line editing), so Vietnamese in a terminal always produces garbage.
+/// Un-excluding one via the ⌃⇧E hotkey is therefore session-only — a deliberate,
+/// permanent removal must go through the Excluded Apps window.
+pub const TERMINAL_EXCLUSIONS: &[&str] = &[
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "dev.warp.Warp-Stable",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "com.mitchellh.ghostty",
+    "org.alacritty",
+];
+
+/// Whether this bundle identifier is a known terminal (see [`TERMINAL_EXCLUSIONS`]).
+#[must_use]
+pub fn is_terminal(bundle_id: &str) -> bool {
+    TERMINAL_EXCLUSIONS.contains(&bundle_id)
 }
 
 /// Applications excluded on first run — terminals and editors, where users
@@ -146,5 +241,65 @@ mod tests {
         let ids: Vec<String> = list.ids().map(String::from).collect();
         let restored = ExclusionList::from_ids(ids);
         assert_eq!(list, restored);
+    }
+
+    #[test]
+    fn from_saved_merges_new_defaults_into_old_files() {
+        // A settings file written before Ghostty was a default: loading must add it.
+        let list = ExclusionList::from_saved(
+            ["com.apple.Terminal", "com.example.custom"],
+            Vec::<String>::new(),
+        );
+        assert!(list.is_excluded("com.mitchellh.ghostty"));
+        assert!(list.is_excluded("com.example.custom"));
+    }
+
+    #[test]
+    fn from_saved_respects_tombstones() {
+        // The user deliberately removed VSCode; the merge must not resurrect it.
+        let list =
+            ExclusionList::from_saved(["com.apple.Terminal"], ["com.microsoft.VSCode"]);
+        assert!(!list.is_excluded("com.microsoft.VSCode"));
+        assert!(list.is_excluded("com.apple.Terminal"));
+    }
+
+    #[test]
+    fn removing_a_default_tombstones_it() {
+        let mut list = ExclusionList::with_defaults();
+        assert!(list.remove("com.microsoft.VSCode"));
+        let tombstones: Vec<&str> = list.removed_default_ids().collect();
+        assert_eq!(tombstones, vec!["com.microsoft.VSCode"]);
+        // Re-adding clears the tombstone.
+        list.add("com.microsoft.VSCode");
+        assert_eq!(list.removed_default_ids().count(), 0);
+        // A non-default removal never tombstones.
+        list.add("com.example.app");
+        list.remove("com.example.app");
+        assert_eq!(list.removed_default_ids().count(), 0);
+    }
+
+    #[test]
+    fn session_suspension_is_not_a_removal() {
+        let mut list = ExclusionList::with_defaults();
+        list.suspend_for_session("com.mitchellh.ghostty");
+        assert!(!list.is_excluded("com.mitchellh.ghostty"));
+        assert!(list.is_session_suspended("com.mitchellh.ghostty"));
+        // The persisted ids still contain it — a restart re-excludes.
+        assert!(list.ids().any(|id| id == "com.mitchellh.ghostty"));
+        // Resuming re-excludes immediately.
+        assert!(list.resume("com.mitchellh.ghostty"));
+        assert!(list.is_excluded("com.mitchellh.ghostty"));
+    }
+
+    #[test]
+    fn terminals_are_classified() {
+        assert!(is_terminal("com.mitchellh.ghostty"));
+        assert!(is_terminal("com.apple.Terminal"));
+        assert!(!is_terminal("com.microsoft.VSCode")); // editor, not a terminal
+        assert!(!is_terminal("com.google.Chrome"));
+        // Every terminal is also a shipped default exclusion.
+        for id in TERMINAL_EXCLUSIONS {
+            assert!(DEFAULT_EXCLUSIONS.contains(id), "{id} missing from defaults");
+        }
     }
 }

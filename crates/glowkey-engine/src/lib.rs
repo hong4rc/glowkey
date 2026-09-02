@@ -20,6 +20,7 @@ use vi::methods::IncrementalBuffer;
 use vi::processor::AccentStyle;
 
 pub mod config;
+mod english;
 pub mod exclusion;
 
 pub use config::Settings;
@@ -73,6 +74,45 @@ pub enum HotkeyPreset {
     OptionSpace,
     /// ⌃⇧Z.
     CtrlShiftZ,
+    /// A user-recorded combination. `keycode` is the macOS virtual key code the
+    /// tap matches on; `key_char` is only for display ("⌃⌥K"), captured from the
+    /// event so it reflects the user's layout. Command is never allowed (system
+    /// shortcuts), so it has no field.
+    Custom {
+        /// Control key required.
+        control: bool,
+        /// Shift key required.
+        shift: bool,
+        /// Option key required.
+        option: bool,
+        /// macOS virtual key code.
+        keycode: i64,
+        /// Display character for the key (uppercased; `' '` means Space).
+        key_char: char,
+    },
+}
+
+/// The result of toggling an application's exclusion — tells the shell what
+/// feedback to show and whether the change survives a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExclusionToggle {
+    /// The app is now excluded (Vietnamese off there), persisted.
+    Excluded,
+    /// The app is now enabled (removed from the list), persisted.
+    Enabled,
+    /// A known terminal was re-enabled by hotkey: active for this session only.
+    /// The persisted exclusion stays, so the next launch re-excludes it —
+    /// terminals mangle Vietnamese (a PTY ignores synthetic backspaces), so an
+    /// accidental ⌃⇧E must not permanently disarm the protection.
+    EnabledSessionOnly,
+}
+
+impl ExclusionToggle {
+    /// Whether the app ends up excluded.
+    #[must_use]
+    pub fn excluded(self) -> bool {
+        matches!(self, Self::Excluded)
+    }
 }
 
 /// A text-expansion macro (Unikey's "gõ tắt"): typing `shortcut` then a boundary
@@ -349,6 +389,11 @@ pub struct Session {
     toggle_hotkey: HotkeyPreset,
     /// Text-expansion macros (shortcut → expansion).
     macros: Vec<Macro>,
+    /// Opt-in: at a boundary, restore a committed word to its raw keys when those
+    /// keys form a common English word — even if the rendering is valid
+    /// Vietnamese (`was`→`ứa`). Off by default: it inverts the ambiguity for
+    /// Vietnamese words typed with a trailing tone key (`cats`→`cát`).
+    restore_english_words: bool,
 }
 
 impl Session {
@@ -368,6 +413,7 @@ impl Session {
             pending_capital: true,
             toggle_hotkey: HotkeyPreset::default(),
             macros: Vec::new(),
+            restore_english_words: false,
         }
     }
 
@@ -384,15 +430,23 @@ impl Session {
         session.auto_capitalize = settings.auto_capitalize;
         session.toggle_hotkey = settings.toggle_hotkey;
         session.macros = settings.macros.clone();
+        session.restore_english_words = settings.restore_english_words;
         session.engine.set_method(settings.input_method);
         session
     }
 
     /// Snapshots the user-controlled state back into [`Settings`] for saving.
+    /// A session-suspended terminal is still in `exclusions` (by design — the
+    /// suspension must not survive a restart).
     #[must_use]
     pub fn snapshot(&self) -> Settings {
         Settings {
             exclusions: self.exclusions.ids().map(String::from).collect(),
+            removed_default_exclusions: self
+                .exclusions
+                .removed_default_ids()
+                .map(String::from)
+                .collect(),
             auto_fix: self.auto_fix,
             style: self.style,
             open_settings_at_launch: self.open_settings_at_launch,
@@ -400,6 +454,7 @@ impl Session {
             auto_capitalize: self.auto_capitalize,
             toggle_hotkey: self.toggle_hotkey,
             macros: self.macros.clone(),
+            restore_english_words: self.restore_english_words,
         }
     }
 
@@ -535,6 +590,17 @@ impl Session {
         }
     }
 
+    /// Whether the opt-in English word restore is on.
+    #[must_use]
+    pub fn restore_english_words(&self) -> bool {
+        self.restore_english_words
+    }
+
+    /// Enables or disables the English word restore.
+    pub fn set_restore_english_words(&mut self, on: bool) {
+        self.restore_english_words = on;
+    }
+
     /// The current toggle-hotkey preset.
     #[must_use]
     pub fn toggle_hotkey(&self) -> HotkeyPreset {
@@ -569,14 +635,33 @@ impl Session {
         self.current_bundle_id.as_deref()
     }
 
-    /// Toggles a specific application in the ignore list and returns whether it is
-    /// now excluded. Each app's membership is independent — toggling one never
-    /// changes another. Also records it as the current app so the change takes
-    /// effect on the next keystroke.
-    pub fn toggle_app_exclusion(&mut self, bundle_id: &str) -> bool {
+    /// Toggles a specific application in the ignore list. Each app's membership is
+    /// independent — toggling one never changes another. Also records it as the
+    /// current app so the change takes effect on the next keystroke.
+    ///
+    /// Un-excluding a known **terminal** is session-only: the live check stops
+    /// excluding it, but the persisted list keeps it, so a restart re-excludes.
+    /// Terminals always mangle Vietnamese (a PTY ignores synthetic backspaces), so
+    /// an accidental hotkey press must not permanently remove the protection; a
+    /// deliberate, permanent removal goes through the Excluded Apps editor
+    /// ([`exclusions_mut`](Self::exclusions_mut) → `remove`).
+    pub fn toggle_app_exclusion(&mut self, bundle_id: &str) -> ExclusionToggle {
         self.current_bundle_id = Some(bundle_id.to_string());
         self.engine.reset();
-        self.exclusions.toggle(bundle_id)
+        if self.exclusions.is_excluded(bundle_id) {
+            if exclusion::is_terminal(bundle_id) {
+                self.exclusions.suspend_for_session(bundle_id);
+                ExclusionToggle::EnabledSessionOnly
+            } else {
+                self.exclusions.remove(bundle_id);
+                ExclusionToggle::Enabled
+            }
+        } else {
+            if !self.exclusions.resume(bundle_id) {
+                self.exclusions.add(bundle_id.to_string());
+            }
+            ExclusionToggle::Excluded
+        }
     }
 
     /// Toggles VN/EN mode and flushes the current word. Has no effect on whether an
@@ -680,19 +765,21 @@ impl Session {
                 });
             }
         }
-        let restore = if self.auto_fix && self.engine.is_composing() {
-            let rendered = self.engine.current_word();
-            if is_invalid_vietnamese(rendered) {
-                let raw = self.engine.raw_string();
-                // Only restore if it actually changes something.
-                (raw != rendered).then(|| KeyResponse {
-                    handled: true,
-                    backspaces: rendered.encode_utf16().count(),
-                    insert: raw,
-                })
-            } else {
-                None
-            }
+        let restore = if self.engine.is_composing() {
+            let rendered = self.engine.current_word().to_string();
+            let raw = self.engine.raw_string();
+            // Two independent reasons to restore the raw keys:
+            // - auto-fix: the rendering is not valid Vietnamese (`eĩt` → `exit`);
+            // - English restore (opt-in): the raw keys are a common English word,
+            //   even when the rendering IS valid Vietnamese (`ứa` → `was`).
+            let invalid = self.auto_fix && is_invalid_vietnamese(&rendered);
+            let english = self.restore_english_words && english::is_common_english(&raw);
+            // Only restore if it actually changes something.
+            ((invalid || english) && raw != rendered).then(|| KeyResponse {
+                handled: true,
+                backspaces: rendered.encode_utf16().count(),
+                insert: raw,
+            })
         } else {
             None
         };

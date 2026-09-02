@@ -101,9 +101,51 @@ fn restores_english_words_with_w() {
 #[test]
 fn ambiguous_english_that_maps_to_valid_vietnamese_is_kept() {
     // "was" → "ứa" is a *valid* Vietnamese syllable, so auto-fix cannot know it was
-    // meant as English and keeps it. Documents the inherent Telex/English ambiguity.
+    // meant as English and keeps it. Documents the inherent Telex/English ambiguity
+    // — resolvable only by the opt-in English restore below.
     let mut s = active_session(true);
     assert_eq!(type_then_commit(&mut s, "was"), "ứa");
+}
+
+#[test]
+fn english_restore_fixes_valid_vietnamese_collisions() {
+    // With the opt-in on, a committed word whose raw keys are a common English
+    // word is restored even though the rendering is valid Vietnamese.
+    for word in ["was", "how", "now", "cats", "this", "his", "of", "sets"] {
+        let mut s = active_session(true);
+        s.set_restore_english_words(true);
+        assert_eq!(type_then_commit(&mut s, word), word, "input {word}");
+    }
+    // Case is preserved (the raw keys are restored as typed).
+    let mut s = active_session(true);
+    s.set_restore_english_words(true);
+    assert_eq!(type_then_commit(&mut s, "Was"), "Was");
+}
+
+#[test]
+fn english_restore_never_touches_vietnamese_words() {
+    // Real Vietnamese input is unaffected — its raw keys are not English words.
+    for (keys, expected) in [("hoongf", "hồng"), ("vieetj", "việt"), ("chaof", "chào")] {
+        let mut s = active_session(true);
+        s.set_restore_english_words(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "input {keys}");
+    }
+}
+
+#[test]
+fn english_restore_off_by_default_keeps_vietnamese_reading() {
+    // Off (the default): `cats` still yields `cát` — the Vietnamese-first reading.
+    let mut s = active_session(true);
+    assert!(!glowkey_engine::Settings::default().restore_english_words);
+    assert_eq!(type_then_commit(&mut s, "cats"), "cát");
+}
+
+#[test]
+fn english_restore_works_independently_of_auto_fix() {
+    // Auto-fix off, English restore on: the listed word still restores.
+    let mut s = active_session(false);
+    s.set_restore_english_words(true);
+    assert_eq!(type_then_commit(&mut s, "was"), "was");
 }
 
 #[test]

@@ -49,6 +49,10 @@ pub struct PrefsIvars {
     macro_expansion: RefCell<Option<Retained<NSTextField>>>,
     macros_list: RefCell<Option<Retained<NSStackView>>>,
     macro_count: RefCell<usize>,
+    /// Toggle-hotkey controls, kept so the recorder can reflect a captured combo:
+    /// the preset segmented control and the "Current: …" label.
+    hotkey_seg: RefCell<Option<Retained<NSSegmentedControl>>>,
+    hotkey_label: RefCell<Option<Retained<NSTextField>>>,
 }
 
 define_class!(
@@ -99,6 +103,30 @@ define_class!(
                 _ => HotkeyPreset::CtrlShiftSpace,
             };
             self.state().set_toggle_hotkey_and_save(preset);
+            self.refresh_hotkey_ui();
+        }
+
+        /// "Record Custom…" clicked: the tap captures the next ⌃/⌥ combo.
+        #[unsafe(method(recordHotkey:))]
+        fn record_hotkey(&self, _sender: Option<&AnyObject>) {
+            if self.state().is_recording_hotkey() {
+                return; // already waiting for a combo
+            }
+            self.state().begin_hotkey_recording();
+            if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
+                label.setStringValue(&NSString::from_str(
+                    "Press the new hotkey (⌃ or ⌥ required) — Esc cancels…",
+                ));
+            }
+        }
+
+        /// "Restore common English words" checkbox toggled.
+        #[unsafe(method(englishRestoreChanged:))]
+        fn english_restore_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_restore_english_words_and_save(state == NSControlStateValueOn);
         }
 
         /// Auto-fix checkbox toggled.
@@ -271,6 +299,8 @@ impl PrefsController {
             macro_expansion: RefCell::new(None),
             macros_list: RefCell::new(None),
             macro_count: RefCell::new(0),
+            hotkey_seg: RefCell::new(None),
+            hotkey_label: RefCell::new(None),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -440,7 +470,27 @@ impl PrefsController {
         });
         root.addArrangedSubview(&capitalize);
 
-        // Toggle hotkey — a preset picker.
+        // English word restore — opt-in resolution of the Telex/English ambiguity.
+        let english: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Restore common English words"),
+                Some(self.as_ref()),
+                Some(sel!(englishRestoreChanged:)),
+                mtm,
+            )
+        };
+        english.setState(if self.state().restore_english_words() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        root.addArrangedSubview(&english);
+        root.addArrangedSubview(&self.caption(
+            "For mixed English typing: “was” stays “was”, not “ứa”. Trade-off: Vietnamese\nwords typed with a trailing tone key (cats → cát) then need another key order.",
+            mtm,
+        ));
+
+        // Toggle hotkey — a preset picker plus a recorder for a custom combo.
         let hotkey_labels = NSArray::from_retained_slice(&[
             NSString::from_str("⌃⇧Space"),
             NSString::from_str("⌃Space"),
@@ -456,19 +506,37 @@ impl PrefsController {
                 mtm,
             )
         };
-        let selected = match self.state().toggle_hotkey() {
-            HotkeyPreset::CtrlShiftSpace => 0,
-            HotkeyPreset::CtrlSpace => 1,
-            HotkeyPreset::OptionSpace => 2,
-            HotkeyPreset::CtrlShiftZ => 3,
+        root.addArrangedSubview(&self.form_row("Toggle key", &hotkey_seg, mtm));
+
+        // Recorder row: [Record Custom…] [Current: ⌃⇧Space]
+        let record_row = NSStackView::new(mtm);
+        record_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        record_row.setSpacing(8.0);
+        let spacer = self.make_label("", mtm);
+        let spacer_width = spacer
+            .widthAnchor()
+            .constraintEqualToConstant(LABEL_COLUMN_WIDTH);
+        spacer_width.setActive(true);
+        let record_button: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Record Custom…"),
+                Some(self.as_ref()),
+                Some(sel!(recordHotkey:)),
+                mtm,
+            )
         };
-        hotkey_seg.setSelectedSegment(selected);
-        let typing_last = self.form_row("Toggle key", &hotkey_seg, mtm);
-        root.addArrangedSubview(&typing_last);
+        let hotkey_label = self.caption("", mtm);
+        record_row.addArrangedSubview(&spacer);
+        record_row.addArrangedSubview(&record_button);
+        record_row.addArrangedSubview(&hotkey_label);
+        root.addArrangedSubview(&record_row);
+        *self.ivars().hotkey_seg.borrow_mut() = Some(hotkey_seg);
+        *self.ivars().hotkey_label.borrow_mut() = Some(hotkey_label);
+        self.refresh_hotkey_ui();
 
         // Group separation: a larger gap before the next section header.
         unsafe {
-            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*typing_last];
+            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*record_row];
         }
 
         // ===== Excluded apps =====
@@ -751,6 +819,29 @@ impl PrefsController {
         field
     }
 
+    /// Syncs the toggle-hotkey controls to the live preset: selects the matching
+    /// segment (or clears the selection for a custom combo) and updates the
+    /// "Current: …" label. Called after a preset click and after a recording ends.
+    fn refresh_hotkey_ui(&self) {
+        let preset = self.state().toggle_hotkey();
+        if let Some(seg) = self.ivars().hotkey_seg.borrow().as_ref() {
+            let selected: isize = match preset {
+                HotkeyPreset::CtrlShiftSpace => 0,
+                HotkeyPreset::CtrlSpace => 1,
+                HotkeyPreset::OptionSpace => 2,
+                HotkeyPreset::CtrlShiftZ => 3,
+                HotkeyPreset::Custom { .. } => -1, // custom: no segment selected
+            };
+            seg.setSelectedSegment(selected);
+        }
+        if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
+            label.setStringValue(&NSString::from_str(&format!(
+                "Current: {}",
+                hotkey_display(preset)
+            )));
+        }
+    }
+
     // --- small view helpers (type hierarchy: header / label / caption) ---
 
     /// A plain primary-color label.
@@ -802,6 +893,40 @@ impl PrefsController {
 /// Width of the right-aligned label column in the aligned form rows.
 const LABEL_COLUMN_WIDTH: f64 = 92.0;
 
+/// A human-readable rendering of a toggle-hotkey preset ("⌃⇧Space", "⌃⌥K").
+fn hotkey_display(preset: HotkeyPreset) -> String {
+    match preset {
+        HotkeyPreset::CtrlShiftSpace => "⌃⇧Space".to_string(),
+        HotkeyPreset::CtrlSpace => "⌃Space".to_string(),
+        HotkeyPreset::OptionSpace => "⌥Space".to_string(),
+        HotkeyPreset::CtrlShiftZ => "⌃⇧Z".to_string(),
+        HotkeyPreset::Custom {
+            control,
+            shift,
+            option,
+            key_char,
+            ..
+        } => {
+            let mut out = String::new();
+            if control {
+                out.push('⌃');
+            }
+            if option {
+                out.push('⌥');
+            }
+            if shift {
+                out.push('⇧');
+            }
+            if key_char == ' ' {
+                out.push_str("Space");
+            } else {
+                out.push(key_char);
+            }
+            out
+        }
+    }
+}
+
 /// A readable name for a bundle id: the last dotted component, title-cased, since
 /// GlowKey does not persist display names — only bundle ids — in settings.
 fn display_name(bundle_id: &str) -> String {
@@ -827,5 +952,16 @@ pub fn show(state: *const TapState, mtm: MainThreadMarker) {
         let mut slot = slot.borrow_mut();
         let controller = slot.get_or_insert_with(|| PrefsController::new(state, mtm));
         controller.show_window();
+    });
+}
+
+/// Called by the tap when a hotkey recording ends (captured or cancelled), so the
+/// Settings controls reflect the new combo. A no-op before the window exists
+/// (including under tests, where no controller is installed).
+pub fn hotkey_recording_done() {
+    CONTROLLER.with(|slot| {
+        if let Some(controller) = slot.borrow().as_ref() {
+            controller.refresh_hotkey_ui();
+        }
     });
 }

@@ -45,7 +45,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use glowkey_engine::{HotkeyPreset, KeyResponse, Session};
+use glowkey_engine::{ExclusionToggle, HotkeyPreset, KeyResponse, Session};
 use objc2_app_kit::NSWorkspace;
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFRetained, CFRunLoop};
 use objc2_core_graphics::{
@@ -55,6 +55,33 @@ use objc2_core_graphics::{
 
 /// macOS virtual key code for Delete/Backspace.
 const KEY_CODE_DELETE: i64 = 51;
+/// macOS virtual key code for Forward Delete (⌦). Used by the omnibox guard: with
+/// a trailing selection it deletes the selection; with the caret at the end of the
+/// text (GlowKey's normal position) it is a no-op.
+const KEY_CODE_FORWARD_DELETE: i64 = 117;
+/// macOS virtual key code for Escape — cancels hotkey recording.
+const KEY_CODE_ESCAPE: i64 = 53;
+
+/// Chromium-family browsers, matched by bundle-id prefix. Their omnibox keeps an
+/// inline-autocomplete **trailing selection** after each keystroke, which a
+/// synthetic Backspace deletes instead of a character (`hoongf`→`hoồng`). The
+/// omnibox guard (see [`TapState::emit_edit`]) applies only in these apps.
+const CHROMIUM_BUNDLE_PREFIXES: &[&str] = &[
+    "com.google.Chrome",
+    "com.microsoft.edgemac",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.vivaldi.Vivaldi",
+    "com.operasoftware.Opera",
+    "company.thebrowser.Browser", // Arc
+];
+
+/// Whether `bundle_id` is a Chromium-family browser (see [`CHROMIUM_BUNDLE_PREFIXES`]).
+fn is_chromium_browser(bundle_id: &str) -> bool {
+    CHROMIUM_BUNDLE_PREFIXES
+        .iter()
+        .any(|prefix| bundle_id.starts_with(prefix))
+}
 
 /// Whether `GLOWKEY_DEBUG` is set — enables per-emit logging for diagnosing
 /// delivery issues in specific apps.
@@ -89,6 +116,9 @@ pub(crate) struct TapState {
     source: CFRetained<CGEventSource>,
     /// Recent emit timestamps, for the runaway circuit breaker.
     recent_emits: RefCell<VecDeque<Instant>>,
+    /// True while the Settings window is recording a custom toggle hotkey: the
+    /// next key-down with ⌃ or ⌥ becomes the hotkey; Escape cancels.
+    recording_hotkey: RefCell<bool>,
 }
 
 impl TapState {
@@ -107,6 +137,7 @@ impl TapState {
             last_bundle_id: RefCell::new(None),
             source,
             recent_emits: RefCell::new(VecDeque::new()),
+            recording_hotkey: RefCell::new(false),
         })
     }
 
@@ -282,6 +313,33 @@ impl TapState {
         self.save_settings();
     }
 
+    /// Starts recording a custom toggle hotkey: the next key-down with ⌃ or ⌥
+    /// becomes the hotkey (Escape cancels). Driven by the Settings window.
+    pub fn begin_hotkey_recording(&self) {
+        *self.recording_hotkey.borrow_mut() = true;
+    }
+
+    /// Whether a hotkey recording is in progress.
+    pub fn is_recording_hotkey(&self) -> bool {
+        *self.recording_hotkey.borrow()
+    }
+
+    /// Whether the opt-in English word restore is on.
+    pub fn restore_english_words(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.restore_english_words())
+            .unwrap_or(false)
+    }
+
+    /// Sets the English word restore and saves.
+    pub fn set_restore_english_words_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_restore_english_words(on);
+        }
+        self.save_settings();
+    }
+
     /// The text-expansion macros, cloned for the Settings list.
     pub fn macros(&self) -> Vec<glowkey_engine::Macro> {
         self.session
@@ -378,7 +436,13 @@ impl TapState {
     /// consume the event (suppress the original), or `false` to let it through.
     fn handle_key_down(&self, event: NonNull<CGEvent>) -> bool {
         self.refresh_frontmost_at_word_start();
+        let was_recording = *self.recording_hotkey.borrow();
         let decision = self.decide(event);
+        // A finished hotkey recording changed the session's hotkey — persist it
+        // here rather than in decide(), which stays free of disk side effects.
+        if was_recording && !*self.recording_hotkey.borrow() {
+            self.save_settings();
+        }
         self.log_key(event, &decision);
         match decision {
             Decision::Passthrough => false,
@@ -387,22 +451,31 @@ impl TapState {
                 // Resolve the frontmost app *now* (not a cached value) so ⌃⇧E always
                 // toggles the app you are actually in, even before you have typed.
                 if let Some((name, bundle_id)) = crate::app_info::frontmost() {
-                    let excluded = self
+                    let outcome = self
                         .session
                         .try_borrow_mut()
                         .map(|mut s| s.toggle_app_exclusion(&bundle_id))
-                        .unwrap_or(false);
+                        .unwrap_or(ExclusionToggle::Excluded);
                     self.save_settings();
-                    eprintln!(
-                        "GlowKey: {} Vietnamese for “{name}”",
-                        if excluded { "disabled" } else { "enabled" }
-                    );
-                    crate::log::log(&format!(
-                        "TOGGLE app {name:?} -> {}",
-                        if excluded { "disabled" } else { "enabled" }
-                    ));
-                    // Brief on-screen confirmation for the hotkey (no menu is open).
-                    crate::hud::flash(if excluded { "EN" } else { "VI" });
+                    let described = match outcome {
+                        ExclusionToggle::Excluded => "disabled",
+                        ExclusionToggle::Enabled => "enabled",
+                        // A terminal re-enabled by hotkey mangles Vietnamese (a PTY
+                        // ignores synthetic backspaces) — allow it, but only until
+                        // restart, and warn.
+                        ExclusionToggle::EnabledSessionOnly => {
+                            "enabled UNTIL RESTART (terminal: Vietnamese will mangle in a PTY)"
+                        }
+                    };
+                    eprintln!("GlowKey: {described} Vietnamese for “{name}”");
+                    crate::log::log(&format!("TOGGLE app {name:?} -> {described}"));
+                    // Brief on-screen confirmation for the hotkey (no menu is open);
+                    // the warning variant marks the risky terminal case.
+                    crate::hud::flash(match outcome {
+                        ExclusionToggle::Excluded => "EN",
+                        ExclusionToggle::Enabled => "VI",
+                        ExclusionToggle::EnabledSessionOnly => "VI ⚠",
+                    });
                 }
                 // Keep the persistent menu-bar glyph in sync with the per-app toggle.
                 crate::menu_bar::refresh_glyph();
@@ -454,6 +527,26 @@ impl TapState {
         if !self.circuit_ok() {
             return;
         }
+        // Chromium omnibox guard: the omnibox's inline autocomplete keeps a
+        // trailing selection, which the first synthetic Backspace would delete
+        // instead of a character (`hoongf`→`hoồng`). When an edit with backspaces
+        // is about to land in a Chromium browser AND the focused element really
+        // has a selection (one cheap AX check), clear the selection first with a
+        // forward-delete. In a normal field the selection is empty, so nothing is
+        // posted and nothing can regress; forward-delete is also a no-op at the
+        // end of the text, GlowKey's normal caret position.
+        if response.backspaces > 0 {
+            let chromium = self
+                .last_bundle_id
+                .borrow()
+                .as_deref()
+                .is_some_and(is_chromium_browser);
+            if chromium && crate::ax::focused_has_selection() {
+                crate::log::log("OMNIBOX trailing selection detected — clearing with ⌦");
+                post_key(&self.source, KEY_CODE_FORWARD_DELETE as u16, true);
+                post_key(&self.source, KEY_CODE_FORWARD_DELETE as u16, false);
+            }
+        }
         if debug_enabled() {
             eprintln!(
                 "GlowKey emit: backspaces={} insert={:?}",
@@ -490,6 +583,13 @@ impl TapState {
     fn decide(&self, event: NonNull<CGEvent>) -> Decision {
         let flags = unsafe { CGEvent::flags(Some(event.as_ref())) };
         let keycode = integer_field(event, CGEventField::KeyboardEventKeycode);
+
+        // Hotkey recording (started from Settings): capture the next ⌃/⌥ combo as
+        // the custom toggle hotkey; Escape cancels. All key-downs are consumed
+        // while recording so nothing leaks into the focused app.
+        if *self.recording_hotkey.borrow() {
+            return self.capture_hotkey(event, flags, keycode);
+        }
 
         // VN/EN toggle hotkey (user-configurable preset): flip mode and consume the
         // key. Checked before the shortcut filter, since it is one.
@@ -601,6 +701,53 @@ impl TapState {
             None => Decision::Passthrough,
         }
     }
+
+    /// One step of hotkey recording: Escape cancels; a key-down with ⌃ or ⌥ (and
+    /// without ⌘ — system shortcuts stay system shortcuts) becomes the new custom
+    /// toggle hotkey and is saved. Anything else is swallowed while recording.
+    fn capture_hotkey(
+        &self,
+        event: NonNull<CGEvent>,
+        flags: CGEventFlags,
+        keycode: i64,
+    ) -> Decision {
+        if keycode == KEY_CODE_ESCAPE {
+            *self.recording_hotkey.borrow_mut() = false;
+            crate::log::log("HOTKEY recording cancelled");
+            crate::prefs_window::hotkey_recording_done();
+            return Decision::Consume;
+        }
+        let control = flags.0 & CGEventFlags::MaskControl.0 != 0;
+        let shift = flags.0 & CGEventFlags::MaskShift.0 != 0;
+        let option = flags.0 & CGEventFlags::MaskAlternate.0 != 0;
+        let command = flags.0 & CGEventFlags::MaskCommand.0 != 0;
+        if command || (!control && !option) {
+            // Not a usable combo (needs ⌃ or ⌥, never ⌘): keep waiting.
+            return Decision::Consume;
+        }
+        // Display character: with Control held the event's Unicode string is a
+        // control code (⌃A → U+0001), so map it back to its letter.
+        let key_char = match unicode_char(event) {
+            Some(c) if ('\x01'..='\x1a').contains(&c) => ((c as u8 - 1) + b'A') as char,
+            Some(c) if !c.is_control() => c.to_ascii_uppercase(),
+            _ => '?',
+        };
+        let preset = HotkeyPreset::Custom {
+            control,
+            shift,
+            option,
+            keycode,
+            key_char,
+        };
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_toggle_hotkey(preset);
+        }
+        *self.recording_hotkey.borrow_mut() = false;
+        // Persistence happens in handle_key_down (decide stays disk-free for tests).
+        crate::log::log(&format!("HOTKEY recorded {preset:?}"));
+        crate::prefs_window::hotkey_recording_done();
+        Decision::Consume
+    }
 }
 
 /// The outcome of processing one key event.
@@ -647,7 +794,7 @@ fn is_ctrl_shift(flags: CGEventFlags, keycode: i64, target: i64) -> bool {
     control && shift && !command && !option
 }
 
-/// The VN/EN toggle hotkey: ⌃⇧Space.
+/// The VN/EN toggle hotkey — matches the chosen preset or a recorded custom combo.
 fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64, preset: HotkeyPreset) -> bool {
     // (control, shift, option, keycode) for each preset. Command is never allowed.
     let (ctrl, shift, option, target) = match preset {
@@ -655,6 +802,13 @@ fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64, preset: HotkeyPreset) -> 
         HotkeyPreset::CtrlSpace => (true, false, false, KEY_CODE_SPACE),
         HotkeyPreset::OptionSpace => (false, false, true, KEY_CODE_SPACE),
         HotkeyPreset::CtrlShiftZ => (true, true, false, KEY_CODE_Z),
+        HotkeyPreset::Custom {
+            control,
+            shift,
+            option,
+            keycode,
+            ..
+        } => (control, shift, option, keycode),
     };
     if keycode != target {
         return false;
@@ -1255,8 +1409,130 @@ mod real_event_tests {
         assert!(state
             .session
             .borrow_mut()
-            .toggle_app_exclusion("com.apple.TextEdit"));
+            .toggle_app_exclusion("com.apple.TextEdit")
+            .excluded());
         assert_eq!(type_via_tap(&state, "hoongf"), "hoongf");
+    }
+
+    #[test]
+    fn chromium_browsers_are_classified_by_prefix() {
+        assert!(is_chromium_browser("com.google.Chrome"));
+        assert!(is_chromium_browser("com.google.Chrome.canary"));
+        assert!(is_chromium_browser("com.microsoft.edgemac"));
+        assert!(is_chromium_browser("com.brave.Browser"));
+        // The omnibox guard must never run outside Chromium browsers.
+        assert!(!is_chromium_browser("com.apple.Safari"));
+        assert!(!is_chromium_browser("org.mozilla.firefox"));
+        assert!(!is_chromium_browser("com.apple.TextEdit"));
+    }
+
+    /// A key event with arbitrary modifier flags.
+    fn flagged_event(source: &CGEventSource, keycode: u16, flags: CGEventFlags) -> CFRetained<CGEvent> {
+        let event = CGEvent::new_keyboard_event(Some(source), keycode, true).expect("event");
+        CGEvent::set_flags(Some(&event), flags);
+        event
+    }
+
+    #[test]
+    fn hotkey_recording_captures_a_custom_combo() {
+        let state = active_state();
+        state.begin_hotkey_recording();
+        assert!(state.is_recording_hotkey());
+
+        // A plain letter is swallowed and recording continues (needs ⌃ or ⌥).
+        let plain = key_event(&state.source, 'k');
+        assert!(matches!(
+            state.decide(NonNull::from(&*plain)),
+            Decision::Consume
+        ));
+        assert!(state.is_recording_hotkey());
+
+        // ⌃⌥K (keycode 40) becomes the custom hotkey and ends recording.
+        let combo = flagged_event(
+            &state.source,
+            40,
+            CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskAlternate.0),
+        );
+        assert!(matches!(
+            state.decide(NonNull::from(&*combo)),
+            Decision::Consume
+        ));
+        assert!(!state.is_recording_hotkey());
+        let recorded = state.toggle_hotkey();
+        assert!(matches!(
+            recorded,
+            HotkeyPreset::Custom {
+                control: true,
+                shift: false,
+                option: true,
+                keycode: 40,
+                ..
+            }
+        ));
+
+        // The recorded combo now toggles VN/EN…
+        let combo = flagged_event(
+            &state.source,
+            40,
+            CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskAlternate.0),
+        );
+        assert!(matches!(
+            state.decide(NonNull::from(&*combo)),
+            Decision::Consume
+        ));
+        assert_eq!(
+            state.session.borrow().mode(),
+            glowkey_engine::InputMode::English
+        );
+        // …and the old default (⌃⇧Space) no longer does.
+        let old = toggle_event(&state.source);
+        state.decide(NonNull::from(&*old));
+        assert_eq!(
+            state.session.borrow().mode(),
+            glowkey_engine::InputMode::English,
+            "the replaced preset must not toggle anymore"
+        );
+    }
+
+    #[test]
+    fn hotkey_recording_escape_cancels() {
+        let state = active_state();
+        state.begin_hotkey_recording();
+        let esc = nav_event(&state.source, KEY_CODE_ESCAPE as u16);
+        assert!(matches!(
+            state.decide(NonNull::from(&*esc)),
+            Decision::Consume
+        ));
+        assert!(!state.is_recording_hotkey());
+        // The preset is unchanged.
+        assert_eq!(state.toggle_hotkey(), HotkeyPreset::CtrlShiftSpace);
+    }
+
+    #[test]
+    fn terminal_toggle_via_hotkey_is_session_only() {
+        // ⌃⇧E in a terminal enables Vietnamese for the session, but the snapshot
+        // (what gets persisted) still excludes it.
+        let state = TapState::new().expect("source");
+        state
+            .session
+            .borrow_mut()
+            .set_frontmost_app("com.mitchellh.ghostty");
+        assert_eq!(type_via_tap(&state, "hoongf"), "hoongf"); // excluded by default
+
+        let outcome = state
+            .session
+            .borrow_mut()
+            .toggle_app_exclusion("com.mitchellh.ghostty");
+        assert_eq!(outcome, ExclusionToggle::EnabledSessionOnly);
+        assert_eq!(type_via_tap(&state, "hoongf"), "hồng"); // live for the session
+        let snapshot = state.session.borrow().snapshot();
+        assert!(
+            snapshot
+                .exclusions
+                .iter()
+                .any(|id| id == "com.mitchellh.ghostty"),
+            "the persisted exclusion must survive a session-only toggle"
+        );
     }
 
     #[test]

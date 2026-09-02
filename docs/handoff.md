@@ -70,7 +70,23 @@ Cargo workspace:
 - **Re-composition**: `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the word).
 - **Caret-navigation flush**: arrows/Home/End/Page flush the diff baseline.
 - **Auto-capitalize** first letter of each sentence (opt-in).
-- **Configurable toggle hotkey** (⌃⇧Space / ⌃Space / ⌥Space / ⌃⇧Z).
+- **Configurable toggle hotkey** (⌃⇧Space / ⌃Space / ⌥Space / ⌃⇧Z) **plus a
+  recorder**: "Record Custom…" in Settings captures the next ⌃/⌥ combo
+  (`HotkeyPreset::Custom`; Esc cancels; ⌘ not allowed).
+- **Chromium omnibox guard**: before emitting backspaces in a Chromium browser,
+  one AX check (`AXSelectedText` non-empty?) detects the omnibox's
+  inline-autocomplete trailing selection and clears it with a forward-delete
+  (`app/src/ax.rs`). Normal fields have no selection → provably untouched.
+- **Exclusion tombstones**: `removed_default_exclusions` in settings; at load the
+  effective list is `saved ∪ (defaults − tombstones)`, so new shipped defaults
+  reach old settings files without resurrecting deliberate removals.
+- **Session-only terminal un-exclusion**: ⌃⇧E in a known terminal
+  (`TERMINAL_EXCLUSIONS`) enables Vietnamese only until restart (HUD shows
+  "VI ⚠"); permanent removal only via the Excluded Apps window.
+- **Restore common English words** (opt-in, Settings → Typing): a committed word
+  whose raw keys are a common English word (embedded list, `english.rs`) is
+  restored even when the render is valid Vietnamese (`was`→`was`, not `ứa`).
+  Off by default — it inverts the ambiguity for `cats`→`cát`, `car`→`cả`.
 - **Macros (gõ tắt)**: `vn `→`Việt Nam `, managed in the Macros window.
 - **Launch always in Vietnamese** (mode is session-only, never persisted).
 - **Open Settings on launch** (toggle), **Launch at login**, **VI/EN glyph + HUD**,
@@ -91,28 +107,29 @@ Cargo workspace:
   invariant is "rendered == the text tail at the caret." Everything that can move
   the caret (shortcuts, mouse, arrows, app switch) calls `flush()`.
 
-## 6. KNOWN ISSUES / TO FIX (priority order)
+## 6. KNOWN ISSUES / STATUS (updated 2026-09-02, second session)
 
-1. **Chrome/Edge address bar (omnibox)** — `hoongf`→`hoồng`, `work`→`ưwork`.
-   Root cause (investigated): the omnibox's inline-autocomplete adds a **trailing
-   selection**; the synthetic Backspace deletes that selection instead of the
-   character. Works in every normal field. **DEFERRED** — every blind fix (post
-   Left-arrow to collapse the selection, etc.) also breaks normal fields that have
-   no selection, and it can't be verified headless. The correct-but-large fix is
-   the InputMethodKit composition path (contradicts the CGEventTap design; EVKey
-   has the same limitation). See `plans/260902-1230-.../phase-04-omnibox-deferred.md`.
-2. **Terminals (Ghostty, iTerm, Terminal, …)** — synthetic backspaces don't delete
-   in a PTY (the shell owns line editing), so Vietnamese in a terminal produces
-   garbage (`work`→`ưwork`, exactly what the user reported). **Terminals must stay
-   excluded.** They are in `DEFAULT_EXCLUSIONS`. If a user un-excludes one via
-   ⌃⇧E, it will mangle — an expected limitation, not a bug. NOTE: the user keeps
-   accidentally un-excluding **Ghostty** (`com.mitchellh.ghostty`); it has been
-   re-added to defaults *and* to the live settings file, but the running app must
-   be **restarted** to reload, and a later ⌃⇧E in Ghostty removes it again.
-3. **English/Telex ambiguity** — `was`→`ứa` (a valid Vietnamese syllable), so
-   auto-fix can't know it was meant as English. Inherent without a dictionary.
-4. **All GUI is unverifiable headless.** Menu, Settings/Excluded/Macros/About
-   windows, glyph, HUD — a real run is the only way to confirm rendering.
+1. **Chrome/Edge omnibox** — FIX SHIPPED, needs live verification. The guard
+   (`tap.rs::emit_edit` + `ax.rs`): when an edit with backspaces is about to land
+   in a Chromium browser AND the focused element's `AXSelectedText` is non-empty,
+   post one forward-delete to clear the inline-autocomplete selection first. In a
+   normal field the selection is empty → nothing posted; ⌦ is also a no-op at
+   text end. Scoped by bundle-id prefix (`CHROMIUM_BUNDLE_PREFIXES`). If it
+   misbehaves, the log line "OMNIBOX trailing selection detected" shows each fire.
+2. **Terminals** — HARDENED. ⌃⇧E in a known terminal (`TERMINAL_EXCLUSIONS`) now
+   un-excludes for the session only (HUD "VI ⚠"); restart re-excludes. Shipped
+   defaults merge into old settings files at load (tombstones in
+   `removed_default_exclusions`), so `org.alacritty` etc. self-heal. Permanent
+   removal is still possible, but only via the Excluded Apps window.
+3. **English/Telex ambiguity** — MITIGATED by the opt-in "Restore common English
+   words" (curated list, `english.rs`). Still inherent in principle: the option
+   trades `was`→`ứa` for `cats`→`cát`, hence default off.
+4. **All GUI is unverifiable headless** (unchanged) — new controls to eyeball:
+   English-restore checkbox, "Record Custom…" + "Current: …" hotkey row, "VI ⚠"
+   HUD variant.
+5. **Accessibility re-grant after rebuild** — the ad-hoc re-sign drops the grant;
+   after `build-app.sh` the relaunched app waits at the permission gate until the
+   user re-enables it in System Settings → Privacy & Security → Accessibility.
 
 ## 7. Diagnosing from the log (do this first for any reported typing bug)
 
@@ -161,11 +178,10 @@ bash scripts/dev-run.sh                  # stop + rebuild + relaunch w/ GLOWKEY_
 
 ## 11. Suggested next steps for a new session
 
-1. Have the user run the app once and confirm the GUI (all unverified by eye).
-2. Restart-to-apply the Ghostty exclusion; consider whether terminals should be
-   harder to un-exclude.
-3. The omnibox fix — only with the user present: confirm the autocomplete-selection
-   mechanism (type a no-suggestion prefix), then prototype Left-collapse-before-
-   delete guarded so it can't regress normal fields.
-4. Optional Unikey extras not yet built: none *useful* remain (macros done); a
-   configurable-hotkey **recorder** (vs preset list) is the only refinement.
+1. Re-grant Accessibility (the 2026-09-02 rebuild dropped it — §6.5), then verify
+   by eye: the omnibox guard in Chrome (`hoongf`→`hồng` in the address bar), the
+   "VI ⚠" HUD on ⌃⇧E in Ghostty, the new Settings controls, hotkey recording.
+2. If the omnibox guard proves itself, consider extending it beyond Chromium
+   (Safari's address bar has the same autocomplete pattern) — kept narrow first.
+3. Everything in §6 is otherwise shipped; plan record:
+   `plans/260902-1515-fix-known-issues/plan.md`.

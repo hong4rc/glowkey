@@ -2,7 +2,7 @@
 //! the rule that must never regress: an excluded application does not transform,
 //! and nothing (mode toggle included) overrides that.
 
-use glowkey_engine::{ExclusionList, InputMode, PlacementStyle, Session};
+use glowkey_engine::{ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session};
 
 fn session_with_excluded(bundle_id: &str) -> Session {
     let mut excl = ExclusionList::new();
@@ -149,7 +149,7 @@ fn per_app_exclusion_is_independent() {
 
     // In app A, disable it.
     session.set_frontmost_app("com.app.A");
-    assert!(session.toggle_app_exclusion("com.app.A")); // A now excluded
+    assert!(session.toggle_app_exclusion("com.app.A").excluded()); // A now excluded
     assert!(!session.is_active());
 
     // Switch to app B (never toggled): it is still enabled — its own state,
@@ -159,7 +159,7 @@ fn per_app_exclusion_is_independent() {
     assert_eq!(type_through(&mut session, "hoongf"), "hồng");
 
     // Disable B independently.
-    assert!(session.toggle_app_exclusion("com.app.B"));
+    assert!(session.toggle_app_exclusion("com.app.B").excluded());
     assert!(!session.is_active());
 
     // Back to A: still disabled (its own remembered state), and B unaffected.
@@ -167,8 +167,66 @@ fn per_app_exclusion_is_independent() {
     assert!(!session.is_active());
 
     // Re-enable A; B must remain disabled.
-    assert!(!session.toggle_app_exclusion("com.app.A")); // A now enabled
+    assert!(!session.toggle_app_exclusion("com.app.A").excluded()); // A now enabled
     assert!(session.is_active());
     session.set_frontmost_app("com.app.B");
     assert!(!session.is_active(), "B stays disabled, independent of A");
+}
+
+#[test]
+fn terminal_hotkey_unexclusion_is_session_only() {
+    // Un-excluding a known terminal via the toggle works for the session but is
+    // never persisted, so a restart re-excludes it (the accidental-⌃⇧E-in-Ghostty
+    // protection). A non-terminal default (an editor) still removes permanently.
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
+    session.set_frontmost_app("com.mitchellh.ghostty");
+    assert!(!session.is_active());
+
+    // Toggle: enabled, but session-only.
+    assert_eq!(
+        session.toggle_app_exclusion("com.mitchellh.ghostty"),
+        ExclusionToggle::EnabledSessionOnly
+    );
+    assert!(session.is_active(), "session-suspended terminal transforms");
+    // The snapshot (what gets persisted) still excludes it.
+    let saved = session.snapshot();
+    assert!(saved.exclusions.iter().any(|id| id == "com.mitchellh.ghostty"));
+    // And a fresh session from that snapshot excludes it again.
+    let mut restarted = Session::from_settings(&saved);
+    restarted.set_frontmost_app("com.mitchellh.ghostty");
+    assert!(!restarted.is_active(), "restart must re-exclude the terminal");
+
+    // Toggling again re-excludes immediately (lifts the suspension).
+    assert_eq!(
+        session.toggle_app_exclusion("com.mitchellh.ghostty"),
+        ExclusionToggle::Excluded
+    );
+    assert!(!session.is_active());
+
+    // An editor default is removed permanently by the same toggle.
+    assert_eq!(
+        session.toggle_app_exclusion("com.microsoft.VSCode"),
+        ExclusionToggle::Enabled
+    );
+    let saved = session.snapshot();
+    assert!(!saved.exclusions.iter().any(|id| id == "com.microsoft.VSCode"));
+    assert!(saved
+        .removed_default_exclusions
+        .iter()
+        .any(|id| id == "com.microsoft.VSCode"));
+    // ...and the tombstone keeps it removed across a restart.
+    let restarted = Session::from_settings(&saved);
+    assert!(!restarted.exclusions().is_excluded("com.microsoft.VSCode"));
+}
+
+#[test]
+fn permanent_terminal_removal_via_editor_still_works() {
+    // The Excluded Apps window path (exclusions_mut().remove) is a deliberate,
+    // permanent removal — even for a terminal — and tombstones it.
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
+    session.exclusions_mut().remove("com.apple.Terminal");
+    let saved = session.snapshot();
+    assert!(!saved.exclusions.iter().any(|id| id == "com.apple.Terminal"));
+    let restarted = Session::from_settings(&saved);
+    assert!(!restarted.exclusions().is_excluded("com.apple.Terminal"));
 }

@@ -14,6 +14,11 @@ pub struct Settings {
     /// Application bundle identifiers where Vietnamese input is off (deny list).
     #[serde(default = "default_exclusions")]
     pub exclusions: Vec<String>,
+    /// Shipped default exclusions the user deliberately removed. At load, the
+    /// effective list is `exclusions ∪ (DEFAULT_EXCLUSIONS − these)`, so a new
+    /// release's defaults reach old settings files without resurrecting removals.
+    #[serde(default)]
+    pub removed_default_exclusions: Vec<String>,
     /// Whether to restore a word to its raw keys when the Telex result is not
     /// valid Vietnamese (`exit`, not `eĩt`).
     #[serde(default = "default_true")]
@@ -34,6 +39,12 @@ pub struct Settings {
     /// Text-expansion macros (Unikey's "gõ tắt").
     #[serde(default)]
     pub macros: Vec<Macro>,
+    /// Opt-in: restore a committed word to its raw keys when they form a common
+    /// English word, even if the rendering is valid Vietnamese (`was`→`ứa`). Off
+    /// by default — it inverts the ambiguity for Vietnamese words typed with a
+    /// trailing tone key (`cats`→`cát`).
+    #[serde(default)]
+    pub restore_english_words: bool,
     /// Whether to open the Settings window when the app launches (like EVKey/Unikey
     /// showing their control panel on start). Default on, so a new user sees the
     /// controls; toggled off from the window itself once they know it.
@@ -45,12 +56,14 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             exclusions: default_exclusions(),
+            removed_default_exclusions: Vec::new(),
             auto_fix: true,
             style: PlacementStyle::default(),
             input_method: InputMethod::default(),
             auto_capitalize: false,
             toggle_hotkey: HotkeyPreset::default(),
             macros: Vec::new(),
+            restore_english_words: false,
             open_settings_at_launch: true,
         }
     }
@@ -70,10 +83,14 @@ impl Settings {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
     }
 
-    /// The exclusion list as an [`ExclusionList`].
+    /// The effective exclusion list: the saved ids merged with any shipped default
+    /// the user has not deliberately removed (see `removed_default_exclusions`).
     #[must_use]
     pub fn exclusion_list(&self) -> ExclusionList {
-        ExclusionList::from_ids(self.exclusions.iter().cloned())
+        ExclusionList::from_saved(
+            self.exclusions.iter().cloned(),
+            self.removed_default_exclusions.iter().cloned(),
+        )
     }
 }
 
@@ -96,6 +113,7 @@ mod tests {
     fn round_trips_through_json() {
         let settings = Settings {
             exclusions: vec!["com.apple.Terminal".into(), "com.example.app".into()],
+            removed_default_exclusions: vec!["com.microsoft.VSCode".into()],
             auto_fix: false,
             style: PlacementStyle::Old,
             input_method: InputMethod::Vni,
@@ -105,10 +123,42 @@ mod tests {
                 shortcut: "vn".into(),
                 expansion: "Việt Nam".into(),
             }],
+            restore_english_words: true,
             open_settings_at_launch: false,
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);
+    }
+
+    #[test]
+    fn custom_hotkey_round_trips() {
+        let settings = Settings {
+            toggle_hotkey: HotkeyPreset::Custom {
+                control: true,
+                shift: false,
+                option: true,
+                keycode: 40,
+                key_char: 'K',
+            },
+            ..Settings::default()
+        };
+        let restored = Settings::from_json(&settings.to_json());
+        assert_eq!(settings, restored);
+    }
+
+    #[test]
+    fn exclusion_list_merges_defaults_and_respects_tombstones() {
+        // An old file: Ghostty missing from exclusions (it wasn't a default yet),
+        // VSCode deliberately removed. Loading must add Ghostty, not VSCode.
+        let s = Settings::from_json(
+            r#"{
+                "exclusions": ["com.apple.Terminal"],
+                "removed_default_exclusions": ["com.microsoft.VSCode"]
+            }"#,
+        );
+        let list = s.exclusion_list();
+        assert!(list.is_excluded("com.mitchellh.ghostty"));
+        assert!(!list.is_excluded("com.microsoft.VSCode"));
     }
 
     #[test]

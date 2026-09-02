@@ -89,6 +89,10 @@ impl HudController {
     fn show(&self, text: &str) {
         if let Some(label) = self.ivars().label.borrow().as_ref() {
             label.setStringValue(&NSString::from_str(text));
+            // The panel is fixed-width; longer texts ("VI ⚠") need a smaller font
+            // than the two-letter "VI"/"EN" to fit.
+            let size = if text.chars().count() <= 2 { 64.0 } else { 36.0 };
+            label.setFont(Some(&NSFont::systemFontOfSize(size)));
         }
         if let Some(window) = self.ivars().window.borrow().as_ref() {
             window.center();

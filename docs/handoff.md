@@ -2,7 +2,8 @@
 
 Purpose: give a fresh session everything needed to continue GlowKey — the goal,
 how it works, what's built, what's broken, and how to build/test/diagnose. Read
-this first, then `docs/checkpoint.md` and the `decisions/` records for depth.
+this first, then the `decisions/` records for depth (`docs/checkpoint.md` is a
+superseded historical note).
 
 ---
 

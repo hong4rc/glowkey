@@ -26,7 +26,7 @@ use objc2_foundation::{
 
 use std::cell::RefCell;
 
-use glowkey_engine::{InputMethod, PlacementStyle};
+use glowkey_engine::{HotkeyPreset, InputMethod, PlacementStyle};
 
 use crate::tap::TapState;
 
@@ -78,6 +78,20 @@ define_class!(
                 InputMethod::Vni
             };
             self.state().set_input_method_and_save(method);
+        }
+
+        /// Toggle-hotkey preset changed (0..=3).
+        #[unsafe(method(hotkeyChanged:))]
+        fn hotkey_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let seg: isize = unsafe { msg_send![sender, selectedSegment] };
+            let preset = match seg {
+                1 => HotkeyPreset::CtrlSpace,
+                2 => HotkeyPreset::OptionSpace,
+                3 => HotkeyPreset::CtrlShiftZ,
+                _ => HotkeyPreset::CtrlShiftSpace,
+            };
+            self.state().set_toggle_hotkey_and_save(preset);
         }
 
         /// Auto-fix checkbox toggled.
@@ -360,9 +374,30 @@ impl PrefsController {
         });
         root.addArrangedSubview(&capitalize);
 
-        // Shortcut — read-only, in the aligned form.
-        let shortcut = self.value_label("⌃⇧Space   ·   turn Vietnamese on or off", mtm);
-        let typing_last = self.form_row("Shortcut", &shortcut, mtm);
+        // Toggle hotkey — a preset picker.
+        let hotkey_labels = NSArray::from_retained_slice(&[
+            NSString::from_str("⌃⇧Space"),
+            NSString::from_str("⌃Space"),
+            NSString::from_str("⌥Space"),
+            NSString::from_str("⌃⇧Z"),
+        ]);
+        let hotkey_seg: Retained<NSSegmentedControl> = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &hotkey_labels,
+                NSSegmentSwitchTracking::SelectOne,
+                Some(self.as_ref()),
+                Some(sel!(hotkeyChanged:)),
+                mtm,
+            )
+        };
+        let selected = match self.state().toggle_hotkey() {
+            HotkeyPreset::CtrlShiftSpace => 0,
+            HotkeyPreset::CtrlSpace => 1,
+            HotkeyPreset::OptionSpace => 2,
+            HotkeyPreset::CtrlShiftZ => 3,
+        };
+        hotkey_seg.setSelectedSegment(selected);
+        let typing_last = self.form_row("Toggle key", &hotkey_seg, mtm);
         root.addArrangedSubview(&typing_last);
 
         // Group separation: a larger gap before the next section header.
@@ -523,11 +558,6 @@ impl PrefsController {
         label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
         label.setTextColor(Some(&NSColor::secondaryLabelColor()));
         label
-    }
-
-    /// A regular value label (e.g. the read-only shortcut text).
-    fn value_label(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
-        self.make_label(text, mtm)
     }
 
     /// One aligned form row: a fixed-width, right-aligned label followed by its

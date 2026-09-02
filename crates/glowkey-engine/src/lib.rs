@@ -59,6 +59,22 @@ pub enum InputMethod {
     Vni,
 }
 
+/// The chosen hotkey for the global Vietnamese/English toggle, as a small preset
+/// list (like Unikey/EVKey's hotkey picker). The shell maps each to its modifier
+/// mask and key code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum HotkeyPreset {
+    /// ⌃⇧Space — the default.
+    #[default]
+    CtrlShiftSpace,
+    /// ⌃Space.
+    CtrlSpace,
+    /// ⌥Space.
+    OptionSpace,
+    /// ⌃⇧Z.
+    CtrlShiftZ,
+}
+
 /// The edit the shell must apply to the document for one keystroke.
 ///
 /// `backspaces` counts **UTF-16 code units** to delete from the end of the text
@@ -319,6 +335,8 @@ pub struct Session {
     /// True when the next typed letter starts a sentence (document start, or after
     /// `.`/`!`/`?`). Consumed by the first letter of the following word.
     pending_capital: bool,
+    /// The hotkey preset for the global Vietnamese/English toggle.
+    toggle_hotkey: HotkeyPreset,
 }
 
 impl Session {
@@ -336,6 +354,7 @@ impl Session {
             open_settings_at_launch: true,
             auto_capitalize: false,
             pending_capital: true,
+            toggle_hotkey: HotkeyPreset::default(),
         }
     }
 
@@ -350,6 +369,7 @@ impl Session {
         session.auto_fix = settings.auto_fix;
         session.open_settings_at_launch = settings.open_settings_at_launch;
         session.auto_capitalize = settings.auto_capitalize;
+        session.toggle_hotkey = settings.toggle_hotkey;
         session.engine.set_method(settings.input_method);
         session
     }
@@ -364,6 +384,7 @@ impl Session {
             open_settings_at_launch: self.open_settings_at_launch,
             input_method: self.engine.method(),
             auto_capitalize: self.auto_capitalize,
+            toggle_hotkey: self.toggle_hotkey,
         }
     }
 
@@ -468,6 +489,17 @@ impl Session {
     /// Sets auto-capitalize.
     pub fn set_auto_capitalize(&mut self, on: bool) {
         self.auto_capitalize = on;
+    }
+
+    /// The current toggle-hotkey preset.
+    #[must_use]
+    pub fn toggle_hotkey(&self) -> HotkeyPreset {
+        self.toggle_hotkey
+    }
+
+    /// Sets the toggle-hotkey preset.
+    pub fn set_toggle_hotkey(&mut self, preset: HotkeyPreset) {
+        self.toggle_hotkey = preset;
     }
 
     /// Processes a Backspace, honoring exclusion and mode.

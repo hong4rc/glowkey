@@ -45,7 +45,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use glowkey_engine::{KeyResponse, Session};
+use glowkey_engine::{HotkeyPreset, KeyResponse, Session};
 use objc2_app_kit::NSWorkspace;
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFRetained, CFRunLoop};
 use objc2_core_graphics::{
@@ -266,6 +266,22 @@ impl TapState {
         self.save_settings();
     }
 
+    /// The current toggle-hotkey preset. Drives the Settings control.
+    pub fn toggle_hotkey(&self) -> HotkeyPreset {
+        self.session
+            .try_borrow()
+            .map(|s| s.toggle_hotkey())
+            .unwrap_or(HotkeyPreset::CtrlShiftSpace)
+    }
+
+    /// Sets the toggle-hotkey preset and saves.
+    pub fn set_toggle_hotkey_and_save(&self, preset: HotkeyPreset) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_toggle_hotkey(preset);
+        }
+        self.save_settings();
+    }
+
     /// The current tone-placement style. Drives the Settings segmented control.
     pub fn style(&self) -> glowkey_engine::PlacementStyle {
         self.session
@@ -446,9 +462,14 @@ impl TapState {
         let flags = unsafe { CGEvent::flags(Some(event.as_ref())) };
         let keycode = integer_field(event, CGEventField::KeyboardEventKeycode);
 
-        // VN/EN toggle hotkey (⌃⇧Space): flip mode and consume the key so it does
-        // not type a space. Checked before the shortcut filter, since it is one.
-        if is_toggle_hotkey(flags, keycode) {
+        // VN/EN toggle hotkey (user-configurable preset): flip mode and consume the
+        // key. Checked before the shortcut filter, since it is one.
+        let toggle_preset = self
+            .session
+            .try_borrow()
+            .map(|s| s.toggle_hotkey())
+            .unwrap_or(HotkeyPreset::CtrlShiftSpace);
+        if is_toggle_hotkey(flags, keycode, toggle_preset) {
             if let Ok(mut session) = self.session.try_borrow_mut() {
                 let mode = session.toggle_mode();
                 eprintln!("GlowKey: {mode:?} mode");
@@ -581,6 +602,8 @@ fn is_caret_move(keycode: i64) -> bool {
 const KEY_CODE_SPACE: i64 = 49;
 /// macOS virtual key code for the letter E.
 const KEY_CODE_E: i64 = 14;
+/// macOS virtual key code for the letter Z.
+const KEY_CODE_Z: i64 = 6;
 
 /// True when only Control and Shift are held (no Command or Option) and the key is
 /// `keycode` — the modifier pattern shared by GlowKey's ⌃⇧ hotkeys.
@@ -596,8 +619,22 @@ fn is_ctrl_shift(flags: CGEventFlags, keycode: i64, target: i64) -> bool {
 }
 
 /// The VN/EN toggle hotkey: ⌃⇧Space.
-fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
-    is_ctrl_shift(flags, keycode, KEY_CODE_SPACE)
+fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64, preset: HotkeyPreset) -> bool {
+    // (control, shift, option, keycode) for each preset. Command is never allowed.
+    let (ctrl, shift, option, target) = match preset {
+        HotkeyPreset::CtrlShiftSpace => (true, true, false, KEY_CODE_SPACE),
+        HotkeyPreset::CtrlSpace => (true, false, false, KEY_CODE_SPACE),
+        HotkeyPreset::OptionSpace => (false, false, true, KEY_CODE_SPACE),
+        HotkeyPreset::CtrlShiftZ => (true, true, false, KEY_CODE_Z),
+    };
+    if keycode != target {
+        return false;
+    }
+    let f_ctrl = flags.0 & CGEventFlags::MaskControl.0 != 0;
+    let f_shift = flags.0 & CGEventFlags::MaskShift.0 != 0;
+    let f_command = flags.0 & CGEventFlags::MaskCommand.0 != 0;
+    let f_option = flags.0 & CGEventFlags::MaskAlternate.0 != 0;
+    f_ctrl == ctrl && f_shift == shift && f_option == option && !f_command
 }
 
 /// The per-app enable/disable hotkey: ⌃⇧E.
@@ -990,6 +1027,54 @@ mod real_event_tests {
         // Without deleting the space, a following key starts a NEW word — z is
         // literal, not a modifier of the previous word.
         assert_eq!(type_via_tap(&active_state(), "hoongf z"), "hồng z");
+    }
+
+    #[test]
+    fn toggle_hotkey_presets_match_only_their_combo() {
+        let ctrl_shift = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
+        let ctrl = CGEventFlags(CGEventFlags::MaskControl.0);
+        let option = CGEventFlags(CGEventFlags::MaskAlternate.0);
+
+        assert!(is_toggle_hotkey(
+            ctrl_shift,
+            KEY_CODE_SPACE,
+            HotkeyPreset::CtrlShiftSpace
+        ));
+        assert!(!is_toggle_hotkey(
+            ctrl,
+            KEY_CODE_SPACE,
+            HotkeyPreset::CtrlShiftSpace
+        ));
+
+        assert!(is_toggle_hotkey(
+            ctrl,
+            KEY_CODE_SPACE,
+            HotkeyPreset::CtrlSpace
+        ));
+        // Shift must NOT be held for the plain ⌃Space preset.
+        assert!(!is_toggle_hotkey(
+            ctrl_shift,
+            KEY_CODE_SPACE,
+            HotkeyPreset::CtrlSpace
+        ));
+
+        assert!(is_toggle_hotkey(
+            option,
+            KEY_CODE_SPACE,
+            HotkeyPreset::OptionSpace
+        ));
+
+        assert!(is_toggle_hotkey(
+            ctrl_shift,
+            KEY_CODE_Z,
+            HotkeyPreset::CtrlShiftZ
+        ));
+        // Right modifiers, wrong key.
+        assert!(!is_toggle_hotkey(
+            ctrl_shift,
+            KEY_CODE_SPACE,
+            HotkeyPreset::CtrlShiftZ
+        ));
     }
 
     #[test]

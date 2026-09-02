@@ -149,3 +149,43 @@ fn auto_capitalize_sentence_start() {
     // Vietnamese first letter still capitalizes: "chaof" → Chào at sentence start.
     assert_eq!(run(true, "chaof"), "Chào");
 }
+
+#[test]
+fn macro_expansion() {
+    fn run(input: &str, add: &[(&str, &str)]) -> String {
+        let mut s = active_session(true);
+        for (sc, ex) in add {
+            s.add_macro(sc, ex);
+        }
+        let mut screen = String::new();
+        let apply = |screen: &mut String, bs: usize, ins: &str| {
+            let u: Vec<u16> = screen.encode_utf16().collect();
+            let k = u.len().saturating_sub(bs);
+            *screen = String::from_utf16(&u[..k]).unwrap();
+            screen.push_str(ins);
+        };
+        for ch in input.chars() {
+            if ch.is_ascii_alphabetic() {
+                let r = s.process_key(ch);
+                if r.handled {
+                    apply(&mut screen, r.backspaces, &r.insert);
+                } else {
+                    screen.push(ch);
+                }
+            } else {
+                if let Some(restore) = s.commit() {
+                    apply(&mut screen, restore.backspaces, &restore.insert);
+                }
+                s.note_boundary(ch);
+                screen.push(ch);
+            }
+        }
+        screen
+    }
+    // "vn " → "Việt Nam " (expansion replaces the shortcut at the boundary).
+    assert_eq!(run("vn ", &[("vn", "Việt Nam")]), "Việt Nam ");
+    // Case-insensitive trigger.
+    assert_eq!(run("VN ", &[("vn", "Việt Nam")]), "Việt Nam ");
+    // Non-matching word is untouched.
+    assert_eq!(run("hi ", &[("vn", "Việt Nam")]), "hi ");
+}

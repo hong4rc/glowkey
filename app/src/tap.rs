@@ -282,6 +282,35 @@ impl TapState {
         self.save_settings();
     }
 
+    /// The text-expansion macros, cloned for the Settings list.
+    pub fn macros(&self) -> Vec<glowkey_engine::Macro> {
+        self.session
+            .try_borrow()
+            .map(|s| s.macros().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Adds (or replaces) a macro and saves. Returns whether it was accepted.
+    pub fn add_macro_and_save(&self, shortcut: &str, expansion: &str) -> bool {
+        let ok = self
+            .session
+            .try_borrow_mut()
+            .map(|mut s| s.add_macro(shortcut, expansion))
+            .unwrap_or(false);
+        if ok {
+            self.save_settings();
+        }
+        ok
+    }
+
+    /// Removes the macro at `index` and saves.
+    pub fn remove_macro_and_save(&self, index: usize) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.remove_macro(index);
+        }
+        self.save_settings();
+    }
+
     /// The current tone-placement style. Drives the Settings segmented control.
     pub fn style(&self) -> glowkey_engine::PlacementStyle {
         self.session

@@ -42,6 +42,13 @@ pub struct PrefsIvars {
     excluded_window: RefCell<Option<Retained<NSWindow>>>,
     list_stack: RefCell<Option<Retained<NSStackView>>>,
     apps: RefCell<Vec<String>>,
+    /// Separate window for text-expansion macros (gõ tắt), with its input fields,
+    /// list stack, and the ordered shortcuts (for remove-by-tag).
+    macros_window: RefCell<Option<Retained<NSWindow>>>,
+    macro_shortcut: RefCell<Option<Retained<NSTextField>>>,
+    macro_expansion: RefCell<Option<Retained<NSTextField>>>,
+    macros_list: RefCell<Option<Retained<NSStackView>>>,
+    macro_count: RefCell<usize>,
 }
 
 define_class!(
@@ -189,6 +196,59 @@ define_class!(
             }
             self.refresh_list();
         }
+
+        /// Opens the separate Macros window (built on first use).
+        #[unsafe(method(manageMacros:))]
+        fn manage_macros(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            if self.ivars().macros_window.borrow().is_none() {
+                self.build_macros_window(mtm);
+            }
+            self.refresh_macros();
+            if let Some(window) = self.ivars().macros_window.borrow().as_ref() {
+                window.center();
+                window.makeKeyAndOrderFront(None);
+            }
+            NSApplication::sharedApplication(mtm).activate();
+        }
+
+        /// "Add" — read the two macro fields, store the macro, clear the fields.
+        #[unsafe(method(addMacro:))]
+        fn add_macro(&self, _sender: Option<&AnyObject>) {
+            let shortcut = self
+                .ivars()
+                .macro_shortcut
+                .borrow()
+                .as_ref()
+                .map(|f| f.stringValue().to_string())
+                .unwrap_or_default();
+            let expansion = self
+                .ivars()
+                .macro_expansion
+                .borrow()
+                .as_ref()
+                .map(|f| f.stringValue().to_string())
+                .unwrap_or_default();
+            if self.state().add_macro_and_save(&shortcut, &expansion) {
+                let empty = NSString::from_str("");
+                if let Some(f) = self.ivars().macro_shortcut.borrow().as_ref() {
+                    f.setStringValue(&empty);
+                }
+                if let Some(f) = self.ivars().macro_expansion.borrow().as_ref() {
+                    f.setStringValue(&empty);
+                }
+                self.refresh_macros();
+            }
+        }
+
+        /// Remove-macro button clicked; its tag is the macro's index.
+        #[unsafe(method(removeMacro:))]
+        fn remove_macro(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            self.state().remove_macro_and_save(tag as usize);
+            self.refresh_macros();
+        }
     }
 );
 
@@ -206,6 +266,11 @@ impl PrefsController {
             excluded_window: RefCell::new(None),
             list_stack: RefCell::new(None),
             apps: RefCell::new(Vec::new()),
+            macros_window: RefCell::new(None),
+            macro_shortcut: RefCell::new(None),
+            macro_expansion: RefCell::new(None),
+            macros_list: RefCell::new(None),
+            macro_count: RefCell::new(0),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -423,6 +488,25 @@ impl PrefsController {
             )
         };
         root.addArrangedSubview(&manage_button);
+        unsafe {
+            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*manage_button];
+        }
+
+        // ===== Macros =====
+        root.addArrangedSubview(&self.header("Macros", mtm));
+        root.addArrangedSubview(&self.caption(
+            "Text expansion (gõ tắt): type a shortcut then a space to expand it.",
+            mtm,
+        ));
+        let macros_button: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Manage Macros…"),
+                Some(self.as_ref()),
+                Some(sel!(manageMacros:)),
+                mtm,
+            )
+        };
+        root.addArrangedSubview(&macros_button);
 
         window.setContentView(Some(&root));
         *self.ivars().window.borrow_mut() = Some(window);
@@ -538,6 +622,133 @@ impl PrefsController {
             row.addArrangedSubview(&remove);
             list.addArrangedSubview(&row);
         }
+    }
+
+    /// Builds the Macros window on first use: a shortcut/expansion input row and
+    /// the list of existing macros.
+    fn build_macros_window(&self, mtm: MainThreadMarker) {
+        let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 400.0));
+        let style = NSWindowStyleMask::Titled
+            | NSWindowStyleMask::Closable
+            | NSWindowStyleMask::Miniaturizable;
+        let window: Retained<NSWindow> = unsafe {
+            let alloc = NSWindow::alloc(mtm);
+            msg_send![
+                alloc,
+                initWithContentRect: content,
+                styleMask: style,
+                backing: NSBackingStoreType::Buffered,
+                defer: false,
+            ]
+        };
+        window.setTitle(&NSString::from_str("Macros"));
+        unsafe { window.setReleasedWhenClosed(false) };
+
+        let root = NSStackView::new(mtm);
+        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        root.setSpacing(8.0);
+        root.setEdgeInsets(NSEdgeInsets {
+            top: 20.0,
+            left: 20.0,
+            bottom: 20.0,
+            right: 20.0,
+        });
+        unsafe {
+            let _: () = msg_send![&root, setAlignment: 5isize];
+        }
+
+        root.addArrangedSubview(&self.caption(
+            "Type the shortcut then a space to expand it — e.g. “vn” → “Việt Nam”.",
+            mtm,
+        ));
+
+        // Input row: [shortcut] [expansion] [Add]
+        let row = NSStackView::new(mtm);
+        row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        row.setSpacing(8.0);
+        let shortcut = self.input_field("shortcut", 90.0, mtm);
+        let expansion = self.input_field("expansion", 210.0, mtm);
+        let add: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Add"),
+                Some(self.as_ref()),
+                Some(sel!(addMacro:)),
+                mtm,
+            )
+        };
+        row.addArrangedSubview(&shortcut);
+        row.addArrangedSubview(&expansion);
+        row.addArrangedSubview(&add);
+        root.addArrangedSubview(&row);
+        *self.ivars().macro_shortcut.borrow_mut() = Some(shortcut);
+        *self.ivars().macro_expansion.borrow_mut() = Some(expansion);
+
+        let list = NSStackView::new(mtm);
+        list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        list.setSpacing(2.0);
+        unsafe {
+            let _: () = msg_send![&list, setAlignment: 5isize];
+        }
+        root.addArrangedSubview(&list);
+        *self.ivars().macros_list.borrow_mut() = Some(list);
+
+        window.setContentView(Some(&root));
+        *self.ivars().macros_window.borrow_mut() = Some(window);
+    }
+
+    /// Rebuilds the macro rows from the live list.
+    fn refresh_macros(&self) {
+        let mtm = MainThreadMarker::from(self);
+        let Some(list) = self.ivars().macros_list.borrow().clone() else {
+            return;
+        };
+        for view in list.arrangedSubviews().iter() {
+            list.removeArrangedSubview(&view);
+            view.removeFromSuperview();
+        }
+        let macros = self.state().macros();
+        *self.ivars().macro_count.borrow_mut() = macros.len();
+        if macros.is_empty() {
+            list.addArrangedSubview(&self.caption("No macros yet.", mtm));
+            return;
+        }
+        for (index, m) in macros.iter().enumerate() {
+            let row = NSStackView::new(mtm);
+            row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+            row.setSpacing(8.0);
+            let label = self.make_label(&format!("{}  →  {}", m.shortcut, m.expansion), mtm);
+            let width = label.widthAnchor().constraintEqualToConstant(320.0);
+            width.setActive(true);
+            let remove: Retained<NSButton> = unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str("Remove"),
+                    Some(self.as_ref()),
+                    Some(sel!(removeMacro:)),
+                    mtm,
+                )
+            };
+            unsafe {
+                let _: () = msg_send![&remove, setTag: index as isize];
+                let _: () = msg_send![&remove, setControlSize: 1usize];
+            }
+            row.addArrangedSubview(&label);
+            row.addArrangedSubview(&remove);
+            list.addArrangedSubview(&row);
+        }
+    }
+
+    /// An editable single-line text field with a placeholder and fixed width.
+    fn input_field(
+        &self,
+        placeholder: &str,
+        width: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSTextField> {
+        let field = NSTextField::new(mtm);
+        field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
+        let constraint = field.widthAnchor().constraintEqualToConstant(width);
+        constraint.setActive(true);
+        field
     }
 
     // --- small view helpers (type hierarchy: header / label / caption) ---

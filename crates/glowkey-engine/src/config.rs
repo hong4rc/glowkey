@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExclusionList, HotkeyPreset, InputMethod, PlacementStyle};
+use crate::{ExclusionList, HotkeyPreset, InputMethod, Macro, PlacementStyle};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +31,9 @@ pub struct Settings {
     /// The hotkey preset for the global Vietnamese/English toggle.
     #[serde(default)]
     pub toggle_hotkey: HotkeyPreset,
+    /// Text-expansion macros (Unikey's "gõ tắt").
+    #[serde(default)]
+    pub macros: Vec<Macro>,
     /// Whether to open the Settings window when the app launches (like EVKey/Unikey
     /// showing their control panel on start). Default on, so a new user sees the
     /// controls; toggled off from the window itself once they know it.
@@ -47,6 +50,7 @@ impl Default for Settings {
             input_method: InputMethod::default(),
             auto_capitalize: false,
             toggle_hotkey: HotkeyPreset::default(),
+            macros: Vec::new(),
             open_settings_at_launch: true,
         }
     }
@@ -97,6 +101,10 @@ mod tests {
             input_method: InputMethod::Vni,
             auto_capitalize: true,
             toggle_hotkey: HotkeyPreset::CtrlShiftZ,
+            macros: vec![Macro {
+                shortcut: "vn".into(),
+                expansion: "Việt Nam".into(),
+            }],
             open_settings_at_launch: false,
         };
         let restored = Settings::from_json(&settings.to_json());

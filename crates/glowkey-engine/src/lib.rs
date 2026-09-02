@@ -75,6 +75,16 @@ pub enum HotkeyPreset {
     CtrlShiftZ,
 }
 
+/// A text-expansion macro (Unikey's "gõ tắt"): typing `shortcut` then a boundary
+/// replaces it with `expansion`. E.g. `vn` → `Việt Nam`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Macro {
+    /// The typed keys that trigger the expansion (matched case-insensitively).
+    pub shortcut: String,
+    /// The text inserted in place of the shortcut.
+    pub expansion: String,
+}
+
 /// The edit the shell must apply to the document for one keystroke.
 ///
 /// `backspaces` counts **UTF-16 code units** to delete from the end of the text
@@ -337,6 +347,8 @@ pub struct Session {
     pending_capital: bool,
     /// The hotkey preset for the global Vietnamese/English toggle.
     toggle_hotkey: HotkeyPreset,
+    /// Text-expansion macros (shortcut → expansion).
+    macros: Vec<Macro>,
 }
 
 impl Session {
@@ -355,6 +367,7 @@ impl Session {
             auto_capitalize: false,
             pending_capital: true,
             toggle_hotkey: HotkeyPreset::default(),
+            macros: Vec::new(),
         }
     }
 
@@ -370,6 +383,7 @@ impl Session {
         session.open_settings_at_launch = settings.open_settings_at_launch;
         session.auto_capitalize = settings.auto_capitalize;
         session.toggle_hotkey = settings.toggle_hotkey;
+        session.macros = settings.macros.clone();
         session.engine.set_method(settings.input_method);
         session
     }
@@ -385,6 +399,7 @@ impl Session {
             input_method: self.engine.method(),
             auto_capitalize: self.auto_capitalize,
             toggle_hotkey: self.toggle_hotkey,
+            macros: self.macros.clone(),
         }
     }
 
@@ -489,6 +504,35 @@ impl Session {
     /// Sets auto-capitalize.
     pub fn set_auto_capitalize(&mut self, on: bool) {
         self.auto_capitalize = on;
+    }
+
+    /// The text-expansion macros (shortcut → expansion).
+    #[must_use]
+    pub fn macros(&self) -> &[Macro] {
+        &self.macros
+    }
+
+    /// Adds or replaces a macro by shortcut (case-insensitive). Empty shortcut is
+    /// ignored. Returns false if it was ignored.
+    pub fn add_macro(&mut self, shortcut: &str, expansion: &str) -> bool {
+        let shortcut = shortcut.trim();
+        if shortcut.is_empty() {
+            return false;
+        }
+        self.macros
+            .retain(|m| !m.shortcut.eq_ignore_ascii_case(shortcut));
+        self.macros.push(Macro {
+            shortcut: shortcut.to_string(),
+            expansion: expansion.to_string(),
+        });
+        true
+    }
+
+    /// Removes the macro at `index` (as listed by [`macros`](Self::macros)).
+    pub fn remove_macro(&mut self, index: usize) {
+        if index < self.macros.len() {
+            self.macros.remove(index);
+        }
     }
 
     /// The current toggle-hotkey preset.
@@ -616,6 +660,26 @@ impl Session {
     /// should call this once when it sees a word-boundary key, apply any returned
     /// edit, then let the boundary key through.
     pub fn commit(&mut self) -> Option<KeyResponse> {
+        // Macro expansion (gõ tắt) takes precedence over auto-fix: if the typed keys
+        // match a shortcut, replace the on-screen word with the expansion.
+        if self.engine.is_composing() && !self.macros.is_empty() {
+            let typed = self.engine.raw_string();
+            if let Some(expansion) = self
+                .macros
+                .iter()
+                .find(|m| m.shortcut.eq_ignore_ascii_case(&typed))
+                .map(|m| m.expansion.clone())
+            {
+                let on_screen_len = self.engine.current_word().encode_utf16().count();
+                self.engine.reset();
+                self.last_committed = None; // an expansion is not re-composable
+                return Some(KeyResponse {
+                    handled: true,
+                    backspaces: on_screen_len,
+                    insert: expansion,
+                });
+            }
+        }
         let restore = if self.auto_fix && self.engine.is_composing() {
             let rendered = self.engine.current_word();
             if is_invalid_vietnamese(rendered) {

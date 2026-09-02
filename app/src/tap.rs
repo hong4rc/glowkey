@@ -184,6 +184,15 @@ impl TapState {
         }
     }
 
+    /// Adds an app to the ignore list (disables Vietnamese there) and saves. Used by
+    /// the Settings window's "Add App…" picker. Idempotent if already excluded.
+    pub fn add_exclusion_and_save(&self, bundle_id: &str) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.exclusions_mut().add(bundle_id.to_string());
+        }
+        self.save_settings();
+    }
+
     /// Removes an app from the ignore list (re-enables Vietnamese there) and saves.
     /// Used by the Settings window's per-row "Remove" button.
     pub fn remove_exclusion_and_save(&self, bundle_id: &str) {

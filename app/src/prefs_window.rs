@@ -7,21 +7,20 @@
 //! parity come for free. Every change applies to the live session and is persisted
 //! immediately — there is no Apply/OK button, matching macOS Settings behaviour.
 //!
-//! Adding an app to the ignore list is done from the app itself (menu bar →
-//! "Disable for <App>", or ⌃⇧E) — the natural place, since GlowKey already knows
-//! the frontmost app there. This window lists what is excluded and lets you remove
-//! entries and adjust the typing options.
+//! Apps can be added to the ignore list three ways: the "Add App…" picker here, the
+//! menu bar's "Disable for <App>", or ⌃⇧E while in the app. This window lists what
+//! is excluded, lets you add/remove entries, and adjusts the typing options.
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
-    NSSegmentSwitchTracking, NSSegmentedControl, NSStackView, NSTextField,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSModalResponseOK, NSOpenPanel, NSSegmentSwitchTracking, NSSegmentedControl, NSStackView,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString,
+    MainThreadMarker, NSArray, NSBundle, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString, NSURL,
 };
 
 use std::cell::RefCell;
@@ -87,6 +86,36 @@ define_class!(
                 self.state().remove_exclusion_and_save(&bundle_id);
                 self.refresh_list();
             }
+        }
+
+        /// "Add App…" — open a file picker on /Applications and disable Vietnamese
+        /// for each app chosen (resolving its bundle id).
+        #[unsafe(method(addApp:))]
+        fn add_app(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            let panel = NSOpenPanel::openPanel(mtm);
+            let apps_dir = NSURL::fileURLWithPath(&NSString::from_str("/Applications"));
+            panel.setCanChooseFiles(true); // .app bundles are packages (file-like)
+            panel.setCanChooseDirectories(false);
+            panel.setAllowsMultipleSelection(true);
+            panel.setDirectoryURL(Some(&apps_dir));
+            panel.setMessage(Some(&NSString::from_str(
+                "Choose apps to disable Vietnamese in.",
+            )));
+            let response = panel.runModal();
+            if response != NSModalResponseOK {
+                return;
+            }
+            let urls = panel.URLs();
+            for url in urls.iter() {
+                let bundle_id = NSBundle::bundleWithURL(&url)
+                    .and_then(|b| b.bundleIdentifier())
+                    .map(|s| s.to_string());
+                if let Some(bundle_id) = bundle_id {
+                    self.state().add_exclusion_and_save(&bundle_id);
+                }
+            }
+            self.refresh_list();
         }
     }
 );
@@ -206,9 +235,19 @@ impl PrefsController {
         self.add_section_header(&root, "Excluded apps", mtm);
         self.add_help(
             &root,
-            "GlowKey won’t type Vietnamese in these apps. Add one from its menu bar\nitem (“Disable for …”) or with ⌃⇧E while in the app.",
+            "GlowKey won’t type Vietnamese in these apps. Add one below, from the menu\nbar (“Disable for …”), or with ⌃⇧E while in the app.",
             mtm,
         );
+
+        let add_button: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Add App…"),
+                Some(self.as_ref()),
+                Some(sel!(addApp:)),
+                mtm,
+            )
+        };
+        root.addArrangedSubview(&add_button);
 
         let list = NSStackView::new(mtm);
         unsafe {

@@ -242,6 +242,7 @@ impl PrefsController {
             ]
         };
         window.setTitle(&NSString::from_str("GlowKey Settings"));
+        unsafe { window.setReleasedWhenClosed(false) };
 
         // Outer vertical stack fills the content view. Tight rhythm within a group;
         // larger custom gaps separate the two groups (set below).
@@ -445,6 +446,7 @@ impl PrefsController {
             ]
         };
         window.setTitle(&NSString::from_str("Excluded Apps"));
+        unsafe { window.setReleasedWhenClosed(false) };
 
         let root = NSStackView::new(mtm);
         root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);

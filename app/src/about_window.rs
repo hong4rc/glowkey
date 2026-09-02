@@ -37,6 +37,7 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
         ]
     };
     window.setTitle(&NSString::from_str("About GlowKey"));
+    unsafe { window.setReleasedWhenClosed(false) };
 
     let stack = NSStackView::new(mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);

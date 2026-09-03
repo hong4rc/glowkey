@@ -21,11 +21,12 @@ withholds secure input from event taps).
 ## Layout
 
 ```
-crates/glowkey-engine/   Vietnamese logic, settings, ignore list. Platform-free, tested.
-app/                     macOS shell (objc2): event tap, menu bar, Settings, HUD.
-scripts/build-app.sh     Builds a universal GlowKey.app bundle.
-scripts/dev-run.sh       Stop + rebuild + relaunch with debug logging.
-docs/                    Handoff (start here), decision records, UI design.
+crates/glowkey-engine/      Vietnamese logic, settings, ignore list. Platform-free, tested.
+app/                        macOS shell (objc2): event tap, menu bar, Settings, HUD.
+scripts/build-app.sh        Builds a universal app bundle (release or dev variant).
+scripts/release-install.sh  Builds GlowKey.app, installs it to /Applications, launches it.
+scripts/dev-run.sh          Builds and runs "GlowKey Dev" with debug logging.
+docs/                       Handoff (start here), decision records, UI design.
 ```
 
 ## Develop
@@ -33,11 +34,18 @@ docs/                    Handoff (start here), decision records, UI design.
 ```
 cargo test --workspace           # the headless proof — engine + tap decision tests
 cargo clippy --workspace --all-targets
-bash scripts/build-app.sh release   # produce build/GlowKey.app
+bash scripts/release-install.sh  # ship it: build → /Applications → launch
+bash scripts/dev-run.sh          # iterate: build and run "GlowKey Dev" in the foreground
 ```
 
-After a rebuild the ad-hoc re-sign can drop the Accessibility grant — re-enable
-GlowKey in System Settings → Privacy & Security → Accessibility.
+The dev loop builds a **separate app** — `GlowKey Dev`, its own bundle identifier
+— so it holds its own Accessibility permission and iterating never disturbs the
+grant of the GlowKey you actually type with. Never run both at once: two event
+taps process every keystroke twice, and both scripts stop both variants first.
+
+The grant is tied to the ad-hoc signature, so a build that changed the code needs
+a fresh one. The app asks for it on screen and starts by itself once you enable it
+in System Settings → Privacy & Security → Accessibility.
 
 ## Privacy
 

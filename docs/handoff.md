@@ -67,8 +67,21 @@ Cargo workspace:
 - **VNI** input method (`viet65`→`việt`) — Settings picker.
 - **Per-app exclusions**, independent + remembered; ⌃⇧E to toggle the current app.
 - **Auto-fix**: at a boundary, restore raw keys when the result isn't valid
-  Vietnamese (`exit`, not `eĩt`).
+  Vietnamese (`exit`, not `eĩt`). One exemption: a word starting with **đ** is
+  kept as-is. A leading đ costs `dd` (Telex) or `d9` (VNI) and no English word
+  begins with either, so it is always deliberate — this is what keeps the everyday
+  abbreviations `đc`, `đt`, `đk` from being handed back as `ddc`, `ddt`, `ddk`.
+  Words that merely *contain* the pair still restore (`address`, `odd`, `sudden`),
+  since their đ is not leading.
 - **Re-composition**: `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the word).
+- **Mid-word backspace stays composed**: `hoongf`⌫`z` → `hôn`. The host does the
+  delete, so the engine has to land on exactly what the screen shows — the render
+  minus its last character (`hồn`), which means dropping the raw `g` and keeping
+  the tone key `f`. `Engine::backspace_visible_char` searches the raw log from the
+  end for the one removal that re-renders to that target; it returns false when
+  nothing matches and the tap flushes. Note the older `Engine::backspace` pops the
+  last raw *key* instead (`hồng`→`hông`) — wrong for this path, and now unused by
+  the app.
 - **Caret-navigation flush**: arrows/Home/End/Page flush the diff baseline.
 - **Auto-capitalize** first letter of each sentence (opt-in).
 - **Configurable toggle hotkey** (⌃⇧Space / ⌃Space / ⌥Space / ⌃⇧Z) **plus a
@@ -104,6 +117,11 @@ Cargo workspace:
   order in multiprocess apps → `aa`→`aâ`, `hoongf`→`hoồng`). Suppressing every
   letter and emitting all edits from one `CGEventPost` FIFO removes the race by
   construction. This is how EVKey/OpenKey work. See `decisions/` + `tap.rs` header.
+  The **boundary key is part of this invariant**: an auto-fix restore suppresses
+  the space/punctuation that triggered it and replays it from GlowKey's own source
+  (`Decision::EmitThenReplayKey`, flags preserved so ⇧1 stays `!`). Passing it
+  through natively instead lost the race — the host applied it before the posted
+  backspaces, which then ate it: `ddc`␣→`đddc`, `work`␣→`ưwork`, space swallowed.
 - **Mode is session-only.** Persisting the global VN/EN toggle let one accidental
   ⌃⇧Space at quit make the app launch disabled ("aa not work"). Now it always
   launches Vietnamese; only exclusions/auto-fix/style/method/macros/hotkey persist.
@@ -142,9 +160,16 @@ Cargo workspace:
 4. **All GUI is unverifiable headless** (unchanged) — new controls to eyeball:
    English-restore checkbox, the 5-segment hotkey picker ("Custom…" arms the
    recorder; the caption row shows "Current: …"), "VI ⚠" HUD variant.
-5. **Accessibility re-grant after rebuild** — the ad-hoc re-sign drops the grant;
-   after `build-app.sh` the relaunched app waits at the permission gate until the
-   user re-enables it in System Settings → Privacy & Security → Accessibility.
+5. **Accessibility re-grant after rebuild or move** — the ad-hoc signature changes
+   on every build, and copying the bundle elsewhere (to `/Applications`, say)
+   makes a new one as far as the system is concerned, so the grant is dropped and
+   the app waits at the permission gate. The gate is now **visible**: it shows an
+   alert naming the exact fix and offering "Open System Settings", re-shows it
+   after that button, and dismisses itself the moment the switch is flipped —
+   before, an `LSUIElement` agent with no icon and no window simply looked dead
+   (`tap.rs::wait_for_accessibility`, plus the log line "STARTUP waiting for the
+   Accessibility permission"). The alert itself is still unverified by eye — the
+   screen was locked when it was built.
 
 ## 7. Diagnosing from the log (do this first for any reported typing bug)
 
@@ -160,13 +185,31 @@ correct — a reported bug is usually (a) wrong app active (terminal/omnibox) or
 ## 8. Build / test / run
 
 ```bash
-cargo test --workspace         # ~49 tests, all green; the headless proof
+cargo test --workspace         # ~74 tests, all green; the headless proof
 cargo clippy --workspace --all-targets   # must be 0 warnings
-bash scripts/build-app.sh release        # → build/GlowKey.app (universal)
-bash scripts/dev-run.sh                  # stop + rebuild + relaunch w/ GLOWKEY_DEBUG=1
+bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch
+bash scripts/dev-run.sh                  # build+run "GlowKey Dev" w/ GLOWKEY_DEBUG=1
+bash scripts/build-app.sh [release|dev] [release|debug]   # bundle only, no install
 ```
+
+**Two app identities.** The shipped app is `GlowKey` / `io.glowkey.GlowKey`; the
+dev loop builds `GlowKey Dev` / `io.glowkey.GlowKey.dev` (own display name, own
+executable name). They are separate apps to macOS, so each holds its own
+Accessibility entry — iterating on the dev build no longer invalidates the grant
+of the app you actually type with. They share settings and the log, and must
+never run at once (two taps process every keystroke twice); both wrapper scripts
+stop both variants first.
+
 - **Accessibility permission** required (System Settings → Privacy → Accessibility).
-  Granted per bundle path; an ad-hoc re-sign can drop it and re-prompt.
+  The grant is tied to the ad-hoc **signature**, not just the path: an unchanged
+  rebuild keeps the same cdhash and the same grant, but any code change produces a
+  new one and needs a fresh grant. The app says so on screen (§6.5) and starts
+  itself once the switch is flipped. A stable self-signed certificate would end
+  the re-granting; not set up. This bites `release-install.sh` only —
+  **`dev-run.sh` needs no grant at all**: it `exec`s the binary from the shell, so
+  macOS makes the *terminal* the responsible process and the tap inherits the
+  terminal's grant. Verified both ways — the same bundle launched with `open`
+  waits for a permission of its own.
 - Does not work in secure/password fields (macOS withholds those events).
 - The project lives at `~/project/ai/glowkey` inside the `ai/` container of ~25
   repos (`ai/` is NOT a repo; `ls` prints empty in the sandbox — use glob/find).

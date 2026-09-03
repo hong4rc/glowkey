@@ -15,6 +15,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
+    NSAlert, NSSavePanel, NSTabView, NSTabViewItem,
     NSApplication, NSBackingStoreType, NSButton, NSColor, NSControlStateValueOff,
     NSControlStateValueOn, NSFont, NSModalResponseOK, NSOpenPanel, NSSegmentSwitchTracking,
     NSSegmentedControl, NSStackView, NSTextAlignment, NSTextField,
@@ -26,8 +27,9 @@ use objc2_foundation::{
 
 use std::cell::RefCell;
 
-use glowkey_engine::{HotkeyPreset, InputMethod, PlacementStyle};
+use glowkey_engine::{HotkeyPreset, InputMethod, Language, PlacementStyle};
 
+use crate::strings::t;
 use crate::tap::TapState;
 
 /// Ivars for the Settings window controller: the shared `TapState`, the window
@@ -40,6 +42,10 @@ pub struct PrefsIvars {
     /// Separate window holding the excluded-app list, so it stays off the main
     /// Settings pane (advanced/rare, opened via "Manage Excluded Apps…").
     excluded_window: RefCell<Option<Retained<NSWindow>>>,
+    /// Windows replaced by a language change, held until the next rebuild.
+    /// Releasing one inside the action of a control it owns would free the view
+    /// tree under the AppKit frames still unwinding that click.
+    retired_windows: RefCell<Vec<Retained<NSWindow>>>,
     list_stack: RefCell<Option<Retained<NSStackView>>>,
     apps: RefCell<Vec<String>>,
     /// Separate window for text-expansion macros (gõ tắt), with its input fields,
@@ -78,15 +84,15 @@ define_class!(
             self.state().set_style_and_save(style);
         }
 
-        /// Input method changed on the segmented control (0 = Telex, 1 = VNI).
+        /// Input method changed (0 = Telex, 1 = VNI, 2 = Simple Telex).
         #[unsafe(method(inputMethodChanged:))]
         fn input_method_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
-            let method = if seg == 0 {
-                InputMethod::Telex
-            } else {
-                InputMethod::Vni
+            let method = match seg {
+                1 => InputMethod::Vni,
+                2 => InputMethod::SimpleTelex,
+                _ => InputMethod::Telex,
             };
             self.state().set_input_method_and_save(method);
         }
@@ -109,7 +115,7 @@ define_class!(
                         self.state().begin_hotkey_recording();
                         if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
                             label.setStringValue(&NSString::from_str(
-                                "Press a ⌃/⌥ combo… (Esc cancels)",
+                                t("Press a ⌃/⌥ combo… (Esc cancels)", "Bấm tổ hợp ⌃/⌥… (Esc để hủy)"),
                             ));
                         }
                     }
@@ -118,6 +124,200 @@ define_class!(
             };
             self.state().set_toggle_hotkey_and_save(preset);
             self.refresh_hotkey_ui();
+        }
+
+        /// Interface language segment clicked (0 = System, 1 = Vietnamese, 2 = English).
+        /// Rebuilds the windows, since every label in them is now the wrong language.
+        #[unsafe(method(languageChanged:))]
+        fn language_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let seg: isize = unsafe { msg_send![sender, selectedSegment] };
+            let language = match seg {
+                1 => Language::Vietnamese,
+                2 => Language::English,
+                _ => Language::System,
+            };
+            self.state().set_language_and_save(language);
+            self.rebuild_windows();
+        }
+
+        /// Quick Telex checkbox toggled.
+        #[unsafe(method(quickTelexChanged:))]
+        fn quick_telex_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_quick_telex_and_save(state == NSControlStateValueOn);
+        }
+
+        /// "Import…" — read a macro table and merge it into the list.
+        #[unsafe(method(importMacros:))]
+        fn import_macros(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            let panel = NSOpenPanel::openPanel(mtm);
+            panel.setCanChooseFiles(true);
+            panel.setCanChooseDirectories(false);
+            panel.setAllowsMultipleSelection(false);
+            panel.setMessage(Some(&NSString::from_str(t(
+                "Choose a macro table to import.",
+                "Chọn tệp gõ tắt để nhập.",
+            ))));
+            if panel.runModal() != NSModalResponseOK {
+                return;
+            }
+            let Some(path) = panel.URLs().iter().next().and_then(|url| url.path()) else {
+                return;
+            };
+            // Cap the read: this runs on the main thread, and stalling it long
+            // enough gets the event tap disabled by timeout, which stops typing
+            // everywhere. A real macro table is kilobytes.
+            const MAX_TABLE_BYTES: u64 = 4 * 1024 * 1024;
+            let path = path.to_string();
+            if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > MAX_TABLE_BYTES) {
+                self.notify(
+                    t("That file is too large.", "Tệp đó quá lớn."),
+                    t(
+                        "A macro table is normally a few kilobytes.",
+                        "Bảng gõ tắt thường chỉ vài kilobyte.",
+                    ),
+                    mtm,
+                );
+                return;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                self.notify(
+                    t("Could not read that file.", "Không đọc được tệp đó."),
+                    "",
+                    mtm,
+                );
+                return;
+            };
+            if glowkey_engine::Macro::table_is_legacy_viqr(&text) {
+                self.notify(
+                    t(
+                        "That is an old UniKey table.",
+                        "Đó là bảng gõ tắt UniKey cũ.",
+                    ),
+                    t(
+                        "Its text is VIQR-encoded, which GlowKey does not read. Open it in \
+                         UniKey and save it again to convert it to Unicode.",
+                        "Nội dung mã VIQR, GlowKey không đọc được. Mở lại bằng UniKey và lưu \
+                         lại để chuyển sang Unicode.",
+                    ),
+                    mtm,
+                );
+                return;
+            }
+            let imported = glowkey_engine::Macro::parse_table(&text);
+            if imported.is_empty() {
+                let detail = if text.trim_start().starts_with('[') {
+                    t(
+                        "That JSON table could not be read.",
+                        "Không đọc được bảng JSON đó.",
+                    )
+                } else {
+                    t(
+                        "Expected lines of the form shortcut:expansion.",
+                        "Cần các dòng dạng viếttắt:nội dung.",
+                    )
+                };
+                self.notify(
+                    t("No macros in that file.", "Tệp đó không có gõ tắt nào."),
+                    detail,
+                    mtm,
+                );
+                return;
+            }
+            let Some((added, skipped)) = self.state().import_macros_and_save(&imported) else {
+                self.notify(
+                    t("Could not import right now.", "Chưa nhập được lúc này."),
+                    t("Try again in a moment.", "Thử lại sau một lát."),
+                    mtm,
+                );
+                return;
+            };
+            self.refresh_macros();
+            let detail = if skipped == 0 {
+                String::new()
+            } else {
+                t(
+                    "{} skipped — those shortcuts already exist.",
+                    "Bỏ qua {} — các chữ viết tắt đó đã có.",
+                )
+                .replace("{}", &skipped.to_string())
+            };
+            self.notify(
+                &t("Imported {} macros.", "Đã nhập {} gõ tắt.").replace("{}", &added.to_string()),
+                &detail,
+                mtm,
+            );
+        }
+
+        /// "Export…" — write the current macro table to a file.
+        #[unsafe(method(exportMacros:))]
+        fn export_macros(&self, _sender: Option<&AnyObject>) {
+            let mtm = MainThreadMarker::from(self);
+            let panel = NSSavePanel::savePanel(mtm);
+            panel.setNameFieldStringValue(&NSString::from_str("glowkey-macros.txt"));
+            panel.setMessage(Some(&NSString::from_str(t(
+                "Save the macro table.",
+                "Lưu bảng gõ tắt.",
+            ))));
+            if panel.runModal() != NSModalResponseOK {
+                return;
+            }
+            let Some(path) = panel.URL().and_then(|url| url.path()) else {
+                return;
+            };
+            let macros = self.state().macros();
+            let text = glowkey_engine::Macro::format_table(&macros);
+            if std::fs::write(path.to_string(), text).is_err() {
+                self.notify(
+                    t("Could not write that file.", "Không ghi được tệp đó."),
+                    "",
+                    mtm,
+                );
+                return;
+            }
+            // Silence after a save reads as "nothing happened", and an empty table
+            // writes an empty file, which is worth saying out loud.
+            self.notify(
+                &t("Exported {} macros.", "Đã xuất {} gõ tắt.")
+                    .replace("{}", &macros.len().to_string()),
+                if macros.is_empty() {
+                    t("The list is empty, so the file is too.", "Danh sách trống nên tệp cũng trống.")
+                } else {
+                    ""
+                },
+                mtm,
+            );
+        }
+
+        /// "Expand macros even when Vietnamese is off" checkbox toggled.
+        #[unsafe(method(alwaysMacroChanged:))]
+        fn always_macro_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_always_macro_and_save(state == NSControlStateValueOn);
+        }
+
+        /// Mid-word spell check checkbox toggled.
+        #[unsafe(method(strictSpellCheckChanged:))]
+        fn strict_spell_check_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_strict_spell_check_and_save(state == NSControlStateValueOn);
+        }
+
+        /// Telex bracket shortcuts checkbox toggled.
+        #[unsafe(method(telexBracketsChanged:))]
+        fn telex_brackets_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_telex_brackets_and_save(state == NSControlStateValueOn);
         }
 
         /// "Restore common English words" checkbox toggled.
@@ -207,7 +407,7 @@ define_class!(
             panel.setAllowsMultipleSelection(true);
             panel.setDirectoryURL(Some(&apps_dir));
             panel.setMessage(Some(&NSString::from_str(
-                "Choose apps to disable Vietnamese in.",
+                t("Choose apps to disable Vietnamese in.", "Chọn ứng dụng để tắt tiếng Việt."),
             )));
             let response = panel.runModal();
             if response != NSModalResponseOK {
@@ -292,6 +492,7 @@ impl PrefsController {
             state,
             window: RefCell::new(None),
             excluded_window: RefCell::new(None),
+            retired_windows: RefCell::new(Vec::new()),
             list_stack: RefCell::new(None),
             apps: RefCell::new(Vec::new()),
             macros_window: RefCell::new(None),
@@ -303,6 +504,78 @@ impl PrefsController {
             hotkey_label: RefCell::new(None),
         });
         unsafe { msg_send![super(this), init] }
+    }
+
+    /// A short modal report — the only feedback an import or a failed write gets.
+    /// Silence after a file operation reads as "nothing happened".
+    fn notify(&self, message: &str, detail: &str, mtm: MainThreadMarker) {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(message));
+        if !detail.is_empty() {
+            alert.setInformativeText(&NSString::from_str(detail));
+        }
+        alert.runModal();
+    }
+
+    /// Drops every built window so the next open rebuilds it in the current
+    /// language, then reopens Settings. Labels are baked in at build time — the
+    /// alternative, holding a reference to each one to re-set its title, would be
+    /// a field per control for a preference changed approximately once.
+    fn rebuild_windows(&self) {
+        let mtm = MainThreadMarker::from(self);
+        // Safe now: nothing from that generation can be mid-click.
+        self.ivars().retired_windows.borrow_mut().clear();
+
+        // Take the guards in a `let` first. Temporaries in a `for` head live for
+        // the whole loop body, which would hold three `RefMut`s across `close()`
+        // — and `close()` runs arbitrary AppKit code (notifications, key-window
+        // transfer) that could borrow them again and panic, in frames with no
+        // unwind guard. Every other borrow in this file is fallible for the same
+        // reason.
+        let windows = [
+            self.ivars().window.borrow_mut().take(),
+            self.ivars().excluded_window.borrow_mut().take(),
+            self.ivars().macros_window.borrow_mut().take(),
+        ];
+
+        // Reopen whatever the user had open, rather than only Settings.
+        let reopen_excluded = windows[1].as_ref().is_some_and(|w| w.isVisible());
+        let reopen_macros = windows[2].as_ref().is_some_and(|w| w.isVisible());
+
+        // Controls from the discarded windows must not be reachable any more.
+        self.ivars().list_stack.replace(None);
+        self.ivars().macros_list.replace(None);
+        self.ivars().macro_shortcut.replace(None);
+        self.ivars().macro_expansion.replace(None);
+        self.ivars().hotkey_seg.replace(None);
+        self.ivars().hotkey_label.replace(None);
+
+        // Retire rather than release. This runs *from the action of a control
+        // inside the window being torn down*, so dropping the last reference here
+        // would free the view tree — sender and all — underneath the AppKit frames
+        // still unwinding that click. `setReleasedWhenClosed(false)` opts out of
+        // AppKit's own deferral, so the deferral has to be ours: the previous
+        // generation was already released at the top of this function, during some
+        // later event, when nothing of theirs is in flight.
+        {
+            let mut retired = self.ivars().retired_windows.borrow_mut();
+            for window in windows.into_iter().flatten() {
+                window.orderOut(None);
+                retired.push(window);
+            }
+        }
+
+        self.build_window(mtm);
+        self.show_window();
+        if reopen_excluded {
+            self.manage_excluded_apps(sel!(manageExcludedApps:), None);
+        }
+        if reopen_macros {
+            self.manage_macros(sel!(manageMacros:), None);
+        }
+        // The About window is built once and cached elsewhere; it would otherwise
+        // keep whichever language it was first opened in.
+        crate::about_window::invalidate();
     }
 
     /// Builds the window on first call, then refreshes the list and brings it front.
@@ -338,31 +611,46 @@ impl PrefsController {
                 defer: false,
             ]
         };
-        window.setTitle(&NSString::from_str("GlowKey Settings"));
+        window.setTitle(&NSString::from_str(t("GlowKey Settings", "Cài đặt GlowKey")));
         unsafe { window.setReleasedWhenClosed(false) };
 
-        // Outer vertical stack fills the content view. Tight rhythm within a group;
-        // larger custom gaps separate the two groups (set below).
-        let root = NSStackView::new(mtm);
-        root.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        root.setSpacing(6.0);
-        root.setEdgeInsets(NSEdgeInsets {
-            top: 20.0,
-            left: 20.0,
-            bottom: 20.0,
-            right: 20.0,
-        });
-        // Leading-align arranged subviews (NSLayoutAttribute::Leading == 5).
-        unsafe {
-            let _: () = msg_send![&root, setAlignment: 5isize];
-        }
+        // One vertical stack per tab. Every option used to live in a single
+        // scrolling column, which had grown past 800 points tall — a wall of
+        // checkboxes with no shape. Four tabs keep each pane short enough to read
+        // at a glance, and the tab title carries the grouping that section
+        // headers used to.
+        let general = self.tab_stack(mtm);
+        let typing = self.tab_stack(mtm);
+        let corrections = self.tab_stack(mtm);
+        let apps = self.tab_stack(mtm);
 
         // ===== General =====
-        root.addArrangedSubview(&self.header("General", mtm));
+
+        // Interface language — first, because it changes everything below it.
+        let language_labels = NSArray::from_retained_slice(&[
+            NSString::from_str(t("System", "Hệ thống")),
+            NSString::from_str("Tiếng Việt"),
+            NSString::from_str("English"),
+        ]);
+        let language_seg: Retained<NSSegmentedControl> = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &language_labels,
+                NSSegmentSwitchTracking::SelectOne,
+                Some(self.as_ref()),
+                Some(sel!(languageChanged:)),
+                mtm,
+            )
+        };
+        language_seg.setSelectedSegment(match self.state().language() {
+            Language::System => 0,
+            Language::Vietnamese => 1,
+            Language::English => 2,
+        });
+        general.addArrangedSubview(&self.form_row(t("Language", "Ngôn ngữ"), &language_seg, mtm));
 
         let launch_at_login: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Launch GlowKey at login"),
+                &NSString::from_str(t("Launch GlowKey at login", "Khởi động GlowKey cùng máy")),
                 Some(self.as_ref()),
                 Some(sel!(launchAtLoginChanged:)),
                 mtm,
@@ -373,11 +661,11 @@ impl PrefsController {
         } else {
             NSControlStateValueOff
         });
-        root.addArrangedSubview(&launch_at_login);
+        general.addArrangedSubview(&launch_at_login);
 
         let open_at_launch: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Open this window at launch"),
+                &NSString::from_str(t("Open this window at launch", "Mở cửa sổ này khi khởi động")),
                 Some(self.as_ref()),
                 Some(sel!(openAtLaunchChanged:)),
                 mtm,
@@ -388,17 +676,19 @@ impl PrefsController {
         } else {
             NSControlStateValueOff
         });
-        root.addArrangedSubview(&open_at_launch);
+        general.addArrangedSubview(&open_at_launch);
         unsafe {
-            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*open_at_launch];
+            let _: () = msg_send![&general, setCustomSpacing: 22.0f64, afterView: &*open_at_launch];
         }
 
         // ===== Typing =====
-        root.addArrangedSubview(&self.header("Typing", mtm));
 
         // Input method — Telex / VNI.
-        let method_labels =
-            NSArray::from_retained_slice(&[NSString::from_str("Telex"), NSString::from_str("VNI")]);
+        let method_labels = NSArray::from_retained_slice(&[
+            NSString::from_str("Telex"),
+            NSString::from_str("VNI"),
+            NSString::from_str(t("Simple Telex", "Telex đơn giản")),
+        ]);
         let method_seg: Retained<NSSegmentedControl> = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
                 &method_labels,
@@ -408,17 +698,17 @@ impl PrefsController {
                 mtm,
             )
         };
-        method_seg.setSelectedSegment(if self.state().input_method() == InputMethod::Telex {
-            0
-        } else {
-            1
+        method_seg.setSelectedSegment(match self.state().input_method() {
+            InputMethod::Telex => 0,
+            InputMethod::Vni => 1,
+            InputMethod::SimpleTelex => 2,
         });
-        root.addArrangedSubview(&self.form_row("Input method", &method_seg, mtm));
+        typing.addArrangedSubview(&self.form_row(t("Input method", "Kiểu gõ"), &method_seg, mtm));
 
         // Tone marks — aligned label + segmented control.
         let labels = NSArray::from_retained_slice(&[
-            NSString::from_str("Modern  hoà"),
-            NSString::from_str("Classic  hòa"),
+            NSString::from_str(t("Modern  hoà", "Kiểu mới  hoà")),
+            NSString::from_str(t("Classic  hòa", "Kiểu cũ  hòa")),
         ]);
         let seg: Retained<NSSegmentedControl> = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
@@ -434,12 +724,60 @@ impl PrefsController {
         } else {
             1
         });
-        root.addArrangedSubview(&self.form_row("Tone marks", &seg, mtm));
+        typing.addArrangedSubview(&self.form_row(t("Tone marks", "Dấu thanh"), &seg, mtm));
+
+        // Quick Telex — doubled-consonant shortcuts, as EVKey and later UniKey
+        // releases offer. (Not present in the 2015 UniKey source, so the idea is
+        // credited loosely rather than to a specific implementation.)
+        let quick_telex: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str(t("Quick Telex", "Gõ tắt phụ âm")),
+                Some(self.as_ref()),
+                Some(sel!(quickTelexChanged:)),
+                mtm,
+            )
+        };
+        quick_telex.setState(if self.state().quick_telex() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        typing.addArrangedSubview(&quick_telex);
+        typing.addArrangedSubview(&self.caption(
+            t(
+                "A doubled consonant at the start of a syllable types its digraph:\ncc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
+                "Phụ âm gõ đôi ở đầu âm tiết cho ra phụ âm ghép:\ncc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
+            ),
+            mtm,
+        ));
+
+        // Telex bracket shortcuts — UniKey's `[`/`]` vowel keys.
+        let brackets: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str(t("Telex bracket shortcuts", "Phím ngoặc kiểu Telex")),
+                Some(self.as_ref()),
+                Some(sel!(telexBracketsChanged:)),
+                mtm,
+            )
+        };
+        brackets.setState(if self.state().telex_brackets() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        typing.addArrangedSubview(&brackets);
+        typing.addArrangedSubview(&self.caption(
+            t(
+                "[ → ơ, ] → ư, { → Ơ, } → Ư while typing Telex. These four keys stop\nreaching the app entirely, including where they are shortcuts.",
+                "[ → ơ, ] → ư, { → Ơ, } → Ư khi gõ Telex. Bốn phím này sẽ không đến\nứng dụng nữa, kể cả khi chúng là phím tắt.",
+            ),
+            mtm,
+        ));
 
         // Auto-fix — a full-width checkbox with a secondary caption beneath it.
         let checkbox: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Auto-fix non-Vietnamese words"),
+                &NSString::from_str(t("Auto-fix non-Vietnamese words", "Tự động khôi phục từ không phải tiếng Việt")),
                 Some(self.as_ref()),
                 Some(sel!(autoFixChanged:)),
                 mtm,
@@ -450,16 +788,48 @@ impl PrefsController {
         } else {
             NSControlStateValueOff
         });
-        root.addArrangedSubview(&checkbox);
-        root.addArrangedSubview(&self.caption(
-            "Restores the raw keys when the result isn’t valid Vietnamese — types “exit”, not “eĩt”.",
+        corrections.addArrangedSubview(&checkbox);
+        corrections.addArrangedSubview(&self.caption(
+            t(
+                "Restores the raw keys at the space when the result isn’t valid\nVietnamese — types “exit”, not “eĩt”.",
+                "Khôi phục phím gốc ở dấu cách khi kết quả không phải tiếng Việt —\ngõ ra “exit”, không phải “eĩt”.",
+            ),
+            mtm,
+        ));
+
+        // Mid-word spell check — UniKey's second, separate spell-check option.
+        let strict: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str(t(
+                    "Fix as I type, not at the space",
+                    "Sửa ngay khi gõ, không đợi dấu cách",
+                )),
+                Some(self.as_ref()),
+                Some(sel!(strictSpellCheckChanged:)),
+                mtm,
+            )
+        };
+        strict.setState(if self.state().strict_spell_check() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        corrections.addArrangedSubview(&strict);
+        corrections.addArrangedSubview(&self.caption(
+            t(
+                "Restores the raw keys the moment a word stops being possible\nVietnamese — “exit” repairs at the x, not at the space.",
+                "Khôi phục phím gốc ngay khi từ không còn là tiếng Việt hợp lệ —\n“exit” được sửa ngay ở chữ x, không đợi dấu cách.",
+            ),
             mtm,
         ));
 
         // Auto-capitalize — a full-width checkbox with a secondary caption.
         let capitalize: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Auto-capitalize first letter of each sentence"),
+                &NSString::from_str(t(
+                "Auto-capitalize first letter of each sentence",
+                "Tự động viết hoa chữ đầu câu",
+            )),
                 Some(self.as_ref()),
                 Some(sel!(autoCapitalizeChanged:)),
                 mtm,
@@ -470,12 +840,12 @@ impl PrefsController {
         } else {
             NSControlStateValueOff
         });
-        root.addArrangedSubview(&capitalize);
+        corrections.addArrangedSubview(&capitalize);
 
         // English word restore — opt-in resolution of the Telex/English ambiguity.
         let english: Retained<NSButton> = unsafe {
             NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Restore common English words"),
+                &NSString::from_str(t("Restore common English words", "Khôi phục từ tiếng Anh thông dụng")),
                 Some(self.as_ref()),
                 Some(sel!(englishRestoreChanged:)),
                 mtm,
@@ -486,9 +856,12 @@ impl PrefsController {
         } else {
             NSControlStateValueOff
         });
-        root.addArrangedSubview(&english);
-        root.addArrangedSubview(&self.caption(
-            "For mixed English typing: “was” stays “was”, not “ứa”. Trade-off: syllables\nsharing keys with listed words (á→as, í→is, cát→cats, cả→car, hải→hair)\nthen need a different key order or the EN toggle.",
+        corrections.addArrangedSubview(&english);
+        corrections.addArrangedSubview(&self.caption(
+            t(
+                "For mixed English typing: “was” stays “was”, not “ứa”. Trade-off: syllables\nsharing keys with listed words (á→as, í→is, cát→cats, cả→car, hải→hair)\nthen need a different key order or the EN toggle.",
+                "Khi gõ lẫn tiếng Anh: “was” giữ nguyên “was”, không thành “ứa”. Đánh đổi: các\nâm tiết trùng phím với từ trong danh sách (á→as, í→is, cát→cats, cả→car,\nhải→hair) phải gõ theo thứ tự khác hoặc chuyển sang EN.",
+            ),
             mtm,
         ));
 
@@ -499,7 +872,7 @@ impl PrefsController {
             NSString::from_str("⌃Space"),
             NSString::from_str("⌥Space"),
             NSString::from_str("⌃⇧Z"),
-            NSString::from_str("Custom…"),
+            NSString::from_str(t("Custom…", "Tùy chọn…")),
         ]);
         let hotkey_seg: Retained<NSSegmentedControl> = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
@@ -510,7 +883,7 @@ impl PrefsController {
                 mtm,
             )
         };
-        root.addArrangedSubview(&self.form_row("Toggle key", &hotkey_seg, mtm));
+        general.addArrangedSubview(&self.form_row(t("Toggle key", "Phím chuyển"), &hotkey_seg, mtm));
 
         // Status row under the picker: "Current: ⌃⇧Space" / the recording prompt.
         let record_row = NSStackView::new(mtm);
@@ -524,54 +897,95 @@ impl PrefsController {
         let hotkey_label = self.caption("", mtm);
         record_row.addArrangedSubview(&spacer);
         record_row.addArrangedSubview(&hotkey_label);
-        root.addArrangedSubview(&record_row);
+        general.addArrangedSubview(&record_row);
         *self.ivars().hotkey_seg.borrow_mut() = Some(hotkey_seg);
         *self.ivars().hotkey_label.borrow_mut() = Some(hotkey_label);
         self.refresh_hotkey_ui();
 
         // Group separation: a larger gap before the next section header.
         unsafe {
-            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*record_row];
+            let _: () = msg_send![&general, setCustomSpacing: 22.0f64, afterView: &*record_row];
         }
 
         // ===== Excluded apps =====
         // The list itself lives in its own window (advanced/rare) so it does not
         // clutter the everyday settings; this is just the entry point.
-        root.addArrangedSubview(&self.header("Excluded apps", mtm));
-        root.addArrangedSubview(&self.caption(
-            "Apps where GlowKey stays off — terminals & editors by default, so it never\nmangles commands. Toggle the current app anytime with ⌃⇧E.",
+        apps.addArrangedSubview(&self.caption(
+            t(
+                "Apps where GlowKey stays off — terminals & editors by default, so it never\nmangles commands. Toggle the current app anytime with ⌃⇧E.",
+                "Những ứng dụng GlowKey luôn tắt — mặc định là terminal và trình soạn thảo, để\nkhông làm hỏng câu lệnh. Bật tắt ứng dụng hiện tại bất cứ lúc nào bằng ⌃⇧E.",
+            ),
             mtm,
         ));
         let manage_button: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Manage Excluded Apps…"),
+                &NSString::from_str(t("Manage Excluded Apps…", "Quản lý ứng dụng loại trừ…")),
                 Some(self.as_ref()),
                 Some(sel!(manageExcludedApps:)),
                 mtm,
             )
         };
-        root.addArrangedSubview(&manage_button);
+        apps.addArrangedSubview(&manage_button);
         unsafe {
-            let _: () = msg_send![&root, setCustomSpacing: 22.0f64, afterView: &*manage_button];
+            let _: () = msg_send![&apps, setCustomSpacing: 22.0f64, afterView: &*manage_button];
         }
 
         // ===== Macros =====
-        root.addArrangedSubview(&self.header("Macros", mtm));
-        root.addArrangedSubview(&self.caption(
-            "Text expansion (gõ tắt): type a shortcut then a space to expand it.",
+        apps.addArrangedSubview(&self.caption(
+            t(
+                "Text expansion (gõ tắt): type a shortcut then a space to expand it.",
+                "Gõ tắt: gõ chữ viết tắt rồi dấu cách để bung ra.",
+            ),
             mtm,
         ));
         let macros_button: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Manage Macros…"),
+                &NSString::from_str(t("Manage Macros…", "Quản lý gõ tắt…")),
                 Some(self.as_ref()),
                 Some(sel!(manageMacros:)),
                 mtm,
             )
         };
-        root.addArrangedSubview(&macros_button);
+        apps.addArrangedSubview(&macros_button);
 
-        window.setContentView(Some(&root));
+        let always_macro: Retained<NSButton> = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str(t(
+                    "Expand macros even when Vietnamese is off",
+                    "Bung gõ tắt cả khi đã tắt tiếng Việt",
+                )),
+                Some(self.as_ref()),
+                Some(sel!(alwaysMacroChanged:)),
+                mtm,
+            )
+        };
+        always_macro.setState(if self.state().always_macro() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        apps.addArrangedSubview(&always_macro);
+        apps.addArrangedSubview(&self.caption(
+            t(
+                "Never in an excluded app.",
+                "Không áp dụng trong ứng dụng đã loại trừ.",
+            ),
+            mtm,
+        ));
+
+        let tabs = NSTabView::new(mtm);
+        for (title, view) in [
+            (t("General", "Chung"), &general),
+            (t("Typing", "Gõ phím"), &typing),
+            (t("Corrections", "Sửa lỗi"), &corrections),
+            (t("Apps & macros", "Ứng dụng & gõ tắt"), &apps),
+        ] {
+            let item = NSTabViewItem::new();
+            item.setLabel(&NSString::from_str(title));
+            item.setView(Some(view));
+            tabs.addTabViewItem(&item);
+        }
+        window.setContentView(Some(&tabs));
         *self.ivars().window.borrow_mut() = Some(window);
     }
 
@@ -592,7 +1006,7 @@ impl PrefsController {
                 defer: false,
             ]
         };
-        window.setTitle(&NSString::from_str("Excluded Apps"));
+        window.setTitle(&NSString::from_str(t("Excluded Apps", "Ứng dụng loại trừ")));
         unsafe { window.setReleasedWhenClosed(false) };
 
         let root = NSStackView::new(mtm);
@@ -609,12 +1023,15 @@ impl PrefsController {
         }
 
         root.addArrangedSubview(&self.caption(
-            "GlowKey types plain keys in these apps. Add one below, from the menu bar\n(“Disable for …”), or with ⌃⇧E while in the app.",
+            t(
+                "GlowKey types plain keys in these apps. Add one below, from the menu bar\n(“Disable for …”), or with ⌃⇧E while in the app.",
+                "GlowKey gõ phím thường trong các ứng dụng này. Thêm ở dưới, từ thanh menu\n(“Tắt cho …”), hoặc bằng ⌃⇧E khi đang ở trong ứng dụng.",
+            ),
             mtm,
         ));
         let add_button: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Add App…"),
+                &NSString::from_str(t("Add App…", "Thêm ứng dụng…")),
                 Some(self.as_ref()),
                 Some(sel!(addApp:)),
                 mtm,
@@ -654,7 +1071,7 @@ impl PrefsController {
         *self.ivars().apps.borrow_mut() = ids.clone();
 
         if ids.is_empty() {
-            list.addArrangedSubview(&self.caption("No apps excluded.", mtm));
+            list.addArrangedSubview(&self.caption(t("No apps excluded.", "Chưa có ứng dụng nào."), mtm));
             return;
         }
 
@@ -670,7 +1087,7 @@ impl PrefsController {
 
             let remove: Retained<NSButton> = unsafe {
                 NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str("Remove"),
+                    &NSString::from_str(t("Remove", "Xóa")),
                     Some(self.as_ref()),
                     Some(sel!(removeApp:)),
                     mtm,
@@ -704,7 +1121,7 @@ impl PrefsController {
                 defer: false,
             ]
         };
-        window.setTitle(&NSString::from_str("Macros"));
+        window.setTitle(&NSString::from_str(t("Macros", "Gõ tắt")));
         unsafe { window.setReleasedWhenClosed(false) };
 
         let root = NSStackView::new(mtm);
@@ -721,7 +1138,10 @@ impl PrefsController {
         }
 
         root.addArrangedSubview(&self.caption(
-            "Type the shortcut then a space to expand it — e.g. “vn” → “Việt Nam”.",
+            t(
+                "Type the shortcut then a space to expand it — e.g. “vn” → “Việt Nam”.",
+                "Gõ chữ viết tắt rồi dấu cách để bung ra — ví dụ “vn” → “Việt Nam”.",
+            ),
             mtm,
         ));
 
@@ -729,11 +1149,11 @@ impl PrefsController {
         let row = NSStackView::new(mtm);
         row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         row.setSpacing(8.0);
-        let shortcut = self.input_field("shortcut", 90.0, mtm);
-        let expansion = self.input_field("expansion", 210.0, mtm);
+        let shortcut = self.input_field(t("shortcut", "viết tắt"), 90.0, mtm);
+        let expansion = self.input_field(t("expansion", "nội dung"), 210.0, mtm);
         let add: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Add"),
+                &NSString::from_str(t("Add", "Thêm")),
                 Some(self.as_ref()),
                 Some(sel!(addMacro:)),
                 mtm,
@@ -745,6 +1165,31 @@ impl PrefsController {
         root.addArrangedSubview(&row);
         *self.ivars().macro_shortcut.borrow_mut() = Some(shortcut);
         *self.ivars().macro_expansion.borrow_mut() = Some(expansion);
+
+        // Import/export — the migration path for someone arriving from Unikey or
+        // EVKey with a table they have curated for years.
+        let file_row = NSStackView::new(mtm);
+        file_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        file_row.setSpacing(8.0);
+        for (title, action) in [
+            (t("Import…", "Nhập…"), sel!(importMacros:)),
+            (t("Export…", "Xuất…"), sel!(exportMacros:)),
+        ] {
+            let button: Retained<NSButton> = unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str(title),
+                    Some(self.as_ref()),
+                    Some(action),
+                    mtm,
+                )
+            };
+            unsafe {
+                // NSControlSizeSmall == 1 — secondary to Add.
+                let _: () = msg_send![&button, setControlSize: 1usize];
+            }
+            file_row.addArrangedSubview(&button);
+        }
+        root.addArrangedSubview(&file_row);
 
         let list = NSStackView::new(mtm);
         list.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
@@ -772,7 +1217,7 @@ impl PrefsController {
         let macros = self.state().macros();
         *self.ivars().macro_count.borrow_mut() = macros.len();
         if macros.is_empty() {
-            list.addArrangedSubview(&self.caption("No macros yet.", mtm));
+            list.addArrangedSubview(&self.caption(t("No macros yet.", "Chưa có gõ tắt nào."), mtm));
             return;
         }
         for (index, m) in macros.iter().enumerate() {
@@ -784,7 +1229,7 @@ impl PrefsController {
             width.setActive(true);
             let remove: Retained<NSButton> = unsafe {
                 NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str("Remove"),
+                    &NSString::from_str(t("Remove", "Xóa")),
                     Some(self.as_ref()),
                     Some(sel!(removeMacro:)),
                     mtm,
@@ -832,25 +1277,35 @@ impl PrefsController {
             seg.setSelectedSegment(selected);
         }
         if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {
-            label.setStringValue(&NSString::from_str(&format!(
-                "Current: {}",
-                hotkey_display(preset)
-            )));
+            label.setStringValue(&NSString::from_str(
+                &t("Current: {}", "Hiện tại: {}").replace("{}", &hotkey_display(preset)),
+            ));
         }
     }
 
     // --- small view helpers (type hierarchy: header / label / caption) ---
 
+    /// One tab's content stack: vertical, leading-aligned, inset from the pane.
+    fn tab_stack(&self, mtm: MainThreadMarker) -> Retained<NSStackView> {
+        let stack = NSStackView::new(mtm);
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
+        stack.setSpacing(6.0);
+        stack.setEdgeInsets(NSEdgeInsets {
+            top: 18.0,
+            left: 18.0,
+            bottom: 18.0,
+            right: 18.0,
+        });
+        // Leading-align arranged subviews (NSLayoutAttribute::Leading == 5).
+        unsafe {
+            let _: () = msg_send![&stack, setAlignment: 5isize];
+        }
+        stack
+    }
+
     /// A plain primary-color label.
     fn make_label(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
         NSTextField::labelWithString(&NSString::from_str(text), mtm)
-    }
-
-    /// A bold group header (e.g. "Typing").
-    fn header(&self, text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
-        let label = self.make_label(text, mtm);
-        label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
-        label
     }
 
     /// A smaller secondary-color caption for explanatory text.

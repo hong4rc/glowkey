@@ -73,11 +73,11 @@ Split by platform boundary:
 
 ## Success Criteria
 
-- [ ] `Settings` round-trips through JSON losslessly (unit test)
-- [ ] Corrupt/missing file loads defaults without panicking (unit test)
-- [ ] `from_settings` + `snapshot` preserve exclusions, auto-fix, style, mode
-- [ ] Engine crate still compiles and tests on Linux
-- [ ] App loads settings on startup and writes them on change (verified by a manual run: toggle something, check the file)
+- [x] `Settings` round-trips through JSON losslessly (unit test)
+- [x] Corrupt/missing file loads defaults without panicking (unit test)
+- [x] `from_settings` + `snapshot` preserve exclusions, auto-fix, style, mode
+- [x] Engine crate still compiles and tests on Linux
+- [x] App loads settings on startup and writes them on change (verified by a manual run: toggle something, check the file)
 
 ## Risk Assessment
 

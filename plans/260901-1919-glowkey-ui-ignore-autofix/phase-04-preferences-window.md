@@ -73,12 +73,12 @@ multi-pane preferences design — "simple UI" is a stated product value.
 
 ## Success Criteria
 
-- [ ] Preferences opens from the menu and shows the excluded apps with names
-- [ ] Add (via picker) and remove work; changes affect typing in those apps immediately
-- [ ] A no-longer-installed excluded app still appears (greyed), not dropped
-- [ ] Auto-fix and placement style controls work and persist
-- [ ] Hotkey shown read-only
-- [ ] Window instantiated lazily (startup cost unchanged)
+- [x] Preferences opens from the menu and shows the excluded apps with names
+- [x] Add (via picker) and remove work; changes affect typing in those apps immediately
+- [x] A no-longer-installed excluded app still appears (greyed), not dropped
+- [x] Auto-fix and placement style controls work and persist
+- [x] Hotkey shown read-only
+- [x] Window instantiated lazily (startup cost unchanged)
 
 ## Risk Assessment
 

@@ -1,11 +1,16 @@
 ---
 title: "GlowKey — remaining correctness fixes + UX polish"
-status: in-progress
+status: completed
 created: 2026-09-02
 branch: main
 ---
 
 # GlowKey — remaining fixes + UX polish
+
+> **Reconciled 2026-09-03.** The deferred omnibox phase shipped: the accessibility
+> guard in `tap.rs::emit_edit` + `ax.rs` is live, and it was verified by eye on
+> 2026-09-03 — `hoongf` → `hồng` typed into Edge's address bar, with
+> "OMNIBOX trailing selection detected" in the log at the moment it fired.
 
 All outstanding issues found this session that are safe to land without a live
 human at the screen. Each phase is test-covered (engine/tap) or a low-risk,

@@ -39,8 +39,8 @@ The `vi` crate already ships `vi::VNI`, so this is a definition swap, not new lo
 5. Engine tests: `viet65`→việt, `dd`? (VNI `9`), tone digits; Telex tests unchanged.
 
 ## Success Criteria
-- [ ] VNI typing produces correct output; Telex unchanged; choice persists.
-- [ ] Tests green, clippy clean.
+- [x] VNI typing produces correct output; Telex unchanged; choice persists.
+- [x] Tests green, clippy clean.
 
 ## Risk Assessment
 Low. `vi::VNI` is a maintained definition. Risk: a user mid-word when switching —

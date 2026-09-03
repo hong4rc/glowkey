@@ -34,8 +34,8 @@ main bundle's Info.plist.
 3. Menu item "About GlowKey" near Settings.
 
 ## Success Criteria
-- [ ] About window opens from the menu and shows the correct version.
-- [ ] Clippy clean, bundle builds.
+- [x] About window opens from the menu and shows the correct version.
+- [x] Clippy clean, bundle builds.
 
 ## Risk Assessment
 Low. Pure UI. Unverifiable headless; described for the user's visual check.

@@ -1,7 +1,7 @@
 ---
 title: "GlowKey — menu bar UI, per-app ignore control, and auto-fix"
 description: "Give GlowKey a menu bar, a per-application enable/disable model (quick current-app toggle + a managed list), persisted settings, and an optional auto-fix that restores invalid Vietnamese to the raw English word (exit, not eĩt)."
-status: pending
+status: completed
 priority: P1
 effort: "1.5-2 weeks"
 tags: [glowkey, macos, objc2, ui, ignore-list, auto-fix, telex]
@@ -9,6 +9,11 @@ created: 2026-09-01
 ---
 
 # GlowKey — menu bar UI, per-app ignore control, and auto-fix
+
+> **Reconciled 2026-09-03.** Every deliverable here shipped over the following
+> days — menu bar, per-app exclusions with tombstones, persisted settings and
+> auto-fix are all live and documented in `docs/handoff.md` §4. The checkboxes
+> were simply never ticked; the status is corrected rather than the work redone.
 
 ## Overview
 

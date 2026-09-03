@@ -36,7 +36,7 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
             defer: false,
         ]
     };
-    window.setTitle(&NSString::from_str("About GlowKey"));
+    window.setTitle(&NSString::from_str(crate::strings::t("About GlowKey", "Giới thiệu GlowKey")));
     unsafe { window.setReleasedWhenClosed(false) };
 
     let stack = NSStackView::new(mtm);
@@ -58,7 +58,9 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
     stack.addArrangedSubview(&name);
 
     let version = NSTextField::labelWithString(
-        &NSString::from_str(&format!("Version {}", version_string())),
+        &NSString::from_str(
+            &crate::strings::t("Version {}", "Phiên bản {}").replace("{}", &version_string()),
+        ),
         mtm,
     );
     version.setFont(Some(&NSFont::systemFontOfSize(12.0)));
@@ -66,13 +68,19 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
     stack.addArrangedSubview(&version);
 
     let desc = NSTextField::labelWithString(
-        &NSString::from_str("Vietnamese Telex & VNI input for macOS"),
+        &NSString::from_str(crate::strings::t(
+            "Vietnamese Telex & VNI input for macOS",
+            "Bộ gõ tiếng Việt Telex & VNI cho macOS",
+        )),
         mtm,
     );
     stack.addArrangedSubview(&desc);
 
     let credit = NSTextField::labelWithString(
-        &NSString::from_str("An EVKey-style keyboard wrapper, all-Rust."),
+        &NSString::from_str(crate::strings::t(
+            "An EVKey-style keyboard wrapper, all-Rust.",
+            "Bộ gõ kiểu EVKey, viết hoàn toàn bằng Rust.",
+        )),
         mtm,
     );
     credit.setFont(Some(&NSFont::systemFontOfSize(11.0)));
@@ -89,6 +97,17 @@ thread_local! {
 }
 
 /// Opens (creating on first call) the About window. Called from the menu bar.
+/// Discards the cached window so the next open rebuilds it. Its labels are baked
+/// in at build time, so a language change would otherwise leave it in whichever
+/// language it was first opened in.
+pub fn invalidate() {
+    WINDOW.with(|cell| {
+        if let Some(window) = cell.borrow_mut().take() {
+            window.orderOut(None);
+        }
+    });
+}
+
 pub fn show(mtm: MainThreadMarker) {
     WINDOW.with(|slot| {
         let mut slot = slot.borrow_mut();

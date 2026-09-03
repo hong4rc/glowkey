@@ -15,8 +15,9 @@ withholds secure input from event taps).
 
 > **Status: feature-complete against the useful Unikey/EVKey set** — Telex/VNI,
 > per-app exclusions, auto-fix, macros (gõ tắt), auto-capitalize, configurable +
-> recordable toggle hotkey, opt-in English word restore. Live GUI verification
-> ongoing. See [`docs/handoff.md`](docs/handoff.md) for the full state.
+> recordable toggle hotkey, opt-in English word restore, Vietnamese interface,
+> macro import/export, opt-in Quick Telex. Live GUI verification ongoing. See
+> [`docs/handoff.md`](docs/handoff.md) for the full state.
 
 ## Layout
 

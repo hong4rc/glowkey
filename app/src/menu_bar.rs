@@ -13,12 +13,13 @@ use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength, NSWorkspace,
+    NSPasteboard, NSPasteboardTypeString, NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
 use std::cell::RefCell;
 
+use crate::strings::t;
 use crate::tap::TapState;
 
 /// Ivars for the menu controller: a pointer to the leaked, program-lifetime
@@ -91,6 +92,21 @@ define_class!(
             self.state().reset();
         }
 
+        #[unsafe(method(clipboardRemoveTones:))]
+        fn clipboard_remove_tones(&self, _sender: Option<&AnyObject>) {
+            transform_clipboard(glowkey_engine::remove_tones);
+        }
+
+        #[unsafe(method(clipboardUppercase:))]
+        fn clipboard_uppercase(&self, _sender: Option<&AnyObject>) {
+            transform_clipboard(|text| text.to_uppercase());
+        }
+
+        #[unsafe(method(clipboardLowercase:))]
+        fn clipboard_lowercase(&self, _sender: Option<&AnyObject>) {
+            transform_clipboard(|text| text.to_lowercase());
+        }
+
         #[unsafe(method(revealLog:))]
         fn reveal_log(&self, _sender: Option<&AnyObject>) {
             // Reveal the log file in Finder so it is easy to grab when reporting an
@@ -131,6 +147,24 @@ define_class!(
     }
 );
 
+/// Rewrites the clipboard's text through `transform` — UniKey's "Công cụ"
+/// tools, which work on a selection there and on the clipboard here because a
+/// background agent has no selection of its own to act on.
+///
+/// Does nothing when the clipboard holds no text, so a stray click on the menu
+/// item cannot destroy an image or a file the user had copied.
+fn transform_clipboard(transform: impl FnOnce(&str) -> String) {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let Some(text) = (unsafe { pasteboard.stringForType(NSPasteboardTypeString) }) else {
+        return;
+    };
+    let transformed = transform(&text.to_string());
+    unsafe {
+        pasteboard.clearContents();
+        pasteboard.setString_forType(&NSString::from_str(&transformed), NSPasteboardTypeString);
+    }
+}
+
 impl MenuController {
     fn state(&self) -> &TapState {
         // Safe: the pointer is to a leaked, program-lifetime TapState, and this
@@ -156,23 +190,24 @@ impl MenuController {
         let mtm = MainThreadMarker::from(self);
 
         let (app_name, bundle_id) =
-            crate::app_info::frontmost().unwrap_or_else(|| ("this app".to_string(), String::new()));
+            crate::app_info::frontmost()
+                .unwrap_or_else(|| (t("this app", "ứng dụng này").to_string(), String::new()));
         let (mode, auto_fix, excluded) = self.state().menu_state(&bundle_id);
 
         // Header: current state.
         let header = match (excluded, mode) {
-            (true, _) => format!("Excluded in {app_name}"),
-            (false, glowkey_engine::InputMode::Vietnamese) => "Vietnamese".to_string(),
-            (false, glowkey_engine::InputMode::English) => "English".to_string(),
+            (true, _) => t("Excluded in {}", "Đã tắt trong {}").replace("{}", &app_name),
+            (false, glowkey_engine::InputMode::Vietnamese) => t("Vietnamese", "Tiếng Việt").to_string(),
+            (false, glowkey_engine::InputMode::English) => t("English", "Tiếng Anh").to_string(),
         };
         self.add_disabled(menu, &header, mtm);
         self.add_separator(menu, mtm);
 
         // Enable/Disable Vietnamese for the current app (the quick per-app switch).
         let toggle_label = if excluded {
-            format!("Enable for “{app_name}”")
+            t("Enable for “{}”", "Bật cho “{}”").replace("{}", &app_name)
         } else {
-            format!("Disable for “{app_name}”")
+            t("Disable for “{}”", "Tắt cho “{}”").replace("{}", &app_name)
         };
         self.add_item(menu, &toggle_label, sel!(toggleCurrentApp:), false, "", mtm);
 
@@ -184,7 +219,7 @@ impl MenuController {
         let mode_on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
         self.add_item(
             menu,
-            "Vietnamese input (⌃⇧Space)",
+            t("Vietnamese input (⌃⇧Space)", "Gõ tiếng Việt (⌃⇧Space)"),
             sel!(toggleMode:),
             mode_on,
             "",
@@ -194,7 +229,7 @@ impl MenuController {
         // Auto-fix toggle.
         self.add_item(
             menu,
-            "Auto-fix English words",
+            t("Auto-fix English words", "Tự động sửa từ tiếng Anh"),
             sel!(toggleAutoFix:),
             auto_fix,
             "",
@@ -207,7 +242,7 @@ impl MenuController {
         // safety-valve reset for the (human-unreachable) circuit breaker.
         self.add_item(
             menu,
-            "Open at login",
+            t("Open at login", "Khởi động cùng máy"),
             sel!(toggleLaunchAtLogin:),
             crate::login_item::is_enabled(),
             "",
@@ -215,15 +250,44 @@ impl MenuController {
         );
         self.add_item(
             menu,
-            "Reset input (if stuck)",
+            t("Reset input (if stuck)", "Đặt lại bộ gõ (nếu bị kẹt)"),
             sel!(resetEngine:),
+            false,
+            "",
+            mtm,
+        );
+        // Clipboard tools — UniKey's "Công cụ": transform whatever is on the
+        // clipboard in place. Copy, pick one, paste.
+        self.add_item(
+            menu,
+            t("Clipboard: remove tones", "Clipboard: bỏ dấu"),
+            sel!(clipboardRemoveTones:),
             false,
             "",
             mtm,
         );
         self.add_item(
             menu,
-            "Reveal Log in Finder",
+            t("Clipboard: UPPERCASE", "Clipboard: CHỮ HOA"),
+            sel!(clipboardUppercase:),
+            false,
+            "",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            t("Clipboard: lowercase", "Clipboard: chữ thường"),
+            sel!(clipboardLowercase:),
+            false,
+            "",
+            mtm,
+        );
+
+        self.add_separator(menu, mtm);
+
+        self.add_item(
+            menu,
+            t("Reveal Log in Finder", "Mở nhật ký trong Finder"),
             sel!(revealLog:),
             false,
             "",
@@ -231,9 +295,30 @@ impl MenuController {
         );
 
         self.add_separator(menu, mtm);
-        self.add_item(menu, "Settings…", sel!(openSettings:), false, ",", mtm);
-        self.add_item(menu, "About GlowKey", sel!(aboutGlowKey:), false, "", mtm);
-        self.add_item(menu, "Quit GlowKey", sel!(quit:), false, "q", mtm);
+        self.add_item(
+            menu,
+            t("Settings…", "Cài đặt…"),
+            sel!(openSettings:),
+            false,
+            ",",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            t("About GlowKey", "Giới thiệu GlowKey"),
+            sel!(aboutGlowKey:),
+            false,
+            "",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            t("Quit GlowKey", "Thoát GlowKey"),
+            sel!(quit:),
+            false,
+            "q",
+            mtm,
+        );
     }
 
     fn add_item(

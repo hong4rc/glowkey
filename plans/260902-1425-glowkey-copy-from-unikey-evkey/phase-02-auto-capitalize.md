@@ -37,8 +37,8 @@ Unikey's "Viết hoa chữ đầu câu": when enabled, the first letter of a sen
 5. Tests: `xin chaof. hello` → `Xin chào. Hello` when on; unchanged when off.
 
 ## Success Criteria
-- [ ] Sentence starts capitalize when on; no effect when off; manual caps preserved.
-- [ ] Tests green, clippy clean.
+- [x] Sentence starts capitalize when on; no effect when off; manual caps preserved.
+- [x] Tests green, clippy clean.
 
 ## Risk Assessment
 Medium. Sentence detection is heuristic (abbreviations like "e.g." over-trigger).

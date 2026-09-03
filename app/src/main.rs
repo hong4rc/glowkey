@@ -28,6 +28,8 @@ mod prefs_window;
 #[cfg(target_os = "macos")]
 mod settings_store;
 #[cfg(target_os = "macos")]
+mod strings;
+#[cfg(target_os = "macos")]
 mod tap;
 
 #[cfg(target_os = "macos")]

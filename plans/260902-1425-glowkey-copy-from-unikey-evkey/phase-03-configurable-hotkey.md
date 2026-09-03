@@ -37,8 +37,8 @@ Unikey/EVKey let the user pick the VN/EN toggle hotkey. GlowKey hard-codes
 4. Tests: each preset's `is_toggle_hotkey` matches only its combo (real CGEvents).
 
 ## Success Criteria
-- [ ] Selected hotkey toggles mode; others don't; choice persists.
-- [ ] Tests green, clippy clean.
+- [x] Selected hotkey toggles mode; others don't; choice persists.
+- [x] Tests green, clippy clean.
 
 ## Risk Assessment
 Medium. A chosen combo could clash with a system/app shortcut; presets are curated

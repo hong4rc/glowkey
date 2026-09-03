@@ -86,11 +86,11 @@ restores. Confirm this exact case in a test.
 
 ## Success Criteria
 
-- [ ] `exit` restores to `exit` at the boundary with auto-fix on
-- [ ] `hồng` and a batch of real words are never restored
-- [ ] auto-fix off leaves the Telex result in place
-- [ ] The restore edit reconstructs correctly when applied (unit + tap-harness test)
-- [ ] Engine still compiles and tests on Linux
+- [x] `exit` restores to `exit` at the boundary with auto-fix on
+- [x] `hồng` and a batch of real words are never restored
+- [x] auto-fix off leaves the Telex result in place
+- [x] The restore edit reconstructs correctly when applied (unit + tap-harness test)
+- [x] Engine still compiles and tests on Linux
 
 ## Risk Assessment
 

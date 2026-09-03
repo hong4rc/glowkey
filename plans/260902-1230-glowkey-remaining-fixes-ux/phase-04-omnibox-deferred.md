@@ -31,7 +31,7 @@ normal-field case (the primary feature). Revisit WITH the user present:
    doesn't regress normal fields, keep only if clean.
 
 ## Success Criteria
-- [ ] Live-verified fix that leaves normal fields intact, OR a documented
+- [x] Live-verified fix that leaves normal fields intact, OR a documented
       accepted limitation (as EVKey has).
 
 ## Risk Assessment

@@ -84,12 +84,12 @@ Updating labels: rebuild or update the menu when it is about to open
 
 ## Success Criteria
 
-- [ ] Status item appears and shows VN / EN / excluded correctly
-- [ ] "Disable/Enable for <App>" names the real frontmost app and toggles it; typing changes immediately
-- [ ] Mode toggle and auto-fix checkbox work and show correct check state
-- [ ] Actions persist (relaunch keeps them)
-- [ ] Quit works cleanly
-- [ ] No `borrow_mut` panic under normal use
+- [x] Status item appears and shows VN / EN / excluded correctly
+- [x] "Disable/Enable for <App>" names the real frontmost app and toggles it; typing changes immediately
+- [x] Mode toggle and auto-fix checkbox work and show correct check state
+- [x] Actions persist (relaunch keeps them)
+- [x] Quit works cleanly
+- [x] No `borrow_mut` panic under normal use
 
 ## Risk Assessment
 

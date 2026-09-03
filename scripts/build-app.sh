@@ -79,6 +79,10 @@ plist="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $APP_NAME" "$plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $APP_NAME" "$plist"
 
+# The icon is a committed artifact (regenerate with scripts/make-icon.sh), so a
+# plain build needs no image tooling. CFBundleIconFile in Info.plist names it.
+cp "$ROOT/app/Resources/AppIcon.icns" "$APP/Contents/Resources/"
+
 cp "$ROOT/THIRD-PARTY-NOTICES.md" "$APP/Contents/Resources/" 2>/dev/null || true
 
 # Ad-hoc sign so macOS lets it request Accessibility and run.

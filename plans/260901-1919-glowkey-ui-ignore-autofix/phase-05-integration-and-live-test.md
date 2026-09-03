@@ -52,13 +52,13 @@ flow end to end: a change in the menu or prefs updates the `Session`, writes
 
 ## Success Criteria
 
-- [ ] Every `plan.md` success criterion verified on a live machine
-- [ ] Menu bar per-app toggle works across Slack, Chrome, TextEdit; terminals stay excluded
-- [ ] Preferences add/remove/options all work and persist across relaunch
-- [ ] Auto-fix behaves (`exit` restored, real Vietnamese untouched)
-- [ ] Full `cargo test` + clippy green; engine still builds on Linux
-- [ ] Privacy guard passes (no networking framework linked)
-- [ ] `docs/checkpoint.md` and `README.md` current
+- [x] Every `plan.md` success criterion verified on a live machine
+- [x] Menu bar per-app toggle works across Slack, Chrome, TextEdit; terminals stay excluded
+- [x] Preferences add/remove/options all work and persist across relaunch
+- [x] Auto-fix behaves (`exit` restored, real Vietnamese untouched)
+- [x] Full `cargo test` + clippy green; engine still builds on Linux
+- [x] Privacy guard passes (no networking framework linked)
+- [x] `docs/checkpoint.md` and `README.md` current
 
 ## Risk Assessment
 

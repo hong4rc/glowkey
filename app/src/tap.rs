@@ -345,6 +345,100 @@ impl TapState {
         self.save_settings();
     }
 
+    /// The user-interface language preference, for the Settings picker.
+    pub fn language(&self) -> glowkey_engine::Language {
+        self.session
+            .try_borrow()
+            .map(|s| s.language())
+            .unwrap_or_default()
+    }
+
+    /// Sets the interface language, applies it to the live string table, and saves.
+    pub fn set_language_and_save(&self, language: glowkey_engine::Language) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_language(language);
+        }
+        crate::strings::set_language(language);
+        self.save_settings();
+    }
+
+    /// Whether macros expand while Vietnamese is off, for the Settings checkbox.
+    pub fn always_macro(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.always_macro())
+            .unwrap_or(false)
+    }
+
+    /// Sets whether macros expand while Vietnamese is off, and saves.
+    pub fn set_always_macro_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_always_macro(on);
+        }
+        self.save_settings();
+    }
+
+    /// Whether the mid-word spell check is on, for the Settings checkbox.
+    pub fn strict_spell_check(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.strict_spell_check())
+            .unwrap_or(false)
+    }
+
+    /// Sets the mid-word spell check and saves.
+    pub fn set_strict_spell_check_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_strict_spell_check(on);
+        }
+        self.save_settings();
+    }
+
+    /// Whether the Telex bracket shortcuts are on, for the Settings checkbox.
+    pub fn telex_brackets(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.telex_brackets())
+            .unwrap_or(false)
+    }
+
+    /// Sets the Telex bracket shortcuts and saves.
+    pub fn set_telex_brackets_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_telex_brackets(on);
+        }
+        self.save_settings();
+    }
+
+    /// Whether Quick Telex is on, for the Settings checkbox.
+    pub fn quick_telex(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.quick_telex())
+            .unwrap_or(false)
+    }
+
+    /// Sets Quick Telex and saves.
+    pub fn set_quick_telex_and_save(&self, on: bool) {
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_quick_telex(on);
+        }
+        self.save_settings();
+    }
+
+    /// Merges an imported macro table and saves, returning `(added, skipped)`, or
+    /// `None` if the session was busy and nothing was applied — the caller reports
+    /// a count, so "did not run" must not read as "imported 0". The merge rule
+    /// itself lives in [`Session::import_macros`].
+    pub fn import_macros_and_save(
+        &self,
+        imported: &[glowkey_engine::Macro],
+    ) -> Option<(usize, usize)> {
+        let counts = self.session.try_borrow_mut().ok()?.import_macros(imported);
+        self.save_settings();
+        Some(counts)
+    }
+
     /// The text-expansion macros, cloned for the Settings list.
     pub fn macros(&self) -> Vec<glowkey_engine::Macro> {
         self.session
@@ -450,7 +544,20 @@ impl TapState {
         if was_recording && !*self.recording_hotkey.borrow() {
             self.save_settings();
         }
-        self.log_key(event, &decision);
+        // Logged before the decision is carried out, deliberately. The lines the
+        // arms write themselves (TOGGLE, OMNIBOX, RUNAWAY) must come *after* the
+        // KEY line that caused them or the log reads backwards, and the KEY line
+        // for a key whose emit path panics — the callback is `catch_unwind`-
+        // wrapped, so the app survives and typing continues — has to be on disk
+        // already. Emit timing is recorded separately by `emit_edit`.
+        crate::log::log(&self.key_log_line(event, &decision));
+        self.carry_out(event, decision)
+    }
+
+    /// Carries out a decision: suppress, pass through, or emit the edit. Separated
+    /// from [`handle_key_down`](Self::handle_key_down) so the decision and the
+    /// work of applying it read as the two steps they are.
+    fn carry_out(&self, event: NonNull<CGEvent>, decision: Decision) -> bool {
         match decision {
             Decision::Passthrough => false,
             Decision::Consume => true, // suppress, emit nothing (e.g. toggle hotkey)
@@ -515,9 +622,15 @@ impl TapState {
         }
     }
 
-    /// Records one handled key and its decision to the log file, so a reported issue
-    /// can be traced from the log without a live repro.
-    fn log_key(&self, event: NonNull<CGEvent>, decision: &Decision) {
+    /// Builds the log line for one handled key and its decision.
+    ///
+    /// Split from the write so the line can be composed **before** the decision is
+    /// carried out and written **after**, with the elapsed time appended. The
+    /// snapshot has to be taken here: `ToggleApp` changes the exclusion state in
+    /// its match arm, and logging afterwards would report the new `active=` value
+    /// for the keystroke that caused the change, which reads backwards when
+    /// tracing a bug.
+    fn key_log_line(&self, event: NonNull<CGEvent>, decision: &Decision) -> String {
         let ch = unicode_char(event);
         let code = integer_field(event, CGEventField::KeyboardEventKeycode);
         let mods = modifier_names(unsafe { CGEvent::flags(Some(event.as_ref())) });
@@ -540,9 +653,9 @@ impl TapState {
                 format!("EmitThenReplayKey bs={} ins={:?}", r.backspaces, r.insert)
             }
         };
-        crate::log::log(&format!(
+        format!(
             "KEY {ch:?} code={code} mods={mods} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
-        ));
+        )
     }
 
     /// Emits one edit through the session-posting path, honoring the circuit breaker
@@ -551,6 +664,19 @@ impl TapState {
         if !self.circuit_ok() {
             return;
         }
+        // Timed and logged on the next line as `EMIT took=…µs`.
+        //
+        // The span is the emit alone, not the whole keystroke, because the emit is
+        // the only part that can cost milliseconds: the Chromium omnibox guard
+        // below makes an accessibility round-trip capped at 50 ms (§6.1). Timing
+        // the whole of `handle_key_down` instead would fold in `save_settings`'s
+        // file write and `hud::flash`'s first-call window creation, which happen
+        // on hotkey and per-app-toggle keys — so a slow number would sometimes
+        // mean "wrote a settings file", and anyone reading the log for a typing
+        // latency report would be sent at the wrong subsystem. The engine's own
+        // cost is not a suspect and is pinned separately at a couple of
+        // microseconds by `crates/glowkey-engine/tests/latency.rs`.
+        let started = Instant::now();
         // Chromium omnibox guard: the omnibox's inline autocomplete keeps a
         // trailing selection, which the first synthetic Backspace would delete
         // instead of a character (`hoongf`→`hoồng`). When an edit with backspaces
@@ -578,6 +704,7 @@ impl TapState {
             );
         }
         emit(&self.source, response);
+        crate::log::log(&format!("EMIT took={}µs", started.elapsed().as_micros()));
     }
 
     /// Resolves the frontmost app at a word start (not mid-word) and, on a change,
@@ -656,7 +783,10 @@ impl TapState {
         let Ok(mut session) = self.session.try_borrow_mut() else {
             return Decision::Passthrough;
         };
-        if !session.is_active() {
+        // Normally an inactive session means hands off entirely. The exception is
+        // UniKey's always-macro: Vietnamese is off, but a shortcut should still
+        // expand, which needs the keys to reach the engine.
+        if !session.is_active() && !session.macros_active() {
             return Decision::Passthrough;
         }
 
@@ -690,6 +820,12 @@ impl TapState {
             ch.is_ascii_alphabetic()
                 || (ch.is_ascii_digit()
                     && session.input_method() == glowkey_engine::InputMethod::Vni)
+                // With the bracket shortcuts on these are vowel keys, so they must
+                // reach the engine instead of committing the word. Off (the
+                // default) they stay ordinary punctuation and `[` types a bracket.
+                || (session.telex_brackets()
+                    && session.input_method() == glowkey_engine::InputMethod::Telex
+                    && matches!(ch, '[' | ']' | '{' | '}'))
         };
         match unicode_char(event) {
             Some(ch) if is_word_char(ch) => {
@@ -1091,11 +1227,16 @@ struct TapContext {
 /// Creates the event tap and runs the main loop. Returns without running if the
 /// Accessibility permission is missing (the tap cannot be created).
 pub fn run() {
+    // Settings are loaded before the permission gate because the gate's alert is
+    // the first thing the user sees, and it has to speak their language too.
+    let settings = crate::settings_store::load();
+    crate::strings::set_language(settings.language);
+
     // Wait for Accessibility instead of exiting, so the app stays alive while the
     // user grants it (add GlowKey.app in System Settings → Privacy & Security →
     // Accessibility). Once granted the tap starts automatically; some macOS
     // versions need a relaunch to pick up the grant, but polling covers the rest.
-    if !prompt_accessibility() {
+    if !accessibility_trusted() {
         eprintln!("GlowKey: waiting for Accessibility permission…");
         eprintln!(
             "  A prompt should have appeared. Enable GlowKey in System Settings → \
@@ -1107,7 +1248,6 @@ pub fn run() {
     eprintln!("GlowKey: Accessibility granted — starting.");
     crate::log::log("STARTUP Accessibility granted — starting");
 
-    let settings = crate::settings_store::load();
     let Some(state) = TapState::from_settings(&settings) else {
         eprintln!("GlowKey: failed to create the event source.");
         return;
@@ -1199,24 +1339,49 @@ fn wait_for_accessibility() {
     // which one to switch on.
     let name = bundle_display_name();
     let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str(&format!(
-        "{name} needs Accessibility permission"
+    alert.setMessageText(&NSString::from_str(
+        &crate::strings::t(
+            "{} needs Accessibility permission",
+            "{} cần quyền Trợ năng",
+        )
+        .replace("{}", &name),
+    ));
+    alert.setInformativeText(&NSString::from_str(
+        &crate::strings::t(
+            "Open System Settings → Privacy & Security → Accessibility and turn {} on. \
+             Vietnamese typing starts by itself the moment you do — leave this window open.\n\n\
+             Already in the list? The permission is tied to this exact copy of the app, so a \
+             rebuild or a move (to /Applications, say) needs a fresh grant: switch {} off \
+             and on again, or remove it with “−” and add this copy back.",
+            "Mở Cài đặt Hệ thống → Quyền riêng tư & Bảo mật → Trợ năng và bật {} lên. \
+             Gõ tiếng Việt sẽ chạy ngay khi bạn bật — cứ để cửa sổ này mở.\n\n\
+             Đã có trong danh sách? Quyền gắn với đúng bản sao này của ứng dụng, nên sau khi \
+             build lại hoặc di chuyển (ví dụ sang /Applications) phải cấp lại: tắt {} rồi bật \
+             lại, hoặc xóa bằng “−” và thêm bản này vào.",
+        )
+        .replace("{}", &name),
+    ));
+    alert.addButtonWithTitle(&NSString::from_str(crate::strings::t(
+        "Open System Settings",
+        "Mở Cài đặt Hệ thống",
     )));
-    alert.setInformativeText(&NSString::from_str(&format!(
-        "Open System Settings → Privacy & Security → Accessibility and turn {name} on. \
-         Vietnamese typing starts by itself the moment you do — leave this window open.\n\n\
-         Already in the list? The permission is tied to this exact copy of the app, so a \
-         rebuild or a move (to /Applications, say) needs a fresh grant: switch {name} off \
-         and on again, or remove it with “−” and add this copy back."
-    )));
-    alert.addButtonWithTitle(&NSString::from_str("Open System Settings"));
-    alert.addButtonWithTitle(&NSString::from_str(&format!("Quit {name}")));
+    alert.addButtonWithTitle(&NSString::from_str(
+        &crate::strings::t("Quit {}", "Thoát {}").replace("{}", &name),
+    ));
 
     let app = NSApplication::sharedApplication(mtm);
     // The main loop has not started yet, and AppKit will not put a window on
     // screen until the app has finished launching. Without this the modal session
     // runs but draws nothing — the very silence this alert exists to break.
     app.finishLaunching();
+
+    // NSAlert lays itself out inside `runModal`, which a raw modal session never
+    // calls. Skipping it left the panel showing its un-laid-out template: 260
+    // points wide with both strings truncated, a placeholder "Do not show this
+    // message again" checkbox nobody asked for, and a spare untitled button
+    // sitting between the two real ones. `layout` is the documented way to
+    // prepare the panel when you need its window before running it.
+    alert.layout();
     let window = alert.window();
 
     loop {
@@ -1244,7 +1409,13 @@ fn wait_for_accessibility() {
             // "Open System Settings" — send them to the right pane, then show the
             // alert again so the app still has a visible presence while it waits.
             Some(response) if response == NSAlertFirstButtonReturn => {
-                open_accessibility_settings()
+                // Ask the system now rather than at launch. `AXIsProcessTrustedWithOptions`
+                // is what registers the app in the Accessibility list — without it
+                // there is nothing for the user to switch on — but it also puts up
+                // macOS's own dialog, and firing that at startup alongside this one
+                // meant two popups at once. Now it follows the user's click.
+                prompt_accessibility();
+                open_accessibility_settings();
             }
             _ => {
                 crate::log::log("STARTUP quit at the Accessibility gate");

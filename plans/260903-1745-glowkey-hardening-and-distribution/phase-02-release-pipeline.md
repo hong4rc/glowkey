@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Release pipeline"
-status: pending
+status: in-progress
 priority: P2
 effort: "1d"
 dependencies: [1]
@@ -122,3 +122,39 @@ point the change is additive — `--options runtime`, `notarytool submit --wait`
 - **A tag that does not match Cargo.toml.** `v0.2.0` tagged while Cargo.toml
   still says `0.1.0` produces a mislabelled release. Add a workflow step that
   compares the tag to the derived version and fails on mismatch.
+
+## Outcome — 2026-09-03
+
+Version now lives in exactly one place. `build-app.sh` reads
+`app/Cargo.toml`'s `package.version` and stamps both plist keys, so the literal
+`0.1.0` in `Info.plist` is a placeholder that is always overwritten — the same
+pattern the bundle identifier already used. The About window needed no change:
+it already read `CFBundleShortVersionString` from the running bundle, so it
+follows for free (this was one of three claims the plan's verification pass
+caught as wrong before implementation).
+
+`scripts/make-dmg.sh` stages the app plus an `/Applications` symlink and builds a
+UDZO image. Tested end to end, not just written: the produced
+`GlowKey-0.1.0.dmg` is 1.1 MB, passes `hdiutil verify`, mounts as
+`/Volumes/GlowKey 0.1.0`, and the app inside reports version `0.1.0`,
+identifier `io.glowkey.GlowKey`, and `Mach-O universal (x86_64 arm64)`.
+
+`.github/workflows/release.yml` turns a `v*` tag into a release: it fails first
+if the tag disagrees with `app/Cargo.toml`, runs the tests, builds, asserts the
+**shipped** binary links no networking framework (CI previously only checked the
+debug build), packages, and publishes with release notes carrying the quarantine
+command. `actionlint` is clean on it and on the existing `ci.yml`.
+
+Per the validation decision there is **no notarization and no secret in CI**: the
+signing identity is a local developer certificate and exporting its private key
+into repository secrets would be the one way this phase could create a security
+problem, while buying nothing — a self-signed certificate does not satisfy
+Gatekeeper either. CI signs ad-hoc and the notes say so.
+
+### Left open
+
+- The clean-Mac install test. Needs a Mac that has never built this source, and
+  it will need `xattr -dr com.apple.quarantine` — expected, documented in the
+  release notes and the README, and the accepted cost of not buying a Developer
+  ID.
+- The workflow has never executed, because the repository has no git remote.

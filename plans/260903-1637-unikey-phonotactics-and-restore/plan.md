@@ -5,7 +5,7 @@ status: pending
 priority: P2
 effort: "2-4 days"
 tags: [glowkey, engine, unikey, phonotactics, auto-fix]
-blockedBy: [260903-1745-glowkey-hardening-and-distribution]
+blockedBy: [260903-1745-glowkey-hardening-and-distribution, 260903-2234-glowkey-personal-word-list]
 created: 2026-09-03
 ---
 
@@ -81,6 +81,19 @@ an ASCII-render restore that deletes the wrong amount fails immediately rather
 than silently stranding characters on screen. A review found that assertion
 missing on the first pass and it was added; the mutation that exposed the gap now
 fails two tests. Phase 2 here may start.
+
+## Conflict with the personal word list
+
+`plans/260903-2234-glowkey-personal-word-list/` hooks into the restore decision
+inside `Session::commit` — **the same function and the same decision** Phase 2
+here rewrites. They compose logically (a per-word override beats a rule) but they
+will collide textually.
+
+- **Do not run them concurrently.**
+- **That plan is recommended first.** It is smaller, and it gives the user a
+  per-word escape hatch *before* this plan changes auto-fix's behaviour across
+  thousands of words at once. Going in with an override available is a better
+  order than going in without one.
 
 ## Standing decisions carried forward
 

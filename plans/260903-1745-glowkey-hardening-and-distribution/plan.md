@@ -42,12 +42,12 @@ never executed). See "Relationship to the typing-accuracy plan" below.
 
 | # | Phase | Status | Depends on |
 |---|-------|--------|------------|
-| 1 | [Phase 1: Stable signing identity](./phase-01-stable-signing-identity.md) | Pending | — |
-| 2 | [Phase 2: Release pipeline](./phase-02-release-pipeline.md) | Pending | 1 |
-| 3 | [Phase 3: Latency budget and property tests](./phase-03-latency-and-property-tests.md) | Code complete 2026-09-03; two non-code criteria open (see Carried forward) | — |
-| 4 | [Phase 4: Split the two oversized shell files](./phase-04-split-shell-modules.md) | Pending | 3 |
-| 5 | [Phase 5: Guard coverage and first-run onboarding](./phase-05-guard-coverage-and-onboarding.md) | Pending | — |
-| 6 | [Phase 6: Survive permission revocation and tap death](./phase-06-survive-tap-death.md) | Pending | — |
+| 1 | [Phase 1: Stable signing identity](./phase-01-stable-signing-identity.md) | Code done; **you must create the certificate** | — |
+| 2 | [Phase 2: Release pipeline](./phase-02-release-pipeline.md) | Done; DMG built and mount-tested | 1 |
+| 3 | [Phase 3: Latency budget and property tests](./phase-03-latency-and-property-tests.md) | Done (committed `51471cf`, `5c4cb6c`); two non-code criteria open | — |
+| 4 | [Phase 4: Split the two oversized shell files](./phase-04-split-shell-modules.md) | Done; 135 tests unchanged | 3 |
+| 5 | [Phase 5: Guard coverage and first-run onboarding](./phase-05-guard-coverage-and-onboarding.md) | Welcome + checklist done; **Safari probe needs you** | — |
+| 6 | [Phase 6: Survive permission revocation and tap death](./phase-06-survive-tap-death.md) | Code done; **revocation reproduction needs you** | — |
 
 **Execution order, decided at validation:** Phase 3 runs **first**, before
 anything in the typing-accuracy plan. Phases 1, 5 and 6 are independent and can
@@ -83,6 +83,29 @@ still pending and is the highest user-facing value available.
 | Legacy charsets, VIQR, clipboard encoding conversion | **Out.** Every modern macOS app is Unicode NFC. |
 | Network access of any kind | **Out, permanently.** Confirmed at validation 2026-09-03. CI fails the build if a networking framework is linked, and that stays absolute — no Sparkle, no download, and no version-check ping either. A version ping is still a network call from an app that sees every keystroke. The GitHub release page is the update mechanism; the user checks it. README and PRIVACY.md both make this claim today and it is not being weakened. |
 | Telemetry, analytics, crash reporting | **Out.** A keystroke-observing agent does not phone home. |
+
+## What is left, and all of it needs a human
+
+Every phase is implemented. Five things remain and none of them can be done
+headless — they need a screen, a keyboard, or a keychain:
+
+1. **Create the signing certificate** (Phase 1). Keychain Access → Certificate
+   Assistant → Create a Certificate, name `GlowKey Developer`, type "Code
+   Signing", self-signed. Then `tccutil reset Accessibility
+   io.glowkey.GlowKey`, re-grant once, and check that a later rebuild does not
+   ask again. That last check is the only proof the phase's central claim is
+   true; if it fails, amend `docs/decisions/0006` — the fallback is today's
+   behaviour, so nothing is lost.
+2. **Reproduce the permission revocation** (Phase 6, step 1). Record whether the
+   process survives at all; on some macOS versions the system kills it, which
+   makes the recovery branch unreachable and harmless.
+3. **Probe Safari's address bar** (Phase 5, step 1). Two of the three outcomes
+   ship no code.
+4. **Run `docs/manual-verification.md` once, end to end.** It has never been
+   executed, and it says so in its own first paragraph.
+5. **Install from the DMG on a clean Mac** (Phase 2). Expect the Gatekeeper
+   refusal and the `xattr` command — documented, and the accepted cost of not
+   buying a Developer ID.
 
 ## Carried forward from Phase 3
 

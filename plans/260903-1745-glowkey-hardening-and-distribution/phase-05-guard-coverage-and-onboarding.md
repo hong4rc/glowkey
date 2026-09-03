@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Guard coverage and first-run onboarding"
-status: pending
+status: in-progress
 priority: P2
 effort: "1d"
 dependencies: []
@@ -134,3 +134,49 @@ expected results, so it can be run in ten minutes after any GUI change.
   prompt. *Response:* show it only from the path where the gate returned
   successfully, never from the gate itself.
 - **File collision with Phase 4.** Stated above and in Phase 4. Sequence them.
+
+## Outcome — 2026-09-03
+
+**Two of three parts done. The Safari probe cannot be done headless and is
+still open — by design, since two of its three outcomes ship no code.**
+
+**Welcome (done).** `app/src/welcome.rs`, a one-time `NSAlert` naming ⌃⇧Space,
+⌃⇧E and the default terminal exclusions, in both languages. `welcome_shown` in
+`Settings` and `Session`, shown from `tap::run` only on the path where the
+permission gate actually succeeded — never from inside the gate, which would put
+two dialogs on screen at once, the exact bug §6.5 records. Reopenable from the
+menu's **Quick Guide…**, which is what makes dismissing it safe rather than a
+one-way door. A regression test pins the thing that would otherwise be backwards:
+an existing settings file has no `welcome_shown` key, so it must read `false` and
+show the guide once, rather than being the one user who never sees it.
+
+**Verification checklist (written, never run).** `docs/manual-verification.md`,
+178 lines, ten sections covering every control, both HUD variants, the hotkey
+recorder's cancel paths, window reopening, the omnibox in four browsers, the
+permission gate's layout trap, and the revocation recovery from Phase 6. The
+plan said "a checklist that has never been executed is fiction" and required
+running it once — **that could not be done here**: every item needs a human
+looking at a screen. It says so at the top, in the document itself, rather than
+implying it passed.
+
+**Safari (open).** Untouched, deliberately. The probe is `GLOWKEY_DEBUG=1`, type
+`hoongf` in Safari's address bar, read the log — and it needs a granted build and
+a person. `docs/manual-verification.md` §8 carries it with all three outcomes and
+what each one means; two of them are "record the result and write no code".
+
+## Review — 2026-09-03
+
+`code-reviewer` found the welcome alert could open **behind** the frontmost app,
+or draw nothing at all. `welcome::show` called `runModal` without
+`NSApplication::activate()` — the only window in the app that did not activate
+first, and `tap/permission.rs` records why it matters: an agent app is never the
+active application. Worse, on the already-trusted path the welcome is the first
+window AppKit is asked to draw and it happens before `app.run()`, with no
+`finishLaunching()` — which `permission.rs` also records as the reason a modal
+"runs but draws nothing". Since the alert is modal and sits ahead of the run
+loop, that reads as a hang: no panel, an inert menu, and `welcome_shown` never
+saved, so it repeats every launch.
+
+Not an exotic path — it is what `docs/manual-verification.md` §1 asks a tester to
+do, since the recommended `dev-run.sh` inherits the terminal's grant and skips
+the gate. Fixed: `finishLaunching()` then `activate()` before the alert.

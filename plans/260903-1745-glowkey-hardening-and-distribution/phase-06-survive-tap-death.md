@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Survive permission revocation and tap death"
-status: pending
+status: in-progress
 priority: P1
 effort: "0.5d"
 dependencies: []
@@ -133,3 +133,82 @@ terminal un-exclusion. The menu gains a line naming the cause and offering
 - **The glyph change becomes noise.** If the tap flaps under load, a glyph that
   flickers is worse than one that lies. *Response:* only show the warning state
   after two consecutive failed checks.
+
+## Outcome — 2026-09-03
+
+**Implemented; the reproduction that opens the phase is still yours to do.**
+
+`app/src/tap/health.rs` polls `CGEventTapIsEnabled` every two seconds from a
+`CFRunLoopTimer` and branches on the cause, because the two causes need different
+remedies:
+
+| enabled | trusted | action |
+|---|---|---|
+| yes | — | clear any warning, log the recovery once |
+| no | yes | re-enable in place, logged with a running count |
+| no | no | warn after two consecutive checks; **rebuild** the tap when trust returns |
+
+Rebuilding rather than re-enabling is the load-bearing detail: the old port was
+created under a grant that no longer exists, so `CGEventTapEnable` on it does
+nothing. `create_tap` is shared by startup and recovery so the two cannot drift,
+and it removes the previous run-loop source before adding a new one — two live
+taps would process every keystroke twice, the failure the two app identities
+exist to prevent.
+
+The menu-bar glyph gained a third state, **⚠**, which outranks VI/EN, plus a menu
+line naming the cause and an "Open System Settings…" item. Two consecutive
+failures are required before the glyph changes: a tap disabled under load is
+usually re-enabled on the next tick, and a glyph that flickers is worse than one
+briefly wrong.
+
+The `TapDisabled*` callback branch is now logged and counted where it used to
+re-enable blind with no return check and no log line — so a tap flapping under
+load left nothing behind at all.
+
+`docs/decisions/0007-tap-health-monitor.md` records why this polls: macOS exposes
+no way to observe an Accessibility grant changing, and a revoked tap delivers no
+events, so the callback cannot be the detector. A dead tap wakes nobody.
+
+### The answer to the question that prompted this
+
+No lag, no loop — and that was true before this change too.
+`accessibility_trusted()` was called only in the startup gate, nothing polled
+afterwards, and there were no timers or threads. The cost was silence, not CPU.
+
+### What is left, and it needs you
+
+Step 1 of the phase, which could not be done headless: revoke the permission on a
+running installed build and **record whether the process survives**. On some
+macOS versions the system terminates it outright, which is the benign outcome and
+would make the recovery path unreachable and harmless — worth knowing before
+trusting the branch. `docs/manual-verification.md` §9 is the script.
+
+## Review — 2026-09-03
+
+`code-reviewer` found two real defects in the first implementation, both fixed.
+
+**The tap-rebuild path could leave two live taps.** `create_tap` used
+`if let (Ok(..), Ok(..))` for the teardown, which skips the cleanup *and carries
+on* when either borrow fails — then created and attached a second tap with the
+same context, and dropped the only handles able to remove the old source. Two
+live taps mean every keystroke processed twice, which for a blind engine means
+every edit applied twice; unrecoverable without a restart. Now a `let … else`
+that logs and returns `false`. Refusing costs two seconds.
+
+**Nothing flushed the engine when the tap came back — the worse of the two.**
+The blind model's invariant is *rendered == the text tail at the caret*, and a
+dead tap breaks it by construction: keys land natively while `Session` keeps its
+composing state. Type `hoo`, lose the permission mid-word, type `ngf`, re-grant,
+and the next letter's diff would delete characters the user typed themselves. The
+usual rescue was unavailable too — mouse-down flushes, but mouse-down arrives
+through the tap. Fixed with `flush_after_gap` on all three paths back: rebuild,
+recovery, and the `TapDisabled*` callback branch.
+
+Also fixed: a partial install reported success (`create_tap` now tears the new
+tap down and returns `false`); the re-enable branch logged on **every tick**
+against this phase's own success criterion, and would have grown the log by
+roughly 4 MB a day since the size cap is evaluated once per process; that same
+line asserted "re-enabled" even when there was no port; a trusted-but-unrecoverable
+tap looped forever with the glyph still claiming VI — the exact lie this phase
+exists to end — so it now gives up after thirty tries; and the branch table in
+the doc comment described three states where the code has four.

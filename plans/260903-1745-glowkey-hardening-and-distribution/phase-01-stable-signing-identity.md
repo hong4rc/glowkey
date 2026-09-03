@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Stable signing identity"
-status: pending
+status: in-progress
 priority: P1
 effort: "0.5d"
 dependencies: []
@@ -114,3 +114,39 @@ Three moving parts:
   validity (10 years) at creation to push this out.
 - **Never commit the private key.** The certificate lives in the keychain; no
   `.p12`, no key material, enters the repo. Anything else is a credential leak.
+
+## Outcome — 2026-09-03
+
+**Code done; the certificate is yours to create.** `scripts/build-app.sh` now
+resolves a signing identity through `security find-identity -v -p codesigning`
+(default name `GlowKey Developer`, overridable with `GLOWKEY_SIGN_IDENTITY`),
+signs with it when present and ad-hoc when not, and prints which it used. The
+signing failure path is not silenced when a certificate exists — a failure there
+is a real problem, not a reason to fall back quietly.
+
+It also prints the designated requirement, which turned out to be the useful
+part: the cdhash mechanism behind the whole re-grant problem is now visible at
+build time. An ad-hoc build prints
+
+```
+Requirement:   cdhash H"3d9e745785cab5d73dac50a903e4fae5db737f42" or cdhash H"5196b39e…"
+```
+
+— two hashes, one per architecture, both of which move whenever the code does.
+That is the re-grant, made legible.
+
+`docs/decisions/0006-stable-signing-identity.md` records the choice, its limit
+(Gatekeeper is unaffected), and the fact that the survives-a-rebuild claim is
+still reasoned rather than measured.
+
+### What is left, and it needs you
+
+1. Keychain Access → Certificate Assistant → **Create a Certificate**; name
+   `GlowKey Developer`, type **Code Signing**, self-signed, ten-year validity.
+2. `security find-identity -v -p codesigning` should list it.
+3. `tccutil reset Accessibility io.glowkey.GlowKey` once, then
+   `bash scripts/release-install.sh` and grant the permission — the last time.
+4. Change a string, rebuild, reinstall. If Vietnamese types straight away and
+   the printed requirement is byte-identical across the two builds, the phase is
+   proved. If the permission alert returns, amend decision 0006 with the negative
+   result; the fallback is today's behaviour, so nothing is lost.

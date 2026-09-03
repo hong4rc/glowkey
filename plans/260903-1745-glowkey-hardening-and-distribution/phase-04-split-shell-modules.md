@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Split the two oversized shell files"
-status: pending
+status: in-progress
 priority: P2
 effort: "1d"
 dependencies: [3]
@@ -131,3 +131,47 @@ The action methods must stay inside `define_class!`; the *bodies* that are long
   files wholesale. It must not run at the same time as any other change to
   `app/src/` — including Phases 5 and 6, which both touch `tap.rs`. Run those
   first, or land this in a single sitting.
+
+## Outcome — 2026-09-03
+
+Both files split. Same 135 tests, all green, with **zero edits to any test
+body** — the only change to `tests.rs` is its `use` block, since `use super::*`
+reached everything while it all lived in one file and now the siblings have to be
+named. Clippy silent.
+
+| Before | After | Largest |
+|---|---|---|
+| `tap.rs` 2255 lines | `tap/{mod,decide,keys,emit,settings,health,permission,tests}.rs` | 531 (`tests.rs`) |
+| `prefs_window.rs` 1423 lines | `prefs/{mod,tabs,excluded,macros_window,widgets}.rs` | 522 (`mod.rs`) |
+
+Nothing in `app/src/` now exceeds 531 lines; the target was ~700.
+
+**The split deviates from the plan in one way, because measurement disagreed with
+the plan.** The plan proposed five files for `tap.rs` and did not know about two
+things: the `impl TapState` block was ~820 lines and *mostly a wall of forty
+`*_and_save` settings accessors* — four lines each, none of it on the keystroke
+path — and Phase 6 had just added a health monitor. So `settings.rs`,
+`health.rs` and `permission.rs` are additional, and the boundary the plan cared
+about most is intact: `decide.rs` holds the pure decision, `emit.rs` holds
+everything that writes to the outside world. That is the project's real
+architecture, and the files now say so.
+
+Two Rust facts made it legal and are recorded in the phase file above: an
+inherent `impl` block may live in any module of the defining crate, and a private
+field is visible to descendant modules. Nothing became `pub`; cross-module items
+are `pub(super)`.
+
+The `import_macros` (99 lines) and `export_macros` (36 lines) action bodies moved
+out of `define_class!` into free functions, as the plan asked — 141 lines of file
+dialog and table parsing had been sitting among forty four-line toggles.
+
+### Evidence it is a move, not a rewrite
+
+- 135 tests before, 135 after, no test body touched.
+- `tap.rs` 2255 lines → 2380 across eight files; the difference is eight module
+  headers and their import blocks.
+- Exactly two file-scope statics survive, each in one place: `DISABLED` in
+  `tap/mod.rs`, `TAP_DEAD` in `tap/health.rs`. The rest are function-local
+  `OnceLock`s that moved with their functions.
+- New files are rustfmt-clean (the pre-existing drift elsewhere was left alone by
+  the owner's decision).

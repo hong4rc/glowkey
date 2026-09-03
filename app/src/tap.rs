@@ -496,9 +496,21 @@ impl TapState {
                 self.emit_edit(&response);
                 true
             }
-            Decision::EmitThenPassthrough(response) => {
+            Decision::EmitThenReplayKey(response) => {
                 self.emit_edit(&response);
-                false // the boundary key still passes through to the host
+                // Replay the boundary key from GlowKey's own source rather than
+                // letting the original through. Letting it through loses the race:
+                // the original is the event being dispatched right now, so the host
+                // applies it *before* the backspaces this edit just posted, and the
+                // edit then eats the boundary key instead of the word it meant to
+                // replace (`ddc`␣ → `đddc`, `work`␣ → `ưwork`, space swallowed).
+                // Replaying puts it at the tail of the same ordered queue, which is
+                // the single-source invariant the rest of the tap already keeps.
+                let keycode = integer_field(event, CGEventField::KeyboardEventKeycode) as u16;
+                let flags = unsafe { CGEvent::flags(Some(event.as_ref())) };
+                post_key_with_flags(&self.source, keycode, flags, true);
+                post_key_with_flags(&self.source, keycode, flags, false);
+                true
             }
         }
     }
@@ -508,6 +520,7 @@ impl TapState {
     fn log_key(&self, event: NonNull<CGEvent>, decision: &Decision) {
         let ch = unicode_char(event);
         let code = integer_field(event, CGEventField::KeyboardEventKeycode);
+        let mods = modifier_names(unsafe { CGEvent::flags(Some(event.as_ref())) });
         let app = self.last_bundle_id.borrow().clone().unwrap_or_default();
         let (raw, rendered, mode, active) = match self.session.try_borrow() {
             Ok(session) => session.debug_state(),
@@ -523,12 +536,12 @@ impl TapState {
             Decision::Consume => "Consume".to_string(),
             Decision::ToggleApp => "ToggleApp".to_string(),
             Decision::Emit(r) => format!("Emit bs={} ins={:?}", r.backspaces, r.insert),
-            Decision::EmitThenPassthrough(r) => {
-                format!("EmitThenPassthrough bs={} ins={:?}", r.backspaces, r.insert)
+            Decision::EmitThenReplayKey(r) => {
+                format!("EmitThenReplayKey bs={} ins={:?}", r.backspaces, r.insert)
             }
         };
         crate::log::log(&format!(
-            "KEY {ch:?} code={code} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
+            "KEY {ch:?} code={code} mods={mods} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
         ));
     }
 
@@ -648,12 +661,15 @@ impl TapState {
         }
 
         if keycode == KEY_CODE_DELETE {
-            // If this Backspace deletes the boundary right after a just-committed
-            // word, re-compose that word so the next keys keep editing it
-            // (hồng␣⌫z → hông). Otherwise delete the last visible character like a
-            // normal editor (hồng → hồn) and stop composing. Either way the host
-            // performs the delete; we only re-sync the engine.
-            if !session.recompose_after_boundary_backspace() {
+            // The host always performs the delete; we only re-sync the engine to
+            // whatever the screen will then show. Three cases, in order:
+            //   - deleting the boundary right after a committed word re-composes it
+            //     so the next keys keep editing it (hồng␣⌫z → hông);
+            //   - mid-word, shrink the composition by one visible character and
+            //     stay composed, so the next key is still a Telex key rather than a
+            //     literal (hoongf⌫z → hôn, not hồnz);
+            //   - if the engine cannot stay in step, flush and stop composing.
+            if !session.recompose_after_boundary_backspace() && !session.backspace_visible_char() {
                 session.flush();
             }
             return Decision::Passthrough;
@@ -698,14 +714,14 @@ impl TapState {
             }
             // A word boundary (space, punctuation, Telex digit): commit the word. If
             // auto-fix restores an invalid result to its raw keys, emit that edit
-            // and still let the boundary key through afterward; otherwise the word
-            // is already on screen and the boundary key just passes through.
+            // and replay the boundary key after it; otherwise the word is already on
+            // screen and the boundary key just passes through.
             Some(ch) => {
                 let restore = session.commit();
                 // Sentence-ending punctuation primes the next word for capitalization.
                 session.note_boundary(ch);
                 match restore {
-                    Some(restore) => Decision::EmitThenPassthrough(restore),
+                    Some(restore) => Decision::EmitThenReplayKey(restore),
                     None => Decision::Passthrough,
                 }
             }
@@ -800,9 +816,10 @@ enum Decision {
     ToggleApp,
     /// Suppress the original and apply this edit (backspaces + insert).
     Emit(KeyResponse),
-    /// Apply this edit (e.g. an auto-fix restore) and then let the original key
-    /// through — the boundary key that triggered the commit still types.
-    EmitThenPassthrough(KeyResponse),
+    /// Apply this edit (e.g. an auto-fix restore) and then replay the original
+    /// key from GlowKey's own source, so the boundary key that triggered the
+    /// commit still types — but lands *after* the edit rather than racing it.
+    EmitThenReplayKey(KeyResponse),
 }
 
 /// Whether `keycode` is a caret-navigation key (arrows, Home/End, Page Up/Down).
@@ -866,6 +883,28 @@ fn is_app_toggle_hotkey(flags: CGEventFlags, keycode: i64) -> bool {
 
 /// True when a shortcut modifier is held — Command, Control, or Option. Shift is
 /// excluded (it produces uppercase letters).
+/// Renders the modifier flags of a key event compactly for the log ("⌘⇧", "-").
+/// Without this a logged `q` cannot be told apart from ⌘Q, which is the
+/// difference between a plain keystroke and a quit.
+fn modifier_names(flags: CGEventFlags) -> String {
+    let mut names = String::new();
+    for (mask, symbol) in [
+        (CGEventFlags::MaskCommand, "⌘"),
+        (CGEventFlags::MaskControl, "⌃"),
+        (CGEventFlags::MaskAlternate, "⌥"),
+        (CGEventFlags::MaskShift, "⇧"),
+        (CGEventFlags::MaskSecondaryFn, "fn"),
+    ] {
+        if flags.0 & mask.0 != 0 {
+            names.push_str(symbol);
+        }
+    }
+    if names.is_empty() {
+        names.push('-');
+    }
+    names
+}
+
 fn is_shortcut(flags: CGEventFlags) -> bool {
     let shortcut =
         CGEventFlags::MaskCommand.0 | CGEventFlags::MaskControl.0 | CGEventFlags::MaskAlternate.0;
@@ -912,7 +951,20 @@ fn emit(source: &CGEventSource, response: &KeyResponse) {
 
 /// Posts a synthetic keystroke at the session level, from GlowKey's tagged source.
 fn post_key(source: &CGEventSource, keycode: u16, key_down: bool) {
+    post_key_with_flags(source, keycode, CGEventFlags(0), key_down);
+}
+
+/// Posts a synthetic keystroke carrying explicit modifier flags. Replaying a
+/// boundary key needs the flags the user actually held, or ⇧1 comes back as `1`
+/// instead of `!`.
+fn post_key_with_flags(
+    source: &CGEventSource,
+    keycode: u16,
+    flags: CGEventFlags,
+    key_down: bool,
+) {
     if let Some(event) = CGEvent::new_keyboard_event(Some(source), keycode, key_down) {
+        CGEvent::set_flags(Some(&event), flags);
         CGEvent::post(CGEventTapLocation::SessionEventTap, Some(&event));
     }
 }
@@ -1049,9 +1101,8 @@ pub fn run() {
             "  A prompt should have appeared. Enable GlowKey in System Settings → \
              Privacy & Security → Accessibility, then it starts automatically."
         );
-        while !accessibility_trusted() {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+        crate::log::log("STARTUP waiting for the Accessibility permission");
+        wait_for_accessibility();
     }
     eprintln!("GlowKey: Accessibility granted — starting.");
     crate::log::log("STARTUP Accessibility granted — starting");
@@ -1117,6 +1168,118 @@ pub fn run() {
         app.run();
     } else {
         CFRunLoop::run();
+    }
+}
+
+/// Blocks until this process is trusted for Accessibility, keeping an alert on
+/// screen for as long as it waits.
+///
+/// GlowKey is an `LSUIElement` agent: no Dock icon, and the status item cannot
+/// draw before the AppKit loop runs. Polling in a bare sleep loop therefore left
+/// a launch from Finder or `open` with nothing at all to see — no icon, no
+/// window, no log line — and the app looked dead while it was in fact waiting.
+/// A modal *session* is the one thing that renders here: it drives the run loop
+/// so the alert appears, and it hands control back on every pass, so the wait
+/// ends by itself the moment the user flips the switch.
+fn wait_for_accessibility() {
+    use objc2_app_kit::{
+        NSAlert, NSAlertFirstButtonReturn, NSApplication, NSModalResponseContinue,
+    };
+    use objc2_foundation::{MainThreadMarker, NSString};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        while !accessibility_trusted() {
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        return;
+    };
+
+    // Name the running bundle rather than the project: "GlowKey" and "GlowKey Dev"
+    // are separate entries in the Accessibility list, and the alert has to say
+    // which one to switch on.
+    let name = bundle_display_name();
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!(
+        "{name} needs Accessibility permission"
+    )));
+    alert.setInformativeText(&NSString::from_str(&format!(
+        "Open System Settings → Privacy & Security → Accessibility and turn {name} on. \
+         Vietnamese typing starts by itself the moment you do — leave this window open.\n\n\
+         Already in the list? The permission is tied to this exact copy of the app, so a \
+         rebuild or a move (to /Applications, say) needs a fresh grant: switch {name} off \
+         and on again, or remove it with “−” and add this copy back."
+    )));
+    alert.addButtonWithTitle(&NSString::from_str("Open System Settings"));
+    alert.addButtonWithTitle(&NSString::from_str(&format!("Quit {name}")));
+
+    let app = NSApplication::sharedApplication(mtm);
+    // The main loop has not started yet, and AppKit will not put a window on
+    // screen until the app has finished launching. Without this the modal session
+    // runs but draws nothing — the very silence this alert exists to break.
+    app.finishLaunching();
+    let window = alert.window();
+
+    loop {
+        if accessibility_trusted() {
+            break;
+        }
+        // Bring the alert to the front: an agent app is never the active app, so
+        // without this the window can open behind whatever the user is using.
+        app.activate();
+        let session = app.beginModalSessionForWindow(&window);
+        let pressed = loop {
+            if accessibility_trusted() {
+                break None;
+            }
+            let response = unsafe { app.runModalSession(session) };
+            if response != NSModalResponseContinue {
+                break Some(response);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        unsafe { app.endModalSession(session) };
+        match pressed {
+            // Granted while the alert was up.
+            None => break,
+            // "Open System Settings" — send them to the right pane, then show the
+            // alert again so the app still has a visible presence while it waits.
+            Some(response) if response == NSAlertFirstButtonReturn => {
+                open_accessibility_settings()
+            }
+            _ => {
+                crate::log::log("STARTUP quit at the Accessibility gate");
+                std::process::exit(0);
+            }
+        }
+    }
+    window.orderOut(None);
+}
+
+/// The running bundle's display name ("GlowKey", "GlowKey Dev"), falling back to
+/// the project name when unbundled (tests).
+fn bundle_display_name() -> String {
+    use objc2_foundation::{NSBundle, NSString};
+
+    for key in ["CFBundleDisplayName", "CFBundleName"] {
+        if let Some(name) = NSBundle::mainBundle()
+            .objectForInfoDictionaryKey(&NSString::from_str(key))
+            .and_then(|value| value.downcast::<NSString>().ok())
+        {
+            return name.to_string();
+        }
+    }
+    "GlowKey".to_string()
+}
+
+/// Opens System Settings straight at Privacy & Security → Accessibility.
+fn open_accessibility_settings() {
+    use objc2_foundation::{NSString, NSURL};
+
+    let url = NSURL::URLWithString(&NSString::from_str(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    ));
+    if let Some(url) = url {
+        NSWorkspace::sharedWorkspace().openURL(&url);
     }
 }
 
@@ -1214,13 +1377,43 @@ mod real_event_tests {
                 Decision::Passthrough => screen.push(ch),
                 Decision::Consume | Decision::ToggleApp => {}
                 Decision::Emit(r) => apply(&mut screen, &r),
-                Decision::EmitThenPassthrough(r) => {
+                Decision::EmitThenReplayKey(r) => {
                     apply(&mut screen, &r);
                     screen.push(ch); // the boundary key still types
                 }
             }
         }
         screen
+    }
+
+    /// The two shapes reported from the field. An auto-fix restore at a boundary
+    /// must leave the raw keys followed by the boundary key, in that order. While
+    /// the boundary key was passed through natively instead of replayed, the host
+    /// applied it before the posted backspaces and the edit ate it: `ddc`␣ came out
+    /// `đddc` and `work`␣ came out `ưwork`, both with the space swallowed.
+    #[test]
+    fn auto_fix_restore_keeps_the_boundary_key() {
+        assert_eq!(type_via_tap(&active_state(), "work "), "work ");
+        // A leading đ is exempt from auto-fix, so this one commits with no restore
+        // — the boundary key must survive that path too.
+        assert_eq!(type_via_tap(&active_state(), "ddc "), "đc ");
+    }
+
+    /// Pins the mechanism, not just the result: the boundary key that triggers an
+    /// auto-fix restore must be suppressed and replayed, never left to race the
+    /// edit as a plain passthrough.
+    #[test]
+    fn auto_fix_boundary_replays_the_key_rather_than_passing_it_through() {
+        let state = active_state();
+        for ch in "work".chars() {
+            let event = key_event(&state.source, ch);
+            state.decide(NonNull::from(&*event));
+        }
+        let space = key_event(&state.source, ' ');
+        match state.decide(NonNull::from(&*space)) {
+            Decision::EmitThenReplayKey(_) => {}
+            other => panic!("boundary key must be replayed, got {other:?}"),
+        }
     }
 
     fn active_state() -> TapState {
@@ -1360,7 +1553,7 @@ mod real_event_tests {
         let space = key_event(&state.source, ' ');
         match state.decide(NonNull::from(&*space)) {
             Decision::Passthrough => screen.push(' '),
-            Decision::EmitThenPassthrough(r) => {
+            Decision::EmitThenReplayKey(r) => {
                 apply(&mut screen, &r);
                 screen.push(' ');
             }
@@ -1395,13 +1588,28 @@ mod real_event_tests {
         assert!(state.session.borrow().is_composing());
 
         // Backspace passes through (the host deletes the last visible character,
-        // hồng → hồn) and the engine stops composing so it re-syncs.
+        // hồng → hồn) and the engine shrinks with it, staying composed so the next
+        // key is still a Telex key: z removes the tone rather than typing a literal.
         let bs = backspace_event(&state.source);
         assert!(matches!(
             state.decide(NonNull::from(&*bs)),
             Decision::Passthrough
         ));
-        assert!(!state.session.borrow().is_composing());
+        assert!(state.session.borrow().is_composing());
+        let (raw, rendered, _, _) = state.session.borrow().debug_state();
+        assert_eq!((raw.as_str(), rendered.as_str()), ("hoonf", "hồn"));
+
+        let z = key_event(&state.source, 'z');
+        match state.decide(NonNull::from(&*z)) {
+            Decision::Emit(r) => {
+                let mut screen = String::from("hồn");
+                let units: Vec<u16> = screen.encode_utf16().collect();
+                screen = String::from_utf16(&units[..units.len() - r.backspaces]).unwrap();
+                screen.push_str(&r.insert);
+                assert_eq!(screen, "hôn");
+            }
+            other => panic!("z after a mid-word backspace must edit the word, got {other:?}"),
+        }
     }
 
     #[test]

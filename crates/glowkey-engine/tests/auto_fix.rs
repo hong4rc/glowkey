@@ -231,3 +231,30 @@ fn macro_expansion() {
     // Non-matching word is untouched.
     assert_eq!(run("hi ", &[("vn", "Việt Nam")]), "hi ");
 }
+
+#[test]
+fn keeps_abbreviations_that_start_with_d_bar() {
+    // Reaching a leading đ costs `dd`, which no English word starts with, so the
+    // đ is deliberate and auto-fix must leave it alone even though these are not
+    // syllables. Restoring them would hand back `ddc`/`ddt`, which is never wanted.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "ddc"), "đc");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "ddt"), "đt");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "dd"), "đ");
+}
+
+#[test]
+fn still_restores_english_words_whose_d_bar_is_not_leading() {
+    // The exemption is for a *leading* đ only, so English words that merely
+    // contain `dd` keep restoring.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "address"), "address");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "odd"), "odd");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "sudden"), "sudden");
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "work"), "work");
+}

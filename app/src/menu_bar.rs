@@ -53,6 +53,10 @@ define_class!(
         #[unsafe(method(appDidActivate:))]
         fn app_did_activate(&self, _notification: &objc2_foundation::NSNotification) {
             if let Some((_, bundle_id)) = crate::app_info::frontmost() {
+                // Logged so a "something stole my focus" report can be read
+                // straight off the key log: the activation lands between the two
+                // keystrokes that bracket it.
+                crate::log::log(&format!("FRONTMOST -> {bundle_id}"));
                 self.state().set_frontmost_app(&bundle_id);
             }
             self.update_glyph();
@@ -117,6 +121,10 @@ define_class!(
 
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
+            // The only graceful-termination path in the app. Logged so an
+            // unexplained disappearance can be told apart from a crash and from
+            // something else invoking this action.
+            crate::log::log("QUIT requested via the menu item");
             let mtm = MainThreadMarker::from(self);
             NSApplication::sharedApplication(mtm).terminate(None);
         }

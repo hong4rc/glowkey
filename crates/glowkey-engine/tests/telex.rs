@@ -169,3 +169,40 @@ fn vni_input_method() {
     // Telex still works unchanged on a default engine.
     assert_eq!(type_word("hoongf"), "hồng");
 }
+
+#[test]
+fn mid_word_backspace_drops_a_visible_char_and_keeps_composing() {
+    // The host deletes the character itself, so the engine must land on exactly
+    // what the screen will show: hồng⌫ is hồn, keeping the tone. That means
+    // dropping the raw `g`, not popping the last key — popping gives hông.
+    let mut engine = Engine::new(PlacementStyle::New);
+    for ch in "hoongf".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.current_word(), "hồng");
+
+    assert!(engine.backspace_visible_char());
+    assert_eq!(engine.current_word(), "hồn");
+    assert_eq!(engine.raw_string(), "hoonf");
+    assert!(engine.is_composing());
+
+    // Still composing, so z is the tone-removal key and not a literal.
+    let r = engine.process_key('z');
+    let mut screen = String::from("hồn");
+    apply(&mut screen, &r.insert, r.backspaces);
+    assert_eq!(screen, "hôn");
+    assert_eq!(engine.current_word(), "hôn");
+}
+
+#[test]
+fn mid_word_backspace_reports_failure_when_it_cannot_stay_in_step() {
+    // `oo` renders as the single character ô. Deleting it leaves nothing to
+    // compose and no single raw key removal reproduces an empty target, so the
+    // engine says so and the caller flushes.
+    let mut engine = Engine::new(PlacementStyle::New);
+    for ch in "oo".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.current_word(), "ô");
+    assert!(!engine.backspace_visible_char());
+}

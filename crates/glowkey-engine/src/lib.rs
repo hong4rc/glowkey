@@ -278,6 +278,40 @@ impl Engine {
         response
     }
 
+    /// Shrinks the composition by one **visible** character, keeping the raw key
+    /// log in step, and reports whether it managed to.
+    ///
+    /// This is the mid-word Backspace the host performs itself: the keystroke
+    /// passes straight through, so the engine has to land on exactly what the host
+    /// will show — the rendering minus its last character. `hồng`⌫ is `hồn`, which
+    /// means dropping the raw `g` and *keeping* the tone key `f`.
+    /// [`backspace`](Self::backspace) cannot do that: popping the last key drops
+    /// the `f` and gives `hông`, so the tone the user never touched disappears and
+    /// the engine's idea of the text no longer matches the screen. So search the
+    /// raw log from the end for the one key whose removal re-renders to the target.
+    ///
+    /// Returns `false` when no single removal reproduces the target (the caller
+    /// then flushes and stops composing), which also covers deleting the last
+    /// character of a word that only exists through a transformation (`oo`⌫).
+    pub fn backspace_visible_char(&mut self) -> bool {
+        if self.raw.is_empty() || self.rendered.is_empty() {
+            return false;
+        }
+        let mut target = self.rendered.clone();
+        target.pop();
+
+        for index in (0..self.raw.len()).rev() {
+            let mut candidate = self.raw.clone();
+            candidate.remove(index);
+            if render(&candidate, self.style, self.method) == target {
+                self.raw = candidate;
+                self.rendered = target;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Re-derives the rendered word from the raw key log and returns the edit that
     /// turns the previous rendering into the new one.
     fn rerender(&mut self) -> KeyResponse {
@@ -818,6 +852,14 @@ impl Session {
         }
     }
 
+    /// Mid-word Backspace: shrink the composition by one visible character so the
+    /// keys that follow keep editing the same word (`hoongf`⌫`z` → `hôn`, because
+    /// `z` still reaches the engine as the tone-removal key). Returns `false` when
+    /// the engine cannot stay in step with the host, and the caller must flush.
+    pub fn backspace_visible_char(&mut self) -> bool {
+        self.is_active() && self.engine.backspace_visible_char()
+    }
+
     /// Flushes any in-progress word without changing mode or focus.
     ///
     /// The engine's edits ([`KeyResponse::backspaces`]) assume the current word's
@@ -845,6 +887,16 @@ fn is_invalid_vietnamese(word: &str) -> bool {
     }
     // A pure-ASCII word is what the user typed verbatim — leave it alone.
     if word.is_ascii() {
+        return false;
+    }
+    // A word starting with đ is deliberate, so keep it even when it is not a
+    // syllable. Reaching a leading đ costs `dd` in Telex or `d9` in VNI, and no
+    // English word begins with either, so there is nothing here to rescue — while
+    // restoring the raw keys wrecks the Vietnamese chat abbreviations built this
+    // way (`đc`, `đt`, `đk`, which would come back as `ddc`, `ddt`, `ddk`). English
+    // words that merely *contain* the pair still restore, since their đ is not
+    // leading: `address`→`ađress`, `odd`→`ođ`, `sudden`→`suđen`.
+    if word.starts_with('đ') || word.starts_with('Đ') {
         return false;
     }
     !vi::validation::is_valid_syllable(word)

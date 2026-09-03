@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExclusionList, HotkeyPreset, InputMethod, Macro, PlacementStyle};
+use crate::{ExclusionList, HotkeyPreset, InputMethod, Language, Macro, PlacementStyle};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +50,28 @@ pub struct Settings {
     /// controls; toggled off from the window itself once they know it.
     #[serde(default = "default_true")]
     pub open_settings_at_launch: bool,
+    /// Language of the user interface (Unikey's "Vietnamese interface"). Defaults
+    /// to following the system.
+    #[serde(default)]
+    pub language: Language,
+    /// Opt-in "Quick Telex": a doubled consonant at the start of a syllable
+    /// expands to its digraph (`cc`→`ch`, `nn`→`ng`). Off by default; it changes
+    /// what plain consonant pairs mean.
+    #[serde(default)]
+    pub quick_telex: bool,
+    /// Opt-in: UniKey's Telex bracket shortcuts — `[`→ơ, `]`→ư, `{`→Ơ, `}`→Ư.
+    /// Off by default; turning it on stops `[` and `]` typing brackets.
+    #[serde(default)]
+    pub telex_brackets: bool,
+    /// Opt-in: UniKey's `spellCheckEnabled` — refuse a diacritic that would make
+    /// the word impossible in Vietnamese, at the keystroke rather than at the
+    /// word boundary (which is what `auto_fix` does).
+    #[serde(default)]
+    pub strict_spell_check: bool,
+    /// Opt-in: UniKey's `alwaysMacro` — expand macros even while Vietnamese is
+    /// switched off. Never applies in an excluded application.
+    #[serde(default)]
+    pub always_macro: bool,
 }
 
 impl Default for Settings {
@@ -65,6 +87,11 @@ impl Default for Settings {
             macros: Vec::new(),
             restore_english_words: false,
             open_settings_at_launch: true,
+            language: Language::default(),
+            quick_telex: false,
+            telex_brackets: false,
+            strict_spell_check: false,
+            always_macro: false,
         }
     }
 }
@@ -125,6 +152,11 @@ mod tests {
             }],
             restore_english_words: true,
             open_settings_at_launch: false,
+            language: Language::Vietnamese,
+            quick_telex: true,
+            telex_brackets: true,
+            strict_spell_check: true,
+            always_macro: true,
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);

@@ -16,7 +16,8 @@
 //! shell simply never calls [`Engine::process_key`].
 
 use serde::{Deserialize, Serialize};
-use vi::methods::IncrementalBuffer;
+use vi::methods::{Action, IncrementalBuffer};
+use vi::processor::{LetterModification, ToneMark};
 use vi::processor::AccentStyle;
 
 pub mod config;
@@ -40,6 +41,76 @@ pub enum PlacementStyle {
     Old,
 }
 
+/// Which language the user interface is written in.
+///
+/// Unikey exposes this as a single "Vietnamese interface" checkbox. A checkbox
+/// cannot say "whatever the system is set to", which is what a native macOS
+/// application should do by default, so this is three-valued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Language {
+    /// Follow the system's preferred language.
+    #[default]
+    System,
+    Vietnamese,
+    English,
+}
+
+impl InputMethod {
+    /// Whether this is one of the Telex variants. Quick Telex applies to both,
+    /// since its digraphs are plain letters; the bracket shortcuts do not,
+    /// because UniKey's Simple Telex mapping deliberately drops them.
+    #[must_use]
+    pub fn is_telex_family(self) -> bool {
+        matches!(self, Self::Telex | Self::SimpleTelex)
+    }
+}
+
+/// Strips Vietnamese diacritics from text, leaving plain ASCII letters —
+/// UniKey's "bỏ dấu" tool (`m_removeTone`).
+///
+/// `đ`/`Đ` become `d`/`D`; every toned or modified vowel falls back to its base
+/// letter. Everything else, including text that was never Vietnamese, passes
+/// through untouched. Useful for filenames, URLs and search boxes.
+#[must_use]
+pub fn remove_tones(text: &str) -> String {
+    /// Base letter for each Vietnamese vowel form, lowercase. Uppercase is
+    /// handled by casing the result, so only one table is needed.
+    const BASES: [(&str, char); 12] = [
+        ("aàáảãạăằắẳẵặâầấẩẫậ", 'a'),
+        ("eèéẻẽẹêềếểễệ", 'e'),
+        ("iìíỉĩị", 'i'),
+        ("oòóỏõọôồốổỗộơờớởỡợ", 'o'),
+        ("uùúủũụưừứửữự", 'u'),
+        ("yỳýỷỹỵ", 'y'),
+        ("dđ", 'd'),
+        ("AÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬ", 'A'),
+        ("EÈÉẺẼẸÊỀẾỂỄỆ", 'E'),
+        ("IÌÍỈĨỊ", 'I'),
+        ("OÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ", 'O'),
+        ("UÙÚỦŨỤƯỪỨỬỮỰ", 'U'),
+    ];
+
+    text.chars()
+        .map(|ch| {
+            if ch.is_ascii() {
+                return ch;
+            }
+            for (forms, base) in BASES {
+                if forms.contains(ch) {
+                    return base;
+                }
+            }
+            // The two remaining uppercase families, kept out of the table so the
+            // lines stay readable.
+            match ch {
+                'Ỳ' | 'Ý' | 'Ỷ' | 'Ỹ' | 'Ỵ' => 'Y',
+                'Đ' => 'D',
+                other => other,
+            }
+        })
+        .collect()
+}
+
 impl From<PlacementStyle> for AccentStyle {
     fn from(style: PlacementStyle) -> Self {
         match style {
@@ -58,6 +129,10 @@ pub enum InputMethod {
     Telex,
     /// VNI — tone and diacritic digits.
     Vni,
+    /// Simple Telex — UniKey's `UkSimpleTelex`. Telex with one difference: `w`
+    /// only ever adds a horn or a breve to a vowel already typed, so it never
+    /// stands alone as `ư`.
+    SimpleTelex,
 }
 
 /// The chosen hotkey for the global Vietnamese/English toggle, as a small preset
@@ -125,6 +200,133 @@ pub struct Macro {
     pub expansion: String,
 }
 
+/// The `version` a UniKey macro-table header declares for a UTF-8 body. Anything
+/// else means the body is VIQR (`UKMACRO_VERSION_UTF8` in UniKey's `mactab.cpp`).
+const UNIKEY_MACRO_VERSION_UTF8: i32 = 1;
+
+/// Whether a line is UniKey's macro-table header.
+fn is_unikey_header(line: &str) -> bool {
+    unikey_header_version(line).is_some()
+}
+
+/// The version declared by a UniKey macro-table header line, if it is one.
+/// The header is written as `;DO NOT DELETE THIS LINE*** version=1 ***`, with
+/// the leading `;` only on Windows.
+fn unikey_header_version(line: &str) -> Option<i32> {
+    let line = line.trim_start_matches('\u{feff}').trim();
+    let line = line.strip_prefix(';').unwrap_or(line);
+    if !line.starts_with("DO NOT DELETE THIS LINE") {
+        return None;
+    }
+    let (_, rest) = line.split_once("version=")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+impl Macro {
+    /// Parses a macro table.
+    ///
+    /// The line format is `shortcut:expansion`, split on the **first** colon, as
+    /// UniKey's `CMacroTable::addItem` does — that is the file people arrive
+    /// with, from UniKey or EVKey.
+    ///
+    /// A real UniKey export also carries a header line
+    /// (`;DO NOT DELETE THIS LINE*** version=1 ***`), preceded by a byte-order
+    /// mark on Windows. Both are handled: the mark is stripped, the header is
+    /// recognised rather than surviving by accident, and a header naming any
+    /// version other than 1 means the body is VIQR rather than UTF-8 — see
+    /// [`table_is_legacy_viqr`](Self::table_is_legacy_viqr).
+    ///
+    /// Neither field is trimmed, matching UniKey, so a trailing space in an
+    /// expansion survives — ordinary in gõ tắt, where `vn` should expand to
+    /// `Việt Nam ` with the space. The shortcut is the exception: it is matched
+    /// against typed keys, which cannot contain a space, so a stray one there
+    /// would only make the macro unreachable.
+    ///
+    /// A leading `[` switches to this application's own JSON, so a table
+    /// exported here round-trips losslessly.
+    ///
+    /// Unparseable lines are skipped rather than failing the whole import: a
+    /// table hand-edited over years usually has a stray line in it, and losing
+    /// the other five hundred entries over one is not a kindness. Blank lines and
+    /// `#` comments are ignored.
+    #[must_use]
+    pub fn parse_table(text: &str) -> Vec<Self> {
+        let text = text.trim_start_matches('\u{feff}');
+        let trimmed = text.trim_start();
+        if trimmed.starts_with('[') {
+            // Broken JSON returns nothing rather than falling through to the line
+            // reader, which would report "expected shortcut:expansion" about a
+            // file that is plainly not in that format.
+            return serde_json::from_str(trimmed).unwrap_or_default();
+        }
+        text.lines()
+            .filter(|line| !is_unikey_header(line))
+            .filter(|line| {
+                let head = line.trim_start();
+                !head.is_empty() && !head.starts_with('#')
+            })
+            .filter_map(|line| {
+                // First colon only, so an expansion may contain one.
+                let (shortcut, expansion) = line.split_once(':')?;
+                let shortcut = shortcut.trim();
+                (!shortcut.is_empty() && !expansion.is_empty()).then(|| Self {
+                    shortcut: shortcut.to_string(),
+                    expansion: expansion.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether this is an old UniKey export whose body is VIQR-encoded rather
+    /// than UTF-8 — its header names a version other than 1.
+    ///
+    /// GlowKey does not do VIQR (a standing decision: every modern macOS
+    /// application is Unicode), so the caller should refuse such a file and say
+    /// why, rather than importing `Vie^.t Nam` as literal text.
+    #[must_use]
+    pub fn table_is_legacy_viqr(text: &str) -> bool {
+        text.trim_start_matches('\u{feff}')
+            .lines()
+            .next()
+            .and_then(unikey_header_version)
+            .is_some_and(|version| version != UNIKEY_MACRO_VERSION_UTF8)
+    }
+
+    /// Serializes a macro table.
+    ///
+    /// Writes the line format, which Unikey and EVKey can read, unless some
+    /// expansion contains a newline or a shortcut contains a colon — neither
+    /// survives a line-based file, so those tables are written as JSON instead
+    /// and are still readable by [`parse_table`](Self::parse_table).
+    #[must_use]
+    pub fn format_table(macros: &[Self]) -> String {
+        // Anything the line reader would alter or drop forces the JSON path, so
+        // that export followed by import is lossless. The reader splits on the
+        // first colon, skips `#` comments and blank expansions, and trims both
+        // fields — and a trailing space in an expansion is ordinary in gõ tắt.
+        let line_safe = macros.iter().all(|m| {
+            !m.shortcut.contains(':')
+                && !m.shortcut.starts_with('#')
+                && !m.expansion.is_empty()
+                && m.shortcut.trim() == m.shortcut
+                && !m.shortcut.contains('\n')
+                && !m.expansion.contains('\n')
+        });
+        if !line_safe {
+            return serde_json::to_string_pretty(macros).unwrap_or_default();
+        }
+        let mut out = String::new();
+        for m in macros {
+            out.push_str(&m.shortcut);
+            out.push(':');
+            out.push_str(&m.expansion);
+            out.push('\n');
+        }
+        out
+    }
+}
+
 /// The edit the shell must apply to the document for one keystroke.
 ///
 /// `backspaces` counts **UTF-16 code units** to delete from the end of the text
@@ -163,6 +365,17 @@ pub struct Engine {
     raw: Vec<char>,
     /// The text currently on screen for this word — the diff baseline.
     rendered: String,
+    /// "Quick Telex": expand a doubled consonant at the start of a syllable to
+    /// its digraph. Opt-in.
+    quick_telex: bool,
+    /// UniKey's Telex bracket shortcuts — `[`→ơ, `]`→ư, `{`→Ơ, `}`→Ư. Opt-in.
+    telex_brackets: bool,
+    /// UniKey's `spellCheckEnabled`: refuse a diacritic that would make the word
+    /// impossible in Vietnamese, at the keystroke. Opt-in.
+    strict_spell_check: bool,
+    /// Set when the spell check refused this word: it stops transforming and
+    /// renders its raw keys until the next boundary. Cleared by `reset`.
+    escaped: bool,
 }
 
 impl Engine {
@@ -174,6 +387,10 @@ impl Engine {
             method: InputMethod::default(),
             raw: Vec::new(),
             rendered: String::new(),
+            quick_telex: false,
+            telex_brackets: false,
+            strict_spell_check: false,
+            escaped: false,
         }
     }
 
@@ -182,6 +399,44 @@ impl Engine {
         self.style = style;
         // Any in-progress word keeps its style; flush so the next word uses the new one.
         self.reset();
+    }
+
+    /// Turns "Quick Telex" on or off. Flushes so the next word uses it.
+    pub fn set_quick_telex(&mut self, on: bool) {
+        self.quick_telex = on;
+        self.reset();
+    }
+
+    /// Whether Quick Telex is on.
+    #[must_use]
+    pub fn quick_telex(&self) -> bool {
+        self.quick_telex
+    }
+
+    /// Turns the Telex bracket shortcuts on or off. Flushes so the next word
+    /// uses the new setting.
+    pub fn set_telex_brackets(&mut self, on: bool) {
+        self.telex_brackets = on;
+        self.reset();
+    }
+
+    /// Whether the Telex bracket shortcuts are on.
+    #[must_use]
+    pub fn telex_brackets(&self) -> bool {
+        self.telex_brackets
+    }
+
+    /// Turns the mid-word spell check on or off. Flushes so the next word uses
+    /// the new setting.
+    pub fn set_strict_spell_check(&mut self, on: bool) {
+        self.strict_spell_check = on;
+        self.reset();
+    }
+
+    /// Whether the mid-word spell check is on.
+    #[must_use]
+    pub fn strict_spell_check(&self) -> bool {
+        self.strict_spell_check
     }
 
     /// Changes the input method (Telex/VNI). Flushes so the next word uses it.
@@ -195,6 +450,7 @@ impl Engine {
     pub fn reset(&mut self) {
         self.raw.clear();
         self.rendered.clear();
+        self.escaped = false;
     }
 
     /// Whether a word is currently being composed.
@@ -252,14 +508,70 @@ impl Engine {
             return KeyResponse::passthrough();
         }
         self.raw.push(ch);
+        if self.strict_spell_check && !self.escaped && self.last_key_made_it_impossible() {
+            // The keystroke produced something Vietnamese cannot spell. Refuse the
+            // transformation for the rest of the word: the raw keys come back and
+            // stay literal until the next boundary. That is UniKey's
+            // `spellCheckEnabled` — the same repair auto-fix performs, but at the
+            // keystroke instead of at the space.
+            //
+            // Escaping the whole word rather than the single key is deliberate:
+            // the engine re-derives everything from the raw log on every
+            // keystroke, so a key merely dropped here would be re-applied by the
+            // next one.
+            self.escaped = true;
+        }
         self.rerender()
+    }
+
+    /// Whether the render is now something Vietnamese cannot produce.
+    ///
+    /// Judged on the **render**, never the raw keys: the raw prefix `nguow` is not
+    /// a syllable, but what it renders to — `ngươ`, an ordinary step in typing
+    /// `người` — is. Pure-ASCII renders are what the user typed verbatim and are
+    /// never refused, which is also what keeps English out of this path.
+    fn last_key_made_it_impossible(&self) -> bool {
+        // Render a candidate rather than calling `rerender`, which installs its
+        // result as `self.rendered` — the diff baseline. Committing a render the
+        // shell never applied, then diffing the next one against it, made the
+        // emitted backspace count overshoot by exactly the discarded edit and ate
+        // a character of the document to the left of the word.
+        let candidate = self.render_keys(&self.raw);
+        if !is_invalid_vietnamese(&candidate) {
+            return false;
+        }
+        // One exception: repeating a diacritic key is the user deliberately
+        // rejecting the mark (`hoongff` → `hôngf`), and the literal key it leaves
+        // behind is exactly what makes the word "impossible". Refusing that would
+        // undo a rejection the user asked for. `cass`/`aaa`/`ddd` never reach here
+        // — they render pure ASCII.
+        let repeated = matches!(
+            (self.raw.last(), self.raw.iter().nth_back(1)),
+            (Some(last), Some(prev))
+                if last.eq_ignore_ascii_case(prev) && last.is_ascii_alphabetic()
+        );
+        !repeated
+    }
+
+    /// Composes without transforming: the keys accumulate so a macro can still be
+    /// matched at the boundary, but they render exactly as typed. Reuses the same
+    /// escape the spell check sets, so there is one verbatim path, not two.
+    pub fn process_key_verbatim(&mut self, ch: char) -> KeyResponse {
+        self.escaped = true;
+        self.process_key(ch)
     }
 
     /// Whether `ch` can extend the current word. Letters always; digits only in VNI,
     /// where they carry tone and diacritic marks (`a6`→â, `viet65`→việt).
     #[must_use]
     pub fn is_syllable_char(&self, ch: char) -> bool {
-        ch.is_ascii_alphabetic() || (self.method == InputMethod::Vni && ch.is_ascii_digit())
+        ch.is_ascii_alphabetic()
+            || (self.method == InputMethod::Vni && ch.is_ascii_digit())
+            // With the bracket shortcuts on, these four are vowel keys rather
+            // than punctuation, so they extend the word instead of ending it.
+            || (self.telex_brackets
+                && self.method == InputMethod::Telex
+                && matches!(ch, '[' | ']' | '{' | '}'))
     }
 
     /// Handles a Backspace keystroke while a word is being composed.
@@ -272,6 +584,9 @@ impl Engine {
             return KeyResponse::passthrough();
         }
         self.raw.pop();
+        if self.raw.is_empty() {
+            self.escaped = false;
+        }
         let mut response = self.rerender();
         // Always consumed: even an empty word means we just deleted our last char.
         response.handled = true;
@@ -303,23 +618,168 @@ impl Engine {
         for index in (0..self.raw.len()).rev() {
             let mut candidate = self.raw.clone();
             candidate.remove(index);
-            if render(&candidate, self.style, self.method) == target {
+            if self.render_keys(&candidate) == target {
                 self.raw = candidate;
                 self.rendered = target;
+                // Deleting the word away also ends the escape. Without this the
+                // flag latched: the caller sees `true` so it never flushes, and
+                // the next word silently refused to transform.
+                if self.raw.is_empty() {
+                    self.escaped = false;
+                }
                 return true;
             }
         }
         false
     }
 
+    /// Renders a raw key sequence under this engine's settings, honouring an
+    /// escape: once the spell check has refused the word, it renders verbatim.
+    fn render_keys(&self, raw: &[char]) -> String {
+        if self.escaped {
+            return raw.iter().collect();
+        }
+        render(
+            raw,
+            self.style,
+            self.method,
+            self.quick_telex,
+            self.telex_brackets,
+        )
+    }
+
     /// Re-derives the rendered word from the raw key log and returns the edit that
     /// turns the previous rendering into the new one.
     fn rerender(&mut self) -> KeyResponse {
-        let next = render(&self.raw, self.style, self.method);
+        let next = self.render_keys(&self.raw);
         let response = diff(&self.rendered, &next);
         self.rendered = next;
         response
     }
+}
+
+/// UniKey's Simple Telex (`SimpleTelexMethodMapping`, `inputproc.cpp:119`).
+///
+/// Identical to Telex but for `w`, which UniKey maps to Hook-All rather than to
+/// its special Telex-W: it adds a horn to `u`/`o` or a breve to `a`, and does
+/// nothing on its own. Full Telex additionally lets a bare `w` stand for `ư`,
+/// which is the behaviour people either rely on or trip over — hence the
+/// separate method.
+///
+/// Spelled out as its own definition rather than patched at the key level: `vi`
+/// takes a whole `Definition`, and copying ten unchanged entries is clearer than
+/// intercepting one key on the way past.
+static SIMPLE_TELEX: vi::methods::Definition = phf::phf_map! {
+    's' => &[Action::AddTonemark(ToneMark::Acute)],
+    'f' => &[Action::AddTonemark(ToneMark::Grave)],
+    'r' => &[Action::AddTonemark(ToneMark::HookAbove)],
+    'x' => &[Action::AddTonemark(ToneMark::Tilde)],
+    'j' => &[Action::AddTonemark(ToneMark::Underdot)],
+    'a' => &[Action::ModifyLetterOnCharacterFamily(LetterModification::Circumflex, 'a')],
+    'e' => &[Action::ModifyLetterOnCharacterFamily(LetterModification::Circumflex, 'e')],
+    'o' => &[Action::ModifyLetterOnCharacterFamily(LetterModification::Circumflex, 'o')],
+    'w' => &[Action::ModifyLetter(LetterModification::Horn), Action::ModifyLetter(LetterModification::Breve)],
+    'd' => &[Action::ModifyLetter(LetterModification::Dyet)],
+    'z' => &[Action::RemoveToneMark],
+};
+
+/// "Quick Telex": a doubled consonant at the **start** of the syllable stands for
+/// its digraph, so `cc` types `ch` and `nn` types `ng`. EVKey and later UniKey
+/// releases offer this; it is absent from the 2015 UniKey source.
+///
+/// Only the syllable-initial position expands. That is where these digraphs are
+/// legal Vietnamese onsets, and it is what keeps English out of trouble: the
+/// doubled consonants in `letter`, `happy` and `accept` all sit mid-word, so
+/// none of them expand.
+///
+/// `uu` expands to the Telex keys `uw` rather than to `ư` directly, so the
+/// substitution stays inside the Telex alphabet and `vi` still does the work.
+fn expand_quick_telex(raw: &[char]) -> Vec<char> {
+    /// Doubled key at the syllable start, and the keys it stands for.
+    const EXPANSIONS: [(char, &str); 8] = [
+        ('c', "ch"),
+        ('g', "gi"),
+        ('k', "kh"),
+        ('n', "ng"),
+        ('p', "ph"),
+        ('q', "qu"),
+        ('t', "th"),
+        ('u', "uw"),
+    ];
+
+    let (Some(first), Some(second)) = (raw.first(), raw.get(1)) else {
+        return raw.to_vec();
+    };
+    let lowered = first.to_ascii_lowercase();
+    if lowered != second.to_ascii_lowercase() {
+        return raw.to_vec();
+    }
+    let Some((_, keys)) = EXPANSIONS.iter().find(|(key, _)| *key == lowered) else {
+        return raw.to_vec();
+    };
+
+    // Keep the case the user typed. Both keys shifted means caps lock is on and
+    // the whole digraph is uppercase (`CCAO`→`CHAO`); only the first shifted is
+    // the ordinary Title-case gesture (`Ccao`→`Chao`). Uppercasing just the head
+    // in the caps-lock case left a lowercase key in the slice, which then defeated
+    // `apply_case`'s all-caps test and downgraded the whole word (`CCAO`→`ChAO`).
+    let mut out: Vec<char> = keys.chars().collect();
+    if first.is_uppercase() {
+        if second.is_uppercase() {
+            for ch in &mut out {
+                *ch = ch.to_ascii_uppercase();
+            }
+        } else if let Some(head) = out.first_mut() {
+            *head = head.to_ascii_uppercase();
+        }
+    }
+    out.extend_from_slice(&raw[2..]);
+    out
+}
+
+/// UniKey's Telex bracket shortcuts: `[`→ơ, `]`→ư, `{`→Ơ, `}`→Ư
+/// (`TelexMethodMapping` in UniKey's `inputproc.cpp`).
+///
+/// Each bracket is replaced by the **Telex keys** that spell the vowel rather
+/// than by the character itself, so the substitution stays inside the Telex
+/// alphabet and a tone key typed afterwards still lands: `[f` goes through
+/// `owf` to `ờ`. Inserting a precomposed `ơ` would leave `vi` with a character
+/// it cannot then modify.
+fn expand_telex_brackets(raw: &[char]) -> Vec<char> {
+    // The injected keys have to carry the case of the word around them. Caps Lock
+    // does not shift `[`, so a caps-lock user types `[`, not `{`, and injecting a
+    // lowercase `o`/`w` left a lowercase key in the slice — which defeated
+    // `apply_case`'s all-caps test and downgraded the whole word (`TH[`→`Thơ`
+    // instead of `THƠ`). The shifted forms `{`/`}` are always uppercase, because
+    // typing them is a deliberate request for the capital.
+    // Two or more capitals means Caps Lock; a single one is just Title case, and
+    // `T[` should give `Tơ`, not `TƠ`. This is the same distinction `apply_case`
+    // draws between an all-caps word and a capitalised one.
+    let mut capitals = 0;
+    let mut letters = 0;
+    for ch in raw.iter().filter(|c| c.is_alphabetic()) {
+        letters += 1;
+        if ch.is_uppercase() {
+            capitals += 1;
+        }
+    }
+    let all_caps = letters >= 2 && capitals == letters;
+
+    let mut out = Vec::with_capacity(raw.len() + 2);
+    for &ch in raw {
+        let keys: &[char] = match (ch, all_caps) {
+            ('[', false) => &['o', 'w'],
+            ('[', true) | ('{', _) => &['O', 'W'],
+            (']', false) => &['u', 'w'],
+            (']', true) | ('}', _) => &['U', 'W'],
+            _ => {
+                out.push(ch);
+                continue;
+            }
+        };
+        out.extend_from_slice(keys);
+    }
+    out
 }
 
 /// Transforms a raw keystroke sequence into its Vietnamese rendering.
@@ -333,11 +793,39 @@ impl Engine {
 /// For words that do transform, the two case patterns users actually produce,
 /// ALL-CAPS and Title-case, are handled exactly; other interior case is
 /// best-effort (nobody types `nGuyễn`).
-fn render(raw: &[char], style: PlacementStyle, method: InputMethod) -> String {
+fn render(
+    raw: &[char],
+    style: PlacementStyle,
+    method: InputMethod,
+    quick_telex: bool,
+    telex_brackets: bool,
+) -> String {
+    let expanded;
+    // Telex only. The expansions are Telex key sequences — `uu` stands for the
+    // keys `uw` — so running them under VNI puts a literal `w` on screen that the
+    // user never typed, and auto-fix cannot repair it because the result is plain
+    // ASCII and so counts as "typed verbatim".
+    let raw = if quick_telex && method.is_telex_family() {
+        expanded = expand_quick_telex(raw);
+        expanded.as_slice()
+    } else {
+        raw
+    };
+    // Brackets run *after* Quick Telex, which inspects the first two raw keys:
+    // Quick Telex is about the literal doubled keystroke the user made, and
+    // substituting brackets first would change the pair it looks at.
+    let bracketed;
+    let raw = if telex_brackets && method == InputMethod::Telex {
+        bracketed = expand_telex_brackets(raw);
+        bracketed.as_slice()
+    } else {
+        raw
+    };
     let lowered: String = raw.iter().map(|c| c.to_ascii_lowercase()).collect();
     let definition = match method {
         InputMethod::Telex => &vi::TELEX,
         InputMethod::Vni => &vi::VNI,
+        InputMethod::SimpleTelex => &SIMPLE_TELEX,
     };
     let mut buffer = IncrementalBuffer::new_with_style(definition, style.into());
     for ch in lowered.chars() {
@@ -428,6 +916,11 @@ pub struct Session {
     /// Vietnamese (`was`→`ứa`). Off by default: it inverts the ambiguity for
     /// Vietnamese words typed with a trailing tone key (`cats`→`cát`).
     restore_english_words: bool,
+    /// UniKey's `alwaysMacro`: expand macros even while Vietnamese is off.
+    always_macro: bool,
+    /// Language of the user interface. The engine never renders text; this rides
+    /// along so the one settings file stays the single persisted surface.
+    language: Language,
 }
 
 impl Session {
@@ -448,6 +941,8 @@ impl Session {
             toggle_hotkey: HotkeyPreset::default(),
             macros: Vec::new(),
             restore_english_words: false,
+            language: Language::default(),
+            always_macro: false,
         }
     }
 
@@ -465,6 +960,11 @@ impl Session {
         session.toggle_hotkey = settings.toggle_hotkey;
         session.macros = settings.macros.clone();
         session.restore_english_words = settings.restore_english_words;
+        session.language = settings.language;
+        session.always_macro = settings.always_macro;
+        session.engine.set_quick_telex(settings.quick_telex);
+        session.engine.set_telex_brackets(settings.telex_brackets);
+        session.engine.set_strict_spell_check(settings.strict_spell_check);
         session.engine.set_method(settings.input_method);
         session
     }
@@ -489,6 +989,11 @@ impl Session {
             toggle_hotkey: self.toggle_hotkey,
             macros: self.macros.clone(),
             restore_english_words: self.restore_english_words,
+            language: self.language,
+            always_macro: self.always_macro,
+            quick_telex: self.engine.quick_telex(),
+            telex_brackets: self.engine.telex_brackets(),
+            strict_spell_check: self.engine.strict_spell_check(),
         }
     }
 
@@ -501,6 +1006,7 @@ impl Session {
     /// Sets the input method (Telex/VNI). Flushes the in-progress word.
     pub fn set_input_method(&mut self, method: InputMethod) {
         self.engine.set_method(method);
+        self.last_committed = None;
     }
 
     /// Whether to open the Settings window on launch.
@@ -555,20 +1061,60 @@ impl Session {
         if self.is_active() {
             let ch = self.maybe_capitalize(ch);
             self.engine.process_key(ch)
+        } else if self.macros_active() {
+            self.engine.process_key_verbatim(ch)
         } else {
             self.engine.reset();
             KeyResponse::passthrough()
         }
     }
 
+    /// Whether macros should still run with Vietnamese switched off — UniKey's
+    /// `alwaysMacro`.
+    ///
+    /// An excluded application is never included: excluded means hands off, and a
+    /// terminal that silently expanded `vn` into `Việt Nam` would be a worse bug
+    /// than the one exclusions exist to prevent. With no macros defined there is
+    /// nothing to match, so the whole path stays off and English typing keeps its
+    /// untouched passthrough.
+    #[must_use]
+    pub fn macros_active(&self) -> bool {
+        self.always_macro
+            && !self.macros.is_empty()
+            && self.mode == InputMode::English
+            && self
+                .current_bundle_id
+                .as_ref()
+                .is_some_and(|id| !self.exclusions.is_excluded(id))
+    }
+
+    /// Whether macros expand while Vietnamese is off.
+    #[must_use]
+    pub fn always_macro(&self) -> bool {
+        self.always_macro
+    }
+
+    /// Sets whether macros expand while Vietnamese is off.
+    pub fn set_always_macro(&mut self, on: bool) {
+        self.always_macro = on;
+    }
+
     /// Applies sentence-start capitalization to the first letter of a word when the
     /// option is on. Consumes the pending-capital flag on the first letter typed.
     fn maybe_capitalize(&mut self, ch: char) -> char {
-        if !ch.is_ascii_alphabetic() || self.engine.is_composing() {
+        // A bracket shortcut is a vowel key, so a word can begin with one. Letting
+        // it fall through as "not a letter" left `pending_capital` armed, and the
+        // capital then landed on the *following* word.
+        let bracket = self.engine.telex_brackets() && matches!(ch, '[' | ']' | '{' | '}');
+        if (!ch.is_ascii_alphabetic() && !bracket) || self.engine.is_composing() {
             return ch; // not the first letter of a word
         }
         let out = if self.auto_capitalize && self.pending_capital {
-            ch.to_ascii_uppercase()
+            match ch {
+                '[' => '{',
+                ']' => '}',
+                other => other.to_ascii_uppercase(),
+            }
         } else {
             ch
         };
@@ -615,6 +1161,38 @@ impl Session {
             expansion: expansion.to_string(),
         });
         true
+    }
+
+    /// Merges an imported macro table, returning `(added, skipped)`.
+    ///
+    /// A shortcut that already exists is **skipped, never overwritten** — an
+    /// import must not silently replace something the user typed by hand. Note
+    /// that [`add_macro`](Self::add_macro) is add-*or-replace* and answers `true`
+    /// either way, so the collision has to be caught before calling it.
+    ///
+    /// The existing shortcuts are indexed once: a curated table can hold
+    /// thousands of entries, and rescanning the list per entry would be quadratic
+    /// on the shell's main thread, where it stalls the event tap.
+    pub fn import_macros(&mut self, imported: &[Macro]) -> (usize, usize) {
+        let mut taken: std::collections::HashSet<String> = self
+            .macros
+            .iter()
+            .map(|m| m.shortcut.to_lowercase())
+            .collect();
+        let (mut added, mut skipped) = (0, 0);
+        for entry in imported {
+            let key = entry.shortcut.trim().to_lowercase();
+            if key.is_empty() || !taken.insert(key) {
+                skipped += 1;
+                continue;
+            }
+            if self.add_macro(&entry.shortcut, &entry.expansion) {
+                added += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        (added, skipped)
     }
 
     /// Removes the macro at `index` (as listed by [`macros`](Self::macros)).
@@ -730,6 +1308,7 @@ impl Session {
     pub fn set_style(&mut self, style: PlacementStyle) {
         self.style = style;
         self.engine.set_style(style);
+        self.last_committed = None;
     }
 
     /// The current placement style.
@@ -860,6 +1439,62 @@ impl Session {
         self.is_active() && self.engine.backspace_visible_char()
     }
 
+    /// The user-interface language preference.
+    #[must_use]
+    pub fn language(&self) -> Language {
+        self.language
+    }
+
+    /// Sets the user-interface language preference.
+    pub fn set_language(&mut self, language: Language) {
+        self.language = language;
+    }
+
+    /// Whether Quick Telex is on.
+    #[must_use]
+    pub fn quick_telex(&self) -> bool {
+        self.engine.quick_telex()
+    }
+
+    /// Turns Quick Telex on or off.
+    pub fn set_quick_telex(&mut self, on: bool) {
+        self.engine.set_quick_telex(on);
+        // The engine reset does not reach `last_committed`, and a word remembered
+        // under the old setting would re-compose under the new one — rewriting
+        // text already on screen.
+        self.last_committed = None;
+    }
+
+    /// Whether the Telex bracket shortcuts are on.
+    #[must_use]
+    pub fn telex_brackets(&self) -> bool {
+        self.engine.telex_brackets()
+    }
+
+    /// Turns the Telex bracket shortcuts on or off.
+    pub fn set_telex_brackets(&mut self, on: bool) {
+        self.engine.set_telex_brackets(on);
+        // The engine reset does not reach `last_committed`, and a word remembered
+        // under the old setting would re-compose under the new one — rewriting
+        // text already on screen.
+        self.last_committed = None;
+    }
+
+    /// Whether the mid-word spell check is on.
+    #[must_use]
+    pub fn strict_spell_check(&self) -> bool {
+        self.engine.strict_spell_check()
+    }
+
+    /// Turns the mid-word spell check on or off.
+    pub fn set_strict_spell_check(&mut self, on: bool) {
+        self.engine.set_strict_spell_check(on);
+        // The engine reset does not reach `last_committed`, and a word remembered
+        // under the old setting would re-compose under the new one — rewriting
+        // text already on screen.
+        self.last_committed = None;
+    }
+
     /// Flushes any in-progress word without changing mode or focus.
     ///
     /// The engine's edits ([`KeyResponse::backspaces`]) assume the current word's
@@ -899,7 +1534,30 @@ fn is_invalid_vietnamese(word: &str) -> bool {
     if word.starts_with('đ') || word.starts_with('Đ') {
         return false;
     }
-    !vi::validation::is_valid_syllable(word)
+    !vi::validation::is_valid_syllable(word) || violates_stop_coda_tone(word)
+}
+
+/// Whether the syllable breaks Vietnamese's stop-coda tone rule.
+///
+/// A syllable closed by `c`, `ch`, `p` or `t` can only carry sắc or nặng — the
+/// two "sharp" tones. Huyền, hỏi and ngã are impossible there. UniKey enforces
+/// this in `lastWordIsNonVn` (`ukengine.cpp:2352`); the `vi` crate does not, and
+/// happily calls `màc`, `hỏc`, `mãt` and `hòp` valid.
+///
+/// It matters in daily use because Telex's `f`, `r` and `x` are exactly those
+/// three tones, so ordinary English words were being transformed and then not
+/// rescued: `left`→`lèt`, `soft`→`sòt`, `gift`→`gìt`, `lift`→`lìt`. Auto-fix
+/// left them alone because it had been told they were valid Vietnamese.
+fn violates_stop_coda_tone(word: &str) -> bool {
+    /// Vowels carrying huyền, hỏi or ngã — the tones a stop coda forbids.
+    const FORBIDDEN_TONES: &str = "àèìòùỳằầềồờừÀÈÌÒÙỲẰẦỀỒỜỪ                                   ảẻỉỏủỷẳẩểổởửẢẺỈỎỦỶẲẨỂỔỞỬ                                   ãẽĩõũỹẵẫễỗỡữÃẼĨÕŨỸẴẪỄỖỠỮ";
+
+    let lowered = word.to_lowercase();
+    let stop_coda = lowered.ends_with("ch")
+        || lowered.ends_with('c')
+        || lowered.ends_with('p')
+        || lowered.ends_with('t');
+    stop_coda && word.chars().any(|ch| FORBIDDEN_TONES.contains(ch))
 }
 
 /// Computes the minimal edit turning `prev` into `next`: keep the common prefix,

@@ -230,3 +230,43 @@ fn permanent_terminal_removal_via_editor_still_works() {
     let restarted = Session::from_settings(&saved);
     assert!(!restarted.exclusions().is_excluded("com.apple.Terminal"));
 }
+
+#[test]
+fn auto_capitalize_handles_a_word_starting_with_a_bracket() {
+    // A bracket shortcut is a vowel key, so a word can begin with one. Falling
+    // through as "not a letter" left the pending capital armed and it landed on
+    // the following word instead.
+    let mut s = Session::new(PlacementStyle::New, ExclusionList::new());
+    s.set_frontmost_app("com.apple.TextEdit");
+    s.set_auto_capitalize(true);
+    s.set_telex_brackets(true);
+
+    s.note_boundary('.');
+    s.process_key(' ');
+    let first = s.process_key('[');
+    assert_eq!(first.insert, "Ơ", "a bracket-started word takes the capital");
+    s.commit();
+
+    // And the capital is spent, so the next word is not also capitalized.
+    let next = s.process_key('a');
+    assert_eq!(next.insert, "a");
+}
+
+#[test]
+fn changing_a_typing_option_forgets_the_re_composition_memory() {
+    // The engine reset does not reach `last_committed`, so a word remembered
+    // under the old setting used to re-compose under the new one and rewrite
+    // text already on screen.
+    let mut s = Session::new(PlacementStyle::New, ExclusionList::new());
+    s.set_frontmost_app("com.apple.TextEdit");
+    s.set_telex_brackets(true);
+    for ch in "t[".chars() {
+        s.process_key(ch);
+    }
+    s.commit();
+    s.set_telex_brackets(false);
+    assert!(
+        !s.recompose_after_boundary_backspace(),
+        "the committed word must not re-compose under a changed setting"
+    );
+}

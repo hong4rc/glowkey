@@ -206,3 +206,19 @@ fn mid_word_backspace_reports_failure_when_it_cannot_stay_in_step() {
     assert_eq!(engine.current_word(), "ô");
     assert!(!engine.backspace_visible_char());
 }
+
+#[test]
+fn repeating_the_diacritic_key_rejects_it() {
+    // Unikey's escape hatch, inherited from the `vi` crate: press the tone or
+    // modifier key again and the mark comes off, leaving the literal key. This is
+    // what lets a Vietnamese speaker type an English word that collides with a
+    // Telex sequence, without touching any setting.
+    assert_eq!(type_word("cas"), "cá");
+    assert_eq!(type_word("cass"), "cas");
+    assert_eq!(type_word("aa"), "â");
+    assert_eq!(type_word("aaa"), "aa");
+    assert_eq!(type_word("dd"), "đ");
+    assert_eq!(type_word("ddd"), "dd");
+    assert_eq!(type_word("hoongf"), "hồng");
+    assert_eq!(type_word("hoongff"), "hôngf");
+}

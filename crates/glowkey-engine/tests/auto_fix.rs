@@ -258,3 +258,37 @@ fn still_restores_english_words_whose_d_bar_is_not_leading() {
     let mut s = active_session(true);
     assert_eq!(type_then_commit(&mut s, "work"), "work");
 }
+
+#[test]
+fn restores_english_words_broken_by_the_stop_coda_tone_rule() {
+    // A syllable closed by c, ch, p or t can only carry sắc or nặng. The `vi`
+    // crate does not know that and called these valid Vietnamese, so auto-fix
+    // left them transformed: left→lèt, soft→sòt, gift→gìt. Telex's f, r and x are
+    // exactly the three forbidden tones, which is why ordinary English hits it.
+    for word in ["left", "soft", "gift", "lift", "loft"] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, word), word, "{word} must be restored");
+    }
+}
+
+#[test]
+fn the_stop_coda_rule_leaves_legal_vietnamese_alone() {
+    // Sắc and nặng are legal on a stop coda, and these must never be restored.
+    for (keys, expected) in [
+        ("vieejt", "việt"),
+        ("hocj", "học"),
+        ("ddaats", "đất"),
+        ("nuowcs", "nước"),
+        ("ddepj", "đẹp"),
+        ("sachs", "sách"),
+        ("quyeets", "quyết"),
+    ] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+    // A non-stop coda keeps every tone: sống, tiếng, muốn are all fine.
+    for (keys, expected) in [("soongs", "sống"), ("tieengs", "tiếng"), ("laf", "là")] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}

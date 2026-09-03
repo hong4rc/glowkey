@@ -25,10 +25,27 @@ withholds secure input from event taps).
 crates/glowkey-engine/      Vietnamese logic, settings, ignore list. Platform-free, tested.
 app/                        macOS shell (objc2): event tap, menu bar, Settings, HUD.
 scripts/build-app.sh        Builds a universal app bundle (release or dev variant).
+scripts/make-dmg.sh         Packages build/GlowKey.app into a distributable disk image.
 scripts/release-install.sh  Builds GlowKey.app, installs it to /Applications, launches it.
 scripts/dev-run.sh          Builds and runs "GlowKey Dev" with debug logging.
-docs/                       Handoff (start here), decision records, UI design.
+docs/                       Handoff (start here), decision records, manual verification, UI design.
 ```
+
+## Install
+
+Download the disk image from the [releases page](../../releases) and drag
+**GlowKey** to Applications. macOS will refuse to open it — *"GlowKey is damaged
+and can't be opened"* — because the app is signed but not notarized, which needs
+a paid Apple Developer account this project does not have. It is not damaged.
+Clear the quarantine flag once:
+
+```
+xattr -dr com.apple.quarantine /Applications/GlowKey.app
+```
+
+Then open it. GlowKey asks for the **Accessibility** permission and starts by
+itself once you grant it in System Settings → Privacy & Security →
+Accessibility.
 
 ## Develop
 
@@ -44,9 +61,18 @@ The dev loop builds a **separate app** — `GlowKey Dev`, its own bundle identif
 grant of the GlowKey you actually type with. Never run both at once: two event
 taps process every keystroke twice, and both scripts stop both variants first.
 
-The grant is tied to the ad-hoc signature, so a build that changed the code needs
-a fresh one. The app asks for it on screen and starts by itself once you enable it
-in System Settings → Privacy & Security → Accessibility.
+The grant follows the **code signature**, so how often you re-grant depends on
+how the app is signed. Ad-hoc — the default with no certificate — keys the grant
+to a hash of the code, so every code change drops it. Create a self-signed
+certificate once (Keychain Access → Certificate Assistant → Create a Certificate,
+name `GlowKey Developer`, type "Code Signing", self-signed) and `build-app.sh`
+picks it up automatically, after which a rebuild keeps the grant. `build-app.sh`
+prints which identity it used and the resulting requirement, so you can see which
+case you are in. Details in
+[`docs/decisions/0006`](docs/decisions/0006-stable-signing-identity.md).
+
+Either way the app asks for the permission on screen and starts by itself once
+you enable it.
 
 ## Privacy
 

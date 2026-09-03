@@ -123,10 +123,29 @@ define_class!(
             }
         }
 
+        #[unsafe(method(openAccessibilitySettings:))]
+        fn open_accessibility_settings(&self, _sender: Option<&AnyObject>) {
+            // Only reachable from the revoked-permission line, which is the one
+            // moment the user needs the Accessibility pane rather than GlowKey's
+            // own Settings. The tap's health monitor notices the grant coming back
+            // and rebuilds the tap by itself, so there is nothing to do here but
+            // open the right pane.
+            crate::tap::open_accessibility_settings();
+        }
+
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
-            crate::prefs_window::show(self.ivars().state, mtm);
+            crate::prefs::show(self.ivars().state, mtm);
+        }
+
+        #[unsafe(method(quickGuide:))]
+        fn quick_guide(&self, _sender: Option<&AnyObject>) {
+            // The same panel shown once at first launch. Reopenable on purpose:
+            // it is what makes dismissing the welcome a safe action rather than a
+            // one-way door.
+            let mtm = MainThreadMarker::from(self);
+            crate::welcome::show(mtm);
         }
 
         #[unsafe(method(aboutGlowKey:))]
@@ -175,7 +194,17 @@ impl MenuController {
     /// Refreshes the menu bar glyph to reflect whether Vietnamese is active for the
     /// frontmost app: `VI` when on, `EN` when off (English mode or excluded app).
     fn update_glyph(&self) {
-        let title = if self.state().is_active() { "VI" } else { "EN" };
+        // A dead tap outranks the mode. GlowKey used to keep showing VI after the
+        // Accessibility permission was revoked, which made the one indicator the
+        // app has assert that Vietnamese was on while no keystroke was reaching
+        // the engine at all.
+        let title = if crate::tap::tap_is_dead() {
+            "⚠"
+        } else if self.state().is_active() {
+            "VI"
+        } else {
+            "EN"
+        };
         let mtm = MainThreadMarker::from(self);
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             if let Some(button) = item.button(mtm) {
@@ -193,6 +222,28 @@ impl MenuController {
             crate::app_info::frontmost()
                 .unwrap_or_else(|| (t("this app", "ứng dụng này").to_string(), String::new()));
         let (mode, auto_fix, excluded) = self.state().menu_state(&bundle_id);
+
+        // A dead tap is the only thing worth saying before anything else: every
+        // item below it is inert until the permission comes back.
+        if crate::tap::tap_is_dead() {
+            self.add_disabled(
+                menu,
+                t(
+                    "⚠ Accessibility permission revoked — Vietnamese is off",
+                    "⚠ Đã thu hồi quyền Accessibility — tiếng Việt đang tắt",
+                ),
+                mtm,
+            );
+            self.add_item(
+                menu,
+                t("Open System Settings…", "Mở Cài đặt hệ thống…"),
+                sel!(openAccessibilitySettings:),
+                false,
+                "",
+                mtm,
+            );
+            self.add_separator(menu, mtm);
+        }
 
         // Header: current state.
         let header = match (excluded, mode) {
@@ -301,6 +352,14 @@ impl MenuController {
             sel!(openSettings:),
             false,
             ",",
+            mtm,
+        );
+        self.add_item(
+            menu,
+            t("Quick Guide…", "Hướng dẫn nhanh…"),
+            sel!(quickGuide:),
+            false,
+            "",
             mtm,
         );
         self.add_item(

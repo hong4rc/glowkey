@@ -1,0 +1,96 @@
+name: Release
+
+# A pushed v* tag builds the universal app, packages a disk image, and attaches
+# it to a GitHub release. Only on tags, so the cost of the two-architecture build
+# is never paid on an ordinary push.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # A tag that disagrees with Cargo.toml produces a mislabelled release, and
+      # the mislabel is the kind of thing nobody notices until someone reports a
+      # bug against the wrong version. Fail here instead.
+      - name: Tag must match the crate version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' app/Cargo.toml | head -1)"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match app/Cargo.toml version $VERSION" >&2
+            exit 1
+          fi
+
+      - run: cargo test --workspace
+
+      # Signed ad-hoc: no Developer ID, so no secrets are consumed here and the
+      # signing key never leaves a developer's keychain. The consequence is
+      # Gatekeeper, which the release notes below tell the user how to clear.
+      # See docs/decisions/0006-stable-signing-identity.md.
+      - run: bash scripts/build-app.sh release release
+
+      # The privacy guard, against the binary that actually ships. A
+      # keystroke-observing input method must not link a networking framework;
+      # CI already checks the debug build, and this is the one users run.
+      - name: Assert the shipped binary links no networking framework
+        run: |
+          BIN="build/GlowKey.app/Contents/MacOS/GlowKey"
+          # Without this the guard passes vacuously: GitHub's default shell is
+          # `bash -e` with no pipefail, so a failing `otool` produces no grep
+          # match and the step happily prints OK over a binary that is not there.
+          test -x "$BIN" || { echo "ERROR: no binary at $BIN to check." >&2; exit 1; }
+          if otool -L "$BIN" | grep -Ei '/Network\.framework|CFNetwork|/libcurl'; then
+            echo "ERROR: the shipped GlowKey links a networking framework." >&2
+            exit 1
+          fi
+          echo "OK: no networking framework linked."
+
+      - run: bash scripts/make-dmg.sh
+
+      - name: Release notes
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          1. Download the disk image below and drag **GlowKey** to Applications.
+          2. macOS will refuse to open it: *"GlowKey is damaged and can't be
+             opened."* It is not damaged — the app is signed but not notarized,
+             so Gatekeeper quarantines it. Clear the flag once:
+
+             ```
+             xattr -dr com.apple.quarantine /Applications/GlowKey.app
+             ```
+
+          3. Open GlowKey. It will ask for the **Accessibility** permission and
+             start by itself once you grant it in System Settings → Privacy &
+             Security → Accessibility.
+
+          Notarization needs a paid Apple Developer account, which this project
+          does not have. That is a deliberate choice, not an oversight.
+
+          ## Notes
+
+          - Vietnamese input does not work in password fields: macOS withholds
+            those keystrokes from every event tap, GlowKey included.
+          - Terminals and code editors are excluded by default, on purpose.
+            ⌃⇧E toggles the app you are in.
+          NOTES
+          echo "notes written"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "GlowKey $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            build/GlowKey-*.dmg

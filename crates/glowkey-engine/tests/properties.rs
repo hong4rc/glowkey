@@ -16,7 +16,9 @@
 //! before the boundary key lands. A property that modelled a path the tap never
 //! takes would prove nothing.
 
-use glowkey_engine::{ExclusionList, InputMethod, KeyResponse, PlacementStyle, Session};
+use glowkey_engine::{
+    ExclusionList, InputMethod, KeyResponse, PlacementStyle, Session, WordPreference,
+};
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
 
@@ -532,21 +534,35 @@ fn every_render_option_combination_holds_for_real_words() {
                 macro_defined: false,
             };
             for word in WORDS {
-                let mut session = options.session();
-                let mut screen = Screen::default();
-                for ch in word.chars() {
-                    if let Err(why) = step(&mut session, &mut screen, ch) {
-                        panic!("{options:?} typing {word:?}: {why}");
+                // Each word three ways: no per-word decision, pinned to the raw
+                // keys, and pinned to the Vietnamese rendering. The override is a
+                // *fourth* kind of edit `commit` can emit, and an edit the model
+                // applies but never verifies is exactly how a suite ends up with
+                // no teeth where it matters.
+                for pinned in [
+                    None,
+                    Some(WordPreference::Raw),
+                    Some(WordPreference::Vietnamese),
+                ] {
+                    let mut session = options.session();
+                    if let Some(prefer) = pinned {
+                        session.set_word_override(word, prefer);
                     }
+                    let mut screen = Screen::default();
+                    for ch in word.chars() {
+                        if let Err(why) = step(&mut session, &mut screen, ch) {
+                            panic!("{options:?} {pinned:?} typing {word:?}: {why}");
+                        }
+                    }
+                    // Finish at a boundary too — the commit path is where auto-fix,
+                    // the English restore and the override all actually fire.
+                    if let Err(why) = step(&mut session, &mut screen, ' ') {
+                        panic!("{options:?} {pinned:?} finishing {word:?}: {why}");
+                    }
+                    checked += 1;
                 }
-                // Finish at a boundary too — the commit path is where auto-fix and
-                // the English restore actually fire.
-                if let Err(why) = step(&mut session, &mut screen, ' ') {
-                    panic!("{options:?} finishing {word:?}: {why}");
-                }
-                checked += 1;
             }
         }
     }
-    assert_eq!(checked, 3 * 16 * WORDS.len(), "matrix coverage changed");
+    assert_eq!(checked, 3 * 16 * WORDS.len() * 3, "matrix coverage changed");
 }

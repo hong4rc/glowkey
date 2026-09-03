@@ -38,6 +38,10 @@ jobs:
         run: |
           cargo build -p glowkey
           BIN=target/debug/GlowKey
+          # Without this the guard passes vacuously: GitHub's default shell is
+          # `bash -e` with no pipefail, so a failing `otool` produces no grep
+          # match and the step happily prints OK over a binary that is not there.
+          test -x "$BIN" || { echo "ERROR: no binary at $BIN to check." >&2; exit 1; }
           if otool -L "$BIN" | grep -Ei '/Network\.framework|CFNetwork|/libcurl'; then
             echo "ERROR: GlowKey links a networking framework — a keystroke-observing IME must not." >&2
             exit 1

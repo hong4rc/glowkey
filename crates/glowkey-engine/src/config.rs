@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ExclusionList, HotkeyPreset, InputMethod, Language, Macro, PlacementStyle};
+use crate::{
+    ExclusionList, HotkeyPreset, InputMethod, Language, Macro, PlacementStyle, WordOverride,
+};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +74,19 @@ pub struct Settings {
     /// switched off. Never applies in an excluded application.
     #[serde(default)]
     pub always_macro: bool,
+    /// Whether the one-time welcome has been shown. GlowKey is a background agent
+    /// with no Dock icon: without this it grants itself a permission, puts a glyph
+    /// in the menu bar and then says nothing, leaving the two hotkeys and the
+    /// per-app ignore list — the whole point of the app — undiscoverable. Missing
+    /// from an existing settings file means `false`, so an established user sees
+    /// it once too.
+    #[serde(default)]
+    pub welcome_shown: bool,
+    /// Per-word decisions about the English/Telex ambiguity — the one limitation
+    /// no rule can resolve (`docs/handoff.md` §6.3). Empty by default, and an
+    /// existing settings file gains an empty list rather than failing to load.
+    #[serde(default)]
+    pub word_overrides: Vec<WordOverride>,
 }
 
 impl Default for Settings {
@@ -92,6 +107,8 @@ impl Default for Settings {
             telex_brackets: false,
             strict_spell_check: false,
             always_macro: false,
+            welcome_shown: false,
+            word_overrides: Vec::new(),
         }
     }
 }
@@ -157,9 +174,33 @@ mod tests {
             telex_brackets: true,
             strict_spell_check: true,
             always_macro: true,
+            welcome_shown: true,
+            word_overrides: vec![WordOverride {
+                keys: "cats".into(),
+                prefer: crate::WordPreference::Vietnamese,
+            }],
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);
+    }
+
+    /// An existing settings file predates `word_overrides` too, so it must load
+    /// with an empty list rather than failing — the same tolerance every other
+    /// added key relies on.
+    #[test]
+    fn a_settings_file_without_word_overrides_loads_with_none() {
+        let old = r#"{"exclusions":["com.apple.Terminal"],"auto_fix":true}"#;
+        assert!(Settings::from_json(old).word_overrides.is_empty());
+    }
+
+    /// An existing settings file predates `welcome_shown`, so the key is absent.
+    /// It must read as `false` — otherwise an established user would be the one
+    /// person who never sees the guide, which is backwards.
+    #[test]
+    fn a_settings_file_without_the_welcome_key_has_not_seen_it() {
+        let old = r#"{"exclusions":["com.apple.Terminal"],"auto_fix":true}"#;
+        let settings = Settings::from_json(old);
+        assert!(!settings.welcome_shown);
     }
 
     #[test]

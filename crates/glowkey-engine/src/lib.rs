@@ -16,9 +16,10 @@
 //! shell simply never calls [`Engine::process_key`].
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use vi::methods::{Action, IncrementalBuffer};
-use vi::processor::{LetterModification, ToneMark};
 use vi::processor::AccentStyle;
+use vi::processor::{LetterModification, ToneMark};
 
 pub mod config;
 mod english;
@@ -198,6 +199,55 @@ pub struct Macro {
     pub shortcut: String,
     /// The text inserted in place of the shortcut.
     pub expansion: String,
+}
+
+/// The word just committed, remembered so one keystroke can correct it.
+///
+/// A separate memory from [`Session::last_committed`], which exists for
+/// re-composition and is deliberately **not** set when auto-fix restored the
+/// word. The correction hotkey needs the opposite: a word that auto-fix already
+/// rewrote is exactly the one the user most often wants to argue with.
+#[derive(Debug, Clone)]
+struct CorrectableWord {
+    /// The keys as typed.
+    raw: String,
+    /// The Vietnamese rendering of those keys.
+    rendered: String,
+    /// Which of the two is on screen right now.
+    on_screen: WordPreference,
+    /// The boundary character typed after the word, which the correction has to
+    /// step back over and then put back.
+    boundary: char,
+}
+
+/// Which reading of one set of typed keys the user wants.
+///
+/// The English/Telex ambiguity is not resolvable by rule — the same keystrokes
+/// are legitimate Vietnamese and legitimate English (`docs/handoff.md` §6.3), so
+/// `cats` is both `cats` and `cát` and no amount of cleverness decides which.
+/// This is the user answering, one word at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WordPreference {
+    /// Keep the keys as typed: `cats` stays `cats`.
+    #[default]
+    Raw,
+    /// Keep the Vietnamese rendering: `cats` becomes `cát`.
+    Vietnamese,
+}
+
+/// One word the user has decided about.
+///
+/// Keyed on the **raw keys**, lowercased, because the raw keys are what the
+/// ambiguity is about: one key sequence, two readings. `cats` is the question;
+/// `cats` and `cát` are the two answers. Lowercased to match
+/// `english::is_common_english`, so a capitalised word at a sentence start obeys
+/// the same decision as the same word mid-sentence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WordOverride {
+    /// The typed keys, lowercase.
+    pub keys: String,
+    /// Which reading to keep.
+    pub prefer: WordPreference,
 }
 
 /// The `version` a UniKey macro-table header declares for a UTF-8 body. Anything
@@ -918,6 +968,15 @@ pub struct Session {
     restore_english_words: bool,
     /// UniKey's `alwaysMacro`: expand macros even while Vietnamese is off.
     always_macro: bool,
+    /// Whether the one-time welcome has been shown (persisted).
+    welcome_shown: bool,
+    /// The word just committed, for the correction hotkey. One-shot: cleared by
+    /// the correction itself and by anything that could move the caret.
+    correctable: Option<CorrectableWord>,
+    /// Per-word decisions, indexed for lookup at the word boundary. The persisted
+    /// form is a `Vec<WordOverride>` in `Settings` — stable and diffable, like
+    /// `macros`; this map is the index over it, rebuilt on load.
+    word_overrides: HashMap<String, WordPreference>,
     /// Language of the user interface. The engine never renders text; this rides
     /// along so the one settings file stays the single persisted surface.
     language: Language,
@@ -943,6 +1002,9 @@ impl Session {
             restore_english_words: false,
             language: Language::default(),
             always_macro: false,
+            welcome_shown: false,
+            correctable: None,
+            word_overrides: HashMap::new(),
         }
     }
 
@@ -962,9 +1024,17 @@ impl Session {
         session.restore_english_words = settings.restore_english_words;
         session.language = settings.language;
         session.always_macro = settings.always_macro;
+        session.welcome_shown = settings.welcome_shown;
+        session.word_overrides = settings
+            .word_overrides
+            .iter()
+            .map(|o| (o.keys.to_ascii_lowercase(), o.prefer))
+            .collect();
         session.engine.set_quick_telex(settings.quick_telex);
         session.engine.set_telex_brackets(settings.telex_brackets);
-        session.engine.set_strict_spell_check(settings.strict_spell_check);
+        session
+            .engine
+            .set_strict_spell_check(settings.strict_spell_check);
         session.engine.set_method(settings.input_method);
         session
     }
@@ -991,6 +1061,8 @@ impl Session {
             restore_english_words: self.restore_english_words,
             language: self.language,
             always_macro: self.always_macro,
+            welcome_shown: self.welcome_shown,
+            word_overrides: self.word_override_list(),
             quick_telex: self.engine.quick_telex(),
             telex_brackets: self.engine.telex_brackets(),
             strict_spell_check: self.engine.strict_spell_check(),
@@ -1006,7 +1078,7 @@ impl Session {
     /// Sets the input method (Telex/VNI). Flushes the in-progress word.
     pub fn set_input_method(&mut self, method: InputMethod) {
         self.engine.set_method(method);
-        self.last_committed = None;
+        self.forget_last_word();
     }
 
     /// Whether to open the Settings window on launch.
@@ -1057,7 +1129,7 @@ impl Session {
     /// cannot leave a stale diff baseline that later corrupts the document.
     pub fn process_key(&mut self, ch: char) -> KeyResponse {
         // Any typed key ends the re-composition window opened by the last commit.
-        self.last_committed = None;
+        self.forget_last_word();
         if self.is_active() {
             let ch = self.maybe_capitalize(ch);
             self.engine.process_key(ch)
@@ -1099,6 +1171,71 @@ impl Session {
         self.always_macro = on;
     }
 
+    /// Forgets the word just committed, for both purposes that remember it:
+    /// re-composition (`hồng`␣⌫`z`) and the correction hotkey.
+    ///
+    /// Every caller that used to clear `last_committed` clears both, and there
+    /// are no exceptions — all nine sites are the same situation, namely that
+    /// the caret may no longer be just after that word, or that the word would
+    /// now render differently. Two fields cleared through one function cannot
+    /// drift apart, which is the point: a `correctable` left behind after a caret
+    /// move would let one keystroke rewrite text somewhere else entirely.
+    fn forget_last_word(&mut self) {
+        self.last_committed = None;
+        self.correctable = None;
+    }
+
+    /// Every recorded word decision, sorted by keys so the settings file has a
+    /// stable order and a hand-edit produces a readable diff.
+    #[must_use]
+    pub fn word_override_list(&self) -> Vec<WordOverride> {
+        let mut list: Vec<WordOverride> = self
+            .word_overrides
+            .iter()
+            .map(|(keys, prefer)| WordOverride {
+                keys: keys.clone(),
+                prefer: *prefer,
+            })
+            .collect();
+        list.sort_by(|a, b| a.keys.cmp(&b.keys));
+        list
+    }
+
+    /// The decision recorded for `keys`, if any.
+    #[must_use]
+    pub fn word_override(&self, keys: &str) -> Option<WordPreference> {
+        self.word_overrides.get(&keys.to_ascii_lowercase()).copied()
+    }
+
+    /// Records (or replaces) the decision for `keys`.
+    pub fn set_word_override(&mut self, keys: &str, prefer: WordPreference) {
+        let keys = keys.trim().to_ascii_lowercase();
+        if keys.is_empty() {
+            return;
+        }
+        self.word_overrides.insert(keys, prefer);
+    }
+
+    /// Forgets the decision for `keys`, returning whether there was one.
+    pub fn remove_word_override(&mut self, keys: &str) -> bool {
+        self.word_overrides
+            .remove(&keys.to_ascii_lowercase())
+            .is_some()
+    }
+
+    /// Whether the one-time welcome has already been shown.
+    #[must_use]
+    pub fn welcome_shown(&self) -> bool {
+        self.welcome_shown
+    }
+
+    /// Marks the welcome as shown, so it never appears unbidden again. The menu's
+    /// "Quick Guide" reopens it on demand, which is what keeps dismissing it a
+    /// safe thing to do rather than a destructive one.
+    pub fn set_welcome_shown(&mut self, shown: bool) {
+        self.welcome_shown = shown;
+    }
+
     /// Applies sentence-start capitalization to the first letter of a word when the
     /// option is on. Consumes the pending-capital flag on the first letter typed.
     fn maybe_capitalize(&mut self, ch: char) -> char {
@@ -1127,6 +1264,12 @@ impl Session {
     pub fn note_boundary(&mut self, ch: char) {
         if matches!(ch, '.' | '!' | '?') {
             self.pending_capital = true;
+        }
+        // `commit` runs before this and cannot know which key ended the word, so
+        // it leaves the boundary blank and this fills it in. A correction has to
+        // step back over that character and put it back afterwards.
+        if let Some(word) = self.correctable.as_mut() {
+            word.boundary = ch;
         }
     }
 
@@ -1308,7 +1451,7 @@ impl Session {
     pub fn set_style(&mut self, style: PlacementStyle) {
         self.style = style;
         self.engine.set_style(style);
-        self.last_committed = None;
+        self.forget_last_word();
     }
 
     /// The current placement style.
@@ -1370,7 +1513,7 @@ impl Session {
             {
                 let on_screen_len = self.engine.current_word().encode_utf16().count();
                 self.engine.reset();
-                self.last_committed = None; // an expansion is not re-composable
+                self.forget_last_word(); // an expansion has no second reading
                 return Some(KeyResponse {
                     handled: true,
                     backspaces: on_screen_len,
@@ -1378,22 +1521,37 @@ impl Session {
                 });
             }
         }
-        let restore = if (self.auto_fix || self.restore_english_words) && self.engine.is_composing()
-        {
+        let restore = if self.engine.is_composing() {
             let rendered = self.engine.current_word().to_string();
             let raw = self.engine.raw_string();
-            // Two independent reasons to restore the raw keys:
-            // - auto-fix: the rendering is not valid Vietnamese (`eĩt` → `exit`);
-            // - English restore (opt-in): the raw keys are a common English word,
-            //   even when the rendering IS valid Vietnamese (`ứa` → `was`).
-            let invalid = self.auto_fix && is_invalid_vietnamese(&rendered);
-            let english = self.restore_english_words && english::is_common_english(&raw);
-            // Only restore if it actually changes something.
-            ((invalid || english) && raw != rendered).then(|| KeyResponse {
-                handled: true,
-                backspaces: rendered.encode_utf16().count(),
-                insert: raw,
-            })
+            // A decision the user made about this exact word wins over every rule,
+            // in both directions, and is the only thing that can force the
+            // Vietnamese reading of a word auto-fix would otherwise restore.
+            // Rules generalise; this word is the case where generalising was wrong.
+            let wanted = match self.word_overrides.get(&raw.to_ascii_lowercase()) {
+                Some(WordPreference::Raw) => Some(raw.clone()),
+                Some(WordPreference::Vietnamese) => Some(rendered.clone()),
+                // No decision recorded: fall back to the rules. Two independent
+                // reasons to restore the raw keys —
+                // - auto-fix: the rendering is not valid Vietnamese (`eĩt` → `exit`);
+                // - English restore (opt-in): the raw keys are a common English
+                //   word, even when the rendering IS valid Vietnamese (`ứa` → `was`).
+                None => {
+                    let invalid = self.auto_fix && is_invalid_vietnamese(&rendered);
+                    let english = self.restore_english_words && english::is_common_english(&raw);
+                    (invalid || english).then(|| raw.clone())
+                }
+            };
+            // Only emit when it actually changes something. The backspace count is
+            // the rendered word's full UTF-16 length because a restore replaces the
+            // whole word — `tests/properties.rs` asserts exactly that.
+            wanted
+                .filter(|want| *want != rendered)
+                .map(|want| KeyResponse {
+                    handled: true,
+                    backspaces: rendered.encode_utf16().count(),
+                    insert: want,
+                })
         } else {
             None
         };
@@ -1407,8 +1565,78 @@ impl Session {
         } else {
             None
         };
+        // Remember it for the correction hotkey too, and unlike the line above,
+        // remember it **whether or not** it was restored: a word auto-fix already
+        // rewrote is the one the user most often wants to argue with. The boundary
+        // character is filled in by `note_boundary`, which the shell calls next.
+        self.correctable = if self.engine.is_composing() {
+            let raw = self.engine.raw_string();
+            let rendered = self.engine.current_word().to_string();
+            // What is on screen is the raw keys if something restored them, and
+            // the rendering otherwise.
+            let on_screen = match &restore {
+                Some(edit) if edit.insert == raw => WordPreference::Raw,
+                Some(_) => WordPreference::Vietnamese,
+                None => WordPreference::Vietnamese,
+            };
+            // Nothing to correct when both readings are the same word.
+            (raw != rendered).then_some(CorrectableWord {
+                raw,
+                rendered,
+                on_screen,
+                boundary: '\0',
+            })
+        } else {
+            None
+        };
         self.engine.reset();
         restore
+    }
+
+    /// Swaps the word just committed to its other reading and records that choice,
+    /// returning the edit the shell must apply. `None` when there is nothing to
+    /// correct.
+    ///
+    /// The edit reaches back **over the boundary character** into text already
+    /// committed, which is further than anything else in GlowKey goes, and the
+    /// blind model cannot verify that the caret is still there. That is why the
+    /// memory is cleared by everything that could move it, and why this is
+    /// one-shot: pressing the key twice must not toggle back and forth, because
+    /// the second press would be recorded as a fresh decision and the list would
+    /// learn whichever direction the user happened to stop on.
+    pub fn correct_last_word(&mut self) -> Option<KeyResponse> {
+        let word = self.correctable.take()?;
+        if self.engine.is_composing() {
+            // Mid-word: the caret is not just after that boundary any more.
+            return None;
+        }
+        let (on_screen, replacement, prefer) = match word.on_screen {
+            WordPreference::Raw => (&word.raw, &word.rendered, WordPreference::Vietnamese),
+            WordPreference::Vietnamese => (&word.rendered, &word.raw, WordPreference::Raw),
+        };
+        self.set_word_override(&word.raw, prefer);
+        // Delete the boundary and the word, then insert the other reading and put
+        // the boundary back — one edit, one ordered post, so nothing can arrive
+        // out of order (`docs/handoff.md` §5).
+        let mut insert = replacement.clone();
+        let mut backspaces = on_screen.encode_utf16().count();
+        if word.boundary != '\0' {
+            backspaces += word.boundary.len_utf16();
+            insert.push(word.boundary);
+        }
+        Some(KeyResponse {
+            handled: true,
+            backspaces,
+            insert,
+        })
+    }
+
+    /// The word that a correction would act on, for the on-screen confirmation.
+    #[must_use]
+    pub fn correctable_word(&self) -> Option<(String, WordPreference)> {
+        self.correctable
+            .as_ref()
+            .map(|w| (w.raw.clone(), w.on_screen))
     }
 
     /// On a Backspace that deletes the boundary immediately after a just-committed
@@ -1419,7 +1647,7 @@ impl Session {
     pub fn recompose_after_boundary_backspace(&mut self) -> bool {
         if self.engine.is_composing() {
             // Mid-word backspace: a normal delete, not a boundary re-composition.
-            self.last_committed = None;
+            self.forget_last_word();
             return false;
         }
         match self.last_committed.take() {
@@ -1462,7 +1690,7 @@ impl Session {
         // The engine reset does not reach `last_committed`, and a word remembered
         // under the old setting would re-compose under the new one — rewriting
         // text already on screen.
-        self.last_committed = None;
+        self.forget_last_word();
     }
 
     /// Whether the Telex bracket shortcuts are on.
@@ -1477,7 +1705,7 @@ impl Session {
         // The engine reset does not reach `last_committed`, and a word remembered
         // under the old setting would re-compose under the new one — rewriting
         // text already on screen.
-        self.last_committed = None;
+        self.forget_last_word();
     }
 
     /// Whether the mid-word spell check is on.
@@ -1492,7 +1720,7 @@ impl Session {
         // The engine reset does not reach `last_committed`, and a word remembered
         // under the old setting would re-compose under the new one — rewriting
         // text already on screen.
-        self.last_committed = None;
+        self.forget_last_word();
     }
 
     /// Flushes any in-progress word without changing mode or focus.
@@ -1505,7 +1733,7 @@ impl Session {
     /// delete text the engine never wrote.
     pub fn flush(&mut self) {
         self.engine.reset();
-        self.last_committed = None;
+        self.forget_last_word();
         // A caret move / click lands us in unknown context; don't guess a sentence
         // start, so the next letter is not wrongly capitalized.
         self.pending_capital = false;

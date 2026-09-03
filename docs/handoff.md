@@ -47,7 +47,13 @@ Cargo workspace:
 - `exclusion.rs`: `ExclusionList` + `DEFAULT_EXCLUSIONS` (terminals/editors).
 
 ### Shell (`app/src/`)
-- `tap.rs` — the `CGEventTap`. **Full-suppression model**: GlowKey suppresses
+- `tap/` — the `CGEventTap`, split eight ways (2026-09-03; it had reached 2255
+  lines): `mod.rs` (state, run, the C callback, circuit breaker), `decide.rs`
+  (the pure decision + its `CGEvent`-driven tests live in `tests.rs`),
+  `keys.rs` (reading an event, recognising the hotkeys), `emit.rs` (everything
+  that writes to the document, plus the omnibox guard call site), `settings.rs`
+  (the `*_and_save` accessor wall the UI calls), `health.rs` (the tap health
+  monitor, §6.6), `permission.rs` (the startup gate). **Full-suppression model**: GlowKey suppresses
   **every** letter it handles and re-emits the diff from a **single tagged
   `CGEventSource`** via `CGEventPost(SessionEventTap)`. This is the crux of
   correctness (see §5). Tags its own events and skips them (feedback-loop guard);
@@ -55,12 +61,18 @@ Cargo workspace:
   event + session and is unit-tested with real `CGEvent`s.
 - `menu_bar.rs` — `NSStatusItem`, live **VI/EN glyph**, menu (per-app toggle,
   mode, auto-fix, launch-at-login, reset, reveal log, Settings, About, Quit).
-- `prefs_window.rs` — Settings window, an `NSTabView` of four panes (General /
-  Typing / Corrections / Apps & macros), plus the separate **Excluded Apps** and
-  **Macros** windows. The panes exist because a single column had grown past 800
-  points — each tab builds its own stack via `tab_stack`, and the tab title
-  carries the grouping that section headers used to.
-- `about_window.rs`, `hud.rs` (toggle flash), `login_item.rs` (SMAppService),
+- `prefs/` — Settings window, an `NSTabView` of four panes (General / Typing /
+  Corrections / Apps & macros), plus the separate **Excluded Apps** and
+  **Macros** windows. Split five ways (2026-09-03, from 1423 lines): `mod.rs`
+  (the `define_class!` controller and its actions), `tabs.rs` (the four panes),
+  `excluded.rs`, `macros_window.rs` (including the import/export bodies, moved
+  out of the class where 141 lines of file dialog sat among forty four-line
+  toggles), `widgets.rs` (the shared row/label/stack helpers). The panes exist
+  because a single column had grown past 800 points — each tab builds its own
+  stack via `tab_stack`, and the tab title carries the grouping that section
+  headers used to.
+- `about_window.rs`, `welcome.rs` (the one-time guide, §6.7), `hud.rs` (toggle
+  flash), `login_item.rs` (SMAppService),
   `app_info.rs` (frontmost app), `settings_store.rs` (file I/O), `log.rs`.
 
 ## 4. Features implemented (all committed, test-covered where headless-possible)
@@ -279,6 +291,39 @@ Cargo workspace:
    in the Accessibility list, so it cannot be dropped, but calling it at startup
    put two dialogs on screen at once.
 
+6. **Accessibility revoked while running** — FIXED, needs live verification.
+   The permission used to be checked once at startup and never again, so
+   revoking it killed the tap silently: the process stayed alive, the menu bar
+   kept showing **VI**, the log said nothing, and re-granting did not help
+   because nothing re-entered the gate. There was no lag and no loop — nothing
+   polled at all — which is exactly why the failure was silence. Now
+   `tap/health.rs` polls `CGEventTapIsEnabled` every two seconds and branches on
+   the cause: disabled-but-trusted is re-enabled in place and logged with a
+   count; revoked shows a **⚠** glyph plus a menu line offering "Open System
+   Settings…", and when trust returns the tap is **rebuilt** (re-enabling the old
+   port does nothing — it was created under a grant that no longer exists). The
+   `TapDisabled*` callback branch is logged and counted too, where it used to
+   re-enable blind. See `docs/decisions/0007`. **Unverified:** on some macOS
+   versions revoking terminates the process outright, which would make the
+   recovery path unreachable and harmless; that reproduction is step 1 of
+   `docs/manual-verification.md` §9.
+
+7. **First-run discoverability** — FIXED, needs an eyeball. A one-time
+   `NSAlert` after the first successful grant names ⌃⇧Space, ⌃⇧E and the default
+   terminal exclusions; `welcome_shown` in settings keeps it to once, and the
+   menu's **Quick Guide…** reopens it. Shown only from the path where the gate
+   succeeded, never from inside it — two dialogs at once is the bug §6.5
+   records.
+
+8. **Signing and distribution** — `build-app.sh` now signs with a stable
+   self-signed identity when one exists and says so, ad-hoc otherwise; it also
+   stamps the version from `app/Cargo.toml` and prints the designated
+   requirement, so the cdhash churn behind the re-grant problem is visible at
+   build time. `scripts/make-dmg.sh` + `.github/workflows/release.yml` turn a
+   `v*` tag into a disk image. Not notarized (no paid Apple account, by choice),
+   so a downloaded copy needs `xattr -dr com.apple.quarantine` once. See
+   `docs/decisions/0006`.
+
 ## 7. Diagnosing from the log (do this first for any reported typing bug)
 
 `~/Library/Logs/GlowKey/glowkey.log` records every handled key:
@@ -322,7 +367,13 @@ cargo bench -p glowkey-engine  # keystroke latency numbers (criterion)
 bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch
 bash scripts/dev-run.sh                  # build+run "GlowKey Dev" w/ GLOWKEY_DEBUG=1
 bash scripts/build-app.sh [release|dev] [release|debug]   # bundle only, no install
+bash scripts/make-dmg.sh                 # package build/GlowKey.app as a .dmg
 ```
+
+Manual checks that no test can reach — every Settings control, the HUD variants,
+the omnibox in each browser, permission revocation — are scripted in
+[`manual-verification.md`](manual-verification.md). It has **never been run end
+to end**; treat unticked sections as unverified.
 
 **Two app identities.** The shipped app is `GlowKey` / `io.glowkey.GlowKey`; the
 dev loop builds `GlowKey Dev` / `io.glowkey.GlowKey.dev` (own display name, own

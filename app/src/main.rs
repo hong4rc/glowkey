@@ -24,13 +24,15 @@ mod login_item;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]
-mod prefs_window;
+mod prefs;
 #[cfg(target_os = "macos")]
 mod settings_store;
 #[cfg(target_os = "macos")]
 mod strings;
 #[cfg(target_os = "macos")]
 mod tap;
+#[cfg(target_os = "macos")]
+mod welcome;
 
 #[cfg(target_os = "macos")]
 fn main() {

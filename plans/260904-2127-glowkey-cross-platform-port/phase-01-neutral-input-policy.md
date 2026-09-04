@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Neutral input policy crate"
-status: pending
+status: complete
 priority: P1
 effort: "3d"
 dependencies: []
@@ -101,13 +101,13 @@ Port it as a unit and pin the order with tests before touching macOS.
 
 ## Success Criteria
 
-- [ ] `cargo test -p glowkey-input` green on macOS
-- [ ] `cargo check -p glowkey-input --target x86_64-pc-windows-msvc` green
-- [ ] `cargo check -p glowkey-input --target x86_64-unknown-linux-gnu` green
-- [ ] The five-case Backspace ladder is pinned by tests naming each case
-- [ ] `hoongf, ⌫⌫z → hông` and `hoongf vieet s⌫⌫⌫⌫⌫⌫⌫z → hồngz` both pass here,
+- [x] `cargo test -p glowkey-input` green on macOS
+- [x] `cargo check -p glowkey-input --target x86_64-pc-windows-msvc` green
+- [x] `cargo check -p glowkey-input --target x86_64-unknown-linux-gnu` green
+- [x] The five-case Backspace ladder is pinned by tests naming each case
+- [x] `hoongf, ⌫⌫z → hông` and `hoongf vieet s⌫⌫⌫⌫⌫⌫⌫z → hồngz` both pass here,
       not only at the tap
-- [ ] No `cfg(target_os)` anywhere in the crate
+- [x] No `cfg(target_os)` anywhere in the crate
 
 ## Risk Assessment
 

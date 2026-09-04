@@ -1,7 +1,7 @@
 ---
 title: "GlowKey — cross-platform: macOS, Windows, then Linux"
 description: "Lift the platform-neutral decision policy out of app/src/tap/ into its own crate, re-seat macOS on it unchanged, build a Windows backend on WH_KEYBOARD_LL + SendInput, and design the Linux backend against the Wayland reality before building it. The Vietnamese engine does not change."
-status: pending
+status: in-progress
 priority: P1
 effort: "15-22 days"
 tags: [glowkey, cross-platform, windows, linux, architecture, port]
@@ -88,9 +88,9 @@ mechanically prevents platform code from creeping back in.
 
 | # | Phase | Status | Depends on |
 |---|-------|--------|------------|
-| 1 | [Neutral input policy crate](./phase-01-neutral-input-policy.md) | Pending | — |
-| 2 | [Platform-neutral hotkeys and app identity](./phase-02-hotkeys-and-app-identity.md) | Pending | 1 |
-| 3 | [Re-seat macOS on the neutral layer](./phase-03-reseat-macos.md) | Pending | 1, 2 |
+| 1 | [Neutral input policy crate](./phase-01-neutral-input-policy.md) | Complete | — |
+| 2 | [Platform-neutral hotkeys and app identity](./phase-02-hotkeys-and-app-identity.md) | Complete | 1 |
+| 3 | [Re-seat macOS on the neutral layer](./phase-03-reseat-macos.md) | Complete | 1, 2 |
 | 4 | [Windows input core](./phase-04-windows-input-core.md) | Pending | 3 |
 | 5 | [Windows application shell](./phase-05-windows-shell.md) | Pending | 4 |
 | 6 | [Windows verification on real hardware](./phase-06-windows-verification.md) | Pending | 5 |
@@ -133,8 +133,8 @@ dependency.
 
 ## Success Criteria
 
-- [ ] `glowkey-input` exists, has no OS dependency, and CI tests it on Linux
-- [ ] The decision ladder's ordering is pinned by tests that run on any platform
+- [x] `glowkey-input` exists, has no OS dependency, and CI tests it on Linux
+- [x] The decision ladder's ordering is pinned by tests that run on any platform
 - [ ] macOS: all 194 tests green, clippy silent, behaviour unchanged by inspection
       against `docs/manual-verification.md`
 - [ ] `cargo check --target x86_64-pc-windows-msvc` green for the whole workspace
@@ -143,7 +143,7 @@ dependency.
 - [ ] Synthesized input is provably not reprocessed — the `dwExtraInfo` tag is
       checked and a test proves the guard
 - [ ] Elevated-window failure is *detected and reported*, not silent
-- [ ] Existing macOS settings files keep working; no silent reinterpretation of
+- [x] Existing macOS settings files keep working; no silent reinterpretation of
       `HotkeyPreset::Custom`
 - [ ] A written list of Windows limitations ships with the phase
 - [ ] Linux design records the Wayland decision with evidence, before any Linux code

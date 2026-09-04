@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Platform-neutral hotkeys and app identity"
-status: pending
+status: complete
 priority: P1
 effort: "2d"
 dependencies: [1]
@@ -106,12 +106,15 @@ shipped default must not have it reappear.
 
 ## Success Criteria
 
-- [ ] A settings.json written by today's macOS build loads with identical behaviour
-- [ ] `HotkeyPreset::Custom` recorded on macOS still matches on macOS
+- [x] A settings.json written by today's macOS build loads with identical behaviour
+- [x] `HotkeyPreset::Custom` recorded on macOS still matches on macOS
 - [ ] A Windows build with a macOS-recorded custom hotkey falls back to `key_char`
-      and logs that it did, rather than matching a wrong key
-- [ ] Tombstone behaviour proven by test across the table split
-- [ ] `cargo test -p glowkey-engine` green on the Linux target's test suite in CI
+      and logs that it did, rather than matching a wrong key — the fallback and
+      the log line exist and are tested (`hotkey::Hotkey::is_char_fallback`,
+      `crates/glowkey-input/tests/hotkey.rs`); there is no Windows build to run
+      it against until Phase 5
+- [x] Tombstone behaviour proven by test across the table split
+- [x] `cargo test -p glowkey-engine` green on the Linux target's test suite in CI
 
 ## Risk Assessment
 

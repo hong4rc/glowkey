@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Re-seat macOS on the neutral layer"
-status: pending
+status: complete
 priority: P1
 effort: "2d"
 dependencies: [1, 2]
@@ -67,11 +67,12 @@ what needs a real `CGEvent`: the tag guard, suppression versus passthrough at th
 
 ## Success Criteria
 
-- [ ] All 194 tests green, clippy silent, `cargo fmt` introduces no new drift
-- [ ] `app/src/platform/macos/` contains no policy — only translation and macOS I/O
-- [ ] `docs/handoff.md` §3 updated for the new layout
-- [ ] `docs/decisions/0008`'s rule still holds: no blocking call reaches the callback
-- [ ] Release build runs and types Vietnamese (a human check, one minute)
+- [x] All 194 tests green, clippy silent, `cargo fmt` introduces no new drift
+- [x] `app/src/platform/macos/` contains no policy — only translation and macOS I/O
+- [x] `docs/handoff.md` §3 updated for the new layout
+- [x] `docs/decisions/0008`'s rule still holds: no blocking call reaches the callback
+- [ ] Release build runs and types Vietnamese (a human check, one minute) — the
+      bundle builds and signs (`scripts/build-app.sh`); the typing is still owed
 
 ## Risk Assessment
 

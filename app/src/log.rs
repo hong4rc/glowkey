@@ -56,12 +56,24 @@ fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The log file's path (`~/Library/Logs/GlowKey/glowkey.log`), if `HOME` is known.
-/// Public so the menu can reveal it in Finder.
+/// The log file's path, if the platform's log directory can be resolved. Public
+/// so the shell can reveal it in the file manager.
+///
+/// Only the location differs per platform; everything below — the rotation, the
+/// byte accounting, the sequence numbers — is the same code everywhere.
+#[cfg(target_os = "macos")]
 pub fn path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let mut path = PathBuf::from(home);
     path.push("Library/Logs/GlowKey/glowkey.log");
+    Some(path)
+}
+
+/// `%LOCALAPPDATA%\GlowKey\Logs\glowkey.log`.
+#[cfg(target_os = "windows")]
+pub fn path() -> Option<PathBuf> {
+    let mut path = crate::platform::windows::paths::log_dir()?;
+    path.push("glowkey.log");
     Some(path)
 }
 

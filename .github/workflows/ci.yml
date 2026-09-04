@@ -32,6 +32,44 @@ jobs:
       # breakage the Windows port would inherit, so prove the stub here.
       - run: cargo check -p glowkey
 
+  # The Windows shell: a WH_KEYBOARD_LL hook and SendInput, linked and its tests
+  # run. This job is worth more than it looks — it is the first place Windows
+  # code is *linked* rather than type-checked, which no amount of `cargo check`
+  # on a Mac achieves.
+  #
+  # It also closes the gap that let six engine tests assert macOS bundle
+  # identifiers against a per-target exclusion table and go unnoticed until
+  # somebody ran the suite on Windows by hand. Nothing but this job stops that
+  # recurring.
+  #
+  # What it does NOT prove: that GlowKey types Vietnamese. CI cannot type into an
+  # application, so a green badge here means the tests run — never that the input
+  # method works. That remains a human at a real machine (Phase 6 of the port).
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      # Privacy guard, the Windows half of the macOS one below. GlowKey observes
+      # every keystroke on the machine, so it must not link anything that can
+      # open a socket. `windows-sys` is a bindings crate with a feature list this
+      # checks stays narrow; adding a networking group would be the way this
+      # claim quietly stops being true.
+      - name: Assert no networking feature is enabled
+        shell: bash
+        run: |
+          if grep -E '"Win32_Networking|"Win32_Web|"Win32_System_Rpc' app/Cargo.toml; then
+            echo "ERROR: GlowKey enabled a networking feature — a keystroke-observing IME must not." >&2
+            exit 1
+          fi
+          echo "OK: no networking feature enabled."
+
   # Full workspace, including the objc2 CGEventTap shell, builds on macOS.
   macos:
     runs-on: macos-latest

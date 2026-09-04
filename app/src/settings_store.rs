@@ -8,12 +8,23 @@ use std::path::PathBuf;
 
 use glowkey_engine::Settings;
 
-/// Directory and file: `~/Library/Application Support/GlowKey/settings.json`.
+/// `~/Library/Application Support/GlowKey/settings.json`.
+#[cfg(target_os = "macos")]
 fn settings_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     let mut path = PathBuf::from(home);
     path.push("Library/Application Support/GlowKey");
     Some(path.join("settings.json"))
+}
+
+/// `%APPDATA%\GlowKey\settings.json`.
+///
+/// The same schema and the same file name as macOS, deliberately: Phase 2 made
+/// `HotkeyPreset` carry both platforms' key identity side by side, so a settings
+/// file copied from one to the other loads rather than being reinterpreted.
+#[cfg(target_os = "windows")]
+fn settings_path() -> Option<PathBuf> {
+    Some(crate::platform::windows::paths::settings_dir()?.join("settings.json"))
 }
 
 /// Loads settings, falling back to defaults if the file is missing or unreadable.

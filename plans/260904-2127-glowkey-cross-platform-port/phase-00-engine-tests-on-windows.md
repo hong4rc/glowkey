@@ -1,7 +1,7 @@
 ---
 phase: 0
 title: "The engine's own tests pass on Windows"
-status: pending
+status: complete
 priority: P1
 effort: "0.5d"
 dependencies: []

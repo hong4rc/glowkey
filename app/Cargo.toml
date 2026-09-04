@@ -38,3 +38,55 @@ objc2-app-kit = { version = "0.3", features = ["NSAlert", "NSApplication", "NSWo
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGEventSource", "CGError"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase", "CFDictionary", "CFNumber", "CFDate"] }
 objc2-service-management = "0.3"
+
+# The Windows backend: a WH_KEYBOARD_LL hook plus SendInput, which is the same
+# intercept/suppress/inject shape the CGEventTap gives on macOS. See
+# `docs/decisions/0009-windows-low-level-hook.md` for why not TSF.
+#
+# One crate, and the feature list is explicit and minimal on purpose. This
+# process observes every keystroke on the machine, so "what does it link" is part
+# of the privacy claim in PRIVACY.md, not a build detail — the macOS side keeps
+# its objc2 feature lists narrow for the same reason.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    # The hook itself, its message loop, and the foreground-window query.
+    "Win32_UI_WindowsAndMessaging",
+    # SendInput, ToUnicodeEx, the virtual-key constants.
+    "Win32_UI_Input_KeyboardAndMouse",
+    # SetWinEventHook: the foreground-change notification. Not optional — a
+    # per-keystroke foreground query is what froze a Mac (decisions/0008).
+    "Win32_UI_Accessibility",
+    # Resolving the foreground window to an executable name, and reading our own
+    # integrity level to detect the UIPI case.
+    "Win32_System_Threading",
+    "Win32_Security",
+    # SHGetKnownFolderPath: %APPDATA% and %LOCALAPPDATA% asked of the system
+    # rather than interpolated, which is what makes it right on a redirected
+    # profile.
+    "Win32_UI_Shell",
+    "Win32_System_Com",
+    # The tray icon's window class and menu, and the GDI needed to draw the
+    # four indicator glyphs rather than ship four .ico files.
+    "Win32_Graphics_Gdi",
+    # Launch-at-login: one HKCU\...\Run value, added and removed cleanly.
+    "Win32_System_Registry",
+    # The clipboard tools (CF_UNICODETEXT) and the moveable global memory a
+    # clipboard write has to be handed on.
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_System_Memory",
+    # GetUserPreferredUILanguages, for the Vietnamese interface default.
+    "Win32_System_SystemInformation",
+] }
+
+# The settings window, and only the settings window. The tray is raw Win32 and
+# stays that way: it is the always-resident half, and a background input method
+# must never be the reason a machine feels slow. This window is created on
+# demand and destroyed on close, so nothing here runs while GlowKey sits idle.
+#
+# Chosen over raw Win32 dialogs deliberately — see phase-05 of the port plan.
+# The panes are lists and checkboxes, which is exactly where Win32 dialog
+# templates cost the most and buy the least.
+eframe = { version = "0.29", default-features = false, features = ["glow", "wayland", "x11"] }
+egui = "0.29"

@@ -6,7 +6,9 @@
 //! on top. See [`platform::macos`]. Requires an Accessibility permission; it does
 //! not operate in secure/password fields.
 //!
-//! On other platforms it builds as a stub so the workspace (and the tested engine
+//! On Windows the same engine and the same decision ladder run behind a
+//! `WH_KEYBOARD_LL` hook and `SendInput` — see [`platform::windows`]. On every
+//! other platform this builds as a stub so the workspace (and the tested engine
 //! crate) compiles in CI without a macOS SDK.
 
 #[cfg(target_os = "macos")]
@@ -17,7 +19,7 @@ mod app_info;
 mod ax;
 #[cfg(target_os = "macos")]
 mod hud;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod log;
 #[cfg(target_os = "macos")]
 mod login_item;
@@ -26,11 +28,11 @@ mod login_item;
 mod main_menu;
 #[cfg(target_os = "macos")]
 mod menu_bar;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod platform;
 #[cfg(target_os = "macos")]
 mod prefs;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod settings_store;
 #[cfg(target_os = "macos")]
 mod strings;
@@ -42,7 +44,12 @@ fn main() {
     platform::macos::run();
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn main() {
-    eprintln!("GlowKey is a macOS agent; this platform builds the engine only.");
+    platform::windows::run();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn main() {
+    eprintln!("GlowKey supports macOS and Windows; this platform builds the engine only.");
 }

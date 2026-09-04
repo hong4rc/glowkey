@@ -118,6 +118,26 @@ fn type_with_deletes(tap: &mut Tap, input: &str) -> String {
     screen
 }
 
+/// A shipped default exclusion, whatever this platform's table calls it.
+///
+/// The shipped table is per-target — bundle identifiers on macOS, executable
+/// names on Windows — so a test that writes `com.apple.Terminal` into an
+/// assertion is a macOS test wearing a portable test's clothes. Three of these
+/// were, and they failed the first time the suite ran on Windows.
+fn a_default_exclusion() -> &'static str {
+    glowkey_engine::exclusion::DEFAULT_EXCLUSIONS
+        .first()
+        .expect("the shipped exclusion table is never empty")
+}
+
+/// A shipped default that is a **terminal**, so the session-only un-exclusion
+/// rule applies to it.
+fn a_terminal_default() -> &'static str {
+    glowkey_engine::exclusion::TERMINAL_EXCLUSIONS
+        .first()
+        .expect("the shipped terminal table is never empty")
+}
+
 fn ctrl_shift() -> Modifiers {
     Modifiers {
         control: true,
@@ -234,7 +254,10 @@ fn a_shortcut_flushes_the_engine() {
 #[test]
 fn an_excluded_app_passes_everything_through() {
     let mut tap = Tap::bare();
-    tap.session.set_frontmost_app("com.apple.Terminal"); // default exclusion
+    // A shipped default, asked of the table rather than spelled out: the
+    // identities are per-target (bundle identifiers on macOS, executable names
+    // on Windows), so naming one makes this a single-platform test.
+    tap.session.set_frontmost_app(a_default_exclusion());
     assert_eq!(type_through(&mut tap, "hoongf"), "hoongf");
 }
 
@@ -327,7 +350,7 @@ fn the_correction_hotkey_with_nothing_to_correct_is_consumed() {
 #[test]
 fn the_correction_hotkey_is_inert_in_an_excluded_app() {
     let mut tap = Tap::bare();
-    tap.session.set_frontmost_app("com.apple.Terminal");
+    tap.session.set_frontmost_app(a_default_exclusion());
     let correct = KeyEvent::character('w').with_mods(ctrl_shift());
     assert!(matches!(tap.decide(&correct), Decision::Passthrough));
 }
@@ -686,11 +709,14 @@ fn always_macro_keeps_feeding_the_engine_with_vietnamese_off() {
 
 #[test]
 fn a_terminal_enabled_by_hotkey_is_live_but_still_persisted_as_excluded() {
+    // A shipped *terminal*, because the session-only rule is specifically the
+    // accidental-un-exclusion protection for terminals.
+    let terminal = a_terminal_default();
     let mut tap = Tap::bare();
-    tap.session.set_frontmost_app("com.mitchellh.ghostty");
+    tap.session.set_frontmost_app(terminal);
     assert_eq!(type_through(&mut tap, "hoongf"), "hoongf"); // excluded by default
 
-    let outcome = tap.session.toggle_app_exclusion("com.mitchellh.ghostty");
+    let outcome = tap.session.toggle_app_exclusion(terminal);
     assert_eq!(outcome, ExclusionToggle::EnabledSessionOnly);
     assert_eq!(type_through(&mut tap, "hoongf"), "hồng"); // live for the session
     assert!(
@@ -698,7 +724,7 @@ fn a_terminal_enabled_by_hotkey_is_live_but_still_persisted_as_excluded() {
             .snapshot()
             .exclusions
             .iter()
-            .any(|id| id == "com.mitchellh.ghostty"),
+            .any(|id| id == terminal),
         "the persisted exclusion must survive a session-only toggle"
     );
 }

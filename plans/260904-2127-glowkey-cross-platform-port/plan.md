@@ -92,8 +92,8 @@ mechanically prevents platform code from creeping back in.
 | 1 | [Neutral input policy crate](./phase-01-neutral-input-policy.md) | Complete | — |
 | 2 | [Platform-neutral hotkeys and app identity](./phase-02-hotkeys-and-app-identity.md) | Complete | 1 |
 | 3 | [Re-seat macOS on the neutral layer](./phase-03-reseat-macos.md) | Complete | 1, 2 |
-| 0 | [The engine's own tests pass on Windows](./phase-00-engine-tests-on-windows.md) | Pending | — |
-| 4 | [Windows input core](./phase-04-windows-input-core.md) | Pending | 0, 3 |
+| 0 | [The engine's own tests pass on Windows](./phase-00-engine-tests-on-windows.md) | Complete | — |
+| 4 | [Windows input core](./phase-04-windows-input-core.md) | Complete | 0, 3 |
 | 5 | [Windows application shell](./phase-05-windows-shell.md) | Pending | 4 |
 | 6 | [Windows verification on real hardware](./phase-06-windows-verification.md) | Pending | 5 |
 | 7 | [Windows packaging and CI](./phase-07-windows-packaging.md) | Pending | 0 (CI job), 6 (packaging) |
@@ -162,11 +162,13 @@ dependency.
 - [ ] macOS: all tests green, clippy silent, behaviour unchanged by inspection
       against `docs/manual-verification.md`
 - [x] `cargo check --workspace` green on Windows
-- [ ] `cargo test -p glowkey-engine` green **on Windows** — 6 failing today (Phase 0)
+- [x] `cargo test -p glowkey-engine` green **on Windows** — 164/164 (Phase 0)
+- [x] A Windows build links and its own tests run — 19/19 (Phase 4)
 - [ ] A Windows build types `hoongf` → `hồng` in Notepad, Chrome, Windows Terminal
       and VS Code, verified by a human (Phase 6)
-- [ ] Synthesized input is provably not reprocessed — the `dwExtraInfo` tag is
-      checked and a test proves the guard
+- [x] Synthesized input is provably not reprocessed — the `dwExtraInfo` tag is
+      checked in the callback's first statement and a test proves the guard.
+      *Proven as a pure function; proven as a behaviour only in Phase 6.*
 - [ ] Elevated-window failure is *detected and reported*, not silent
 - [x] Existing macOS settings files keep working; no silent reinterpretation of
       `HotkeyPreset::Custom`

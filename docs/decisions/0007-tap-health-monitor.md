@@ -96,9 +96,11 @@ worse than one that is briefly wrong.
 - A flapping tap leaves a rising count in the log — the signature of a machine
   under enough load to drop taps, which was previously invisible. Logged on the
   first failure and then every thirtieth, not every tick: at two seconds apart an
-  unconditional line would be some 43,000 lines a day, and the log's size cap is
-  evaluated once per process, so a long-running agent would grow the file without
-  bound.
+  unconditional line would be some 43,000 lines a day. That mattered more when
+  this was written: the log's size cap was evaluated once per process, so a
+  long-running agent grew the file without bound. The log rotates on the write
+  that crosses the cap now, but the restraint stands — a line that says nothing
+  is not worth writing 43,000 times.
 - One timer wakeup every two seconds, forever. Measurable in principle,
   negligible in practice; if it ever shows up in battery terms the fix is to back
   off to five seconds once the tap has been healthy for a while. **The wakeup is

@@ -339,6 +339,39 @@ Cargo workspace:
   exception is the Chromium omnibox guard (§6.1), capped at 50 ms and confined to
   transforming keystrokes in Chromium apps.
 
+## 5b. Windows status (added 2026-09-05)
+
+GlowKey now has a Windows backend. It is **early** and should not be relied on.
+
+**What is built.** `app/src/platform/windows/`: a `WH_KEYBOARD_LL` hook and
+`SendInput` injection running the same `glowkey-input` decision ladder as macOS,
+plus a tray icon, an `egui` settings window, launch-at-login, the clipboard tools
+and an indicator with four states. The engine's full suite passes on Windows and
+CI now has a `windows-latest` job.
+
+**What is verified.** `hoongf` → `hồng`, mid-word backspace, boundary
+re-composition, auto-fix, and tone placement — in Notepad, compared against code
+points rather than glyphs. Modifiers and both `Ctrl+Shift` hotkeys reach the hook.
+The `dwExtraInfo` self-event guard holds against the real system: six keys typed
+produce six callbacks and no reprocessing of the injected output.
+
+**What is not.** Chrome (and specifically the address bar), Windows Terminal, VS
+Code, Electron apps, elevated windows, dead-key layouts, AltGr, two layouts at
+once, long-running behaviour, idle cost. Hotkey *recording* is not implemented.
+Full list in `plans/reports/windows-verification-260905.md`.
+
+**Two things a new session should know.**
+
+1. `SetWindowsHookExW` with a null `hmod` **installs successfully and never calls
+   the callback.** It cost several debugging rounds. `HOOK first callback
+   received` is in the log specifically so the next person sees it in one line.
+2. The verification machine had **EVKey running**, which transformed text while
+   GlowKey was excluded and made the results look inconsistent until it was
+   noticed. Stop other input methods before measuring anything.
+
+Windows-specific decisions: `docs/decisions/0009-windows-low-level-hook.md`.
+Checklist: `docs/manual-verification-windows.md`.
+
 ## 6. KNOWN ISSUES / STATUS (updated 2026-09-04)
 
 1. **Chrome/Edge omnibox** — MITIGATION SHIPPED (best-effort, not a proof), needs

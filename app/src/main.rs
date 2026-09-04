@@ -3,8 +3,8 @@
 //! GlowKey is a background agent (no Dock icon) that wraps the active keyboard
 //! layout with Vietnamese Telex, in the style of EVKey/OpenKey: it installs a
 //! `CGEventTap`, so the user's Colemak/US layout stays live and Vietnamese is added
-//! on top. See [`tap`]. Requires an Accessibility permission; it does not operate in
-//! secure/password fields.
+//! on top. See [`platform::macos`]. Requires an Accessibility permission; it does
+//! not operate in secure/password fields.
 //!
 //! On other platforms it builds as a stub so the workspace (and the tested engine
 //! crate) compiles in CI without a macOS SDK.
@@ -27,19 +27,19 @@ mod main_menu;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]
+mod platform;
+#[cfg(target_os = "macos")]
 mod prefs;
 #[cfg(target_os = "macos")]
 mod settings_store;
 #[cfg(target_os = "macos")]
 mod strings;
 #[cfg(target_os = "macos")]
-mod tap;
-#[cfg(target_os = "macos")]
 mod welcome;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    tap::run();
+    platform::macos::run();
 }
 
 #[cfg(not(target_os = "macos"))]

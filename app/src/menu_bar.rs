@@ -20,7 +20,7 @@ use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 use std::cell::RefCell;
 
 use crate::strings::t;
-use crate::tap::TapState;
+use crate::platform::macos::TapState;
 
 /// Ivars for the menu controller: a pointer to the leaked, program-lifetime
 /// `TapState` shared with the tap callback (both on the main thread), plus the
@@ -130,7 +130,7 @@ define_class!(
             // own Settings. The tap's health monitor notices the grant coming back
             // and rebuilds the tap by itself, so there is nothing to do here but
             // open the right pane.
-            crate::tap::open_accessibility_settings();
+            crate::platform::macos::open_accessibility_settings();
         }
 
         #[unsafe(method(openSettings:))]
@@ -204,7 +204,7 @@ impl MenuController {
         // question the indicator exists to answer — and the ignore list is the
         // feature the app is for. `ui-design.md` specified a dimmed glyph for the
         // excluded case from the start; it was never built.
-        let dead = crate::tap::tap_is_dead();
+        let dead = crate::platform::macos::tap_is_dead();
         let vietnamese = self.state().mode_is_vietnamese();
         let suspended = vietnamese && !self.state().is_active();
         let title = if dead {
@@ -237,7 +237,7 @@ impl MenuController {
 
         // A dead tap is the only thing worth saying before anything else: every
         // item below it is inert until the permission comes back.
-        if crate::tap::tap_is_dead() {
+        if crate::platform::macos::tap_is_dead() {
             self.add_disabled(
                 menu,
                 t(

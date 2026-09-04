@@ -32,8 +32,53 @@ AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
+## phf
+
+Compile-time static maps (the Simple Telex table and the word overrides) come
+from the `phf` crate.
+
+- Crate: https://crates.io/crates/phf
+- Source: https://github.com/rust-phf/rust-phf
+- License: MIT
+
+```
+Copyright (c) 2014-2022 Steven Fackler, Yuki Okushi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## serde and serde_json
+
+Settings are (de)serialized to JSON by `serde` and `serde_json`, both
+dual-licensed MIT OR Apache-2.0. Full license text:
+https://github.com/serde-rs/serde and https://github.com/serde-rs/json.
+
 ## objc2 and framework bindings
 
-macOS integration uses the `objc2`, `objc2-foundation`, `objc2-app-kit`, and
-`objc2-input-method-kit` crates, all dual-licensed MIT OR Apache-2.0. See
-https://github.com/madsmtm/objc2 for full license text.
+macOS integration uses the `objc2`, `objc2-foundation`, `objc2-app-kit`,
+`objc2-core-graphics`, `objc2-core-foundation`, and `objc2-service-management`
+crates. `objc2-foundation` is MIT; the rest are triple-licensed Zlib OR
+Apache-2.0 OR MIT. See https://github.com/madsmtm/objc2 for full license text.
+
+## Transitive dependencies
+
+The crates above are GlowKey's direct dependencies. They pull in a further set
+of permissively licensed crates (MIT, Apache-2.0, or Zlib) that are linked into
+the shipped binary; `Cargo.lock` is the exact, versioned list. Build-time-only
+dependencies (`proptest`, `criterion`) are not distributed and are not covered
+here.

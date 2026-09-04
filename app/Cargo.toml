@@ -5,9 +5,15 @@ description = "GlowKey — Vietnamese Telex input method for macOS (InputMethodK
 edition = "2021"
 license = "MIT"
 
-# The macOS input method is a normal executable that runs an IMKServer instead of
-# a windowed app. It links only on macOS; on other platforms it builds an empty
-# stub so `cargo test` on the engine still works in CI on Linux.
+# The input method is a normal executable that installs a CGEventTap and runs as a
+# background agent, rather than a windowed app. It links only on macOS; on other
+# platforms every module is cfg'd out and `main` is a one-line stub, so the
+# workspace still resolves and the engine's tests run in CI on Linux.
+#
+# The capital G is load-bearing, which is why this section exists at all: the
+# package is `glowkey`, so without it cargo would emit `target/…/glowkey`.
+# `scripts/build-app.sh` copies `target/…/GlowKey`, and macOS requires the bundle
+# to contain `Contents/MacOS/<CFBundleExecutable>` spelled exactly.
 [[bin]]
 name = "GlowKey"
 path = "src/main.rs"

@@ -5,6 +5,40 @@ build of `feat/windows-input-core`.
 
 **GlowKey types Vietnamese on Windows.** The blind diff model survives the port.
 
+## Read this first: the test machine had a second Vietnamese IME running
+
+**EVKey64 was running throughout.** It was not noticed until after Tier 1, and it
+is the single biggest caveat on everything below.
+
+It surfaced through an anomaly rather than a check: in the Tier 0 run, GlowKey had
+`notepad.exe` excluded (persisted from the previous run's `Ctrl+Shift+E`), every
+log line said `Passthrough`, and `hoongf` still became `hồng` — accompanied by
+inbound `vk=231` (`VK_PACKET`) and synthetic backspace events GlowKey had not
+sent. Something else was transforming.
+
+**Why Tier 1 is still valid.** Low-level hooks are called most-recently-installed
+first, and GlowKey installs after EVKey, so GlowKey sees each keystroke first.
+Every handled key returns non-zero, which swallows it and never reaches
+`CallNextHookEx` — so EVKey is starved of the keystrokes entirely. The Tier 1 log
+shows GlowKey computing each edit itself (`Emit bs=1 ins="ô"`, `Emit bs=3
+ins="ồng"`) and the resulting text matches those edits exactly, code point for
+code point. Two IMEs both transforming would produce corruption, not a clean
+match.
+
+**What it does mean.** GlowKey's injected output *does* reach EVKey — injected
+events re-enter at the top of the chain, GlowKey's tag check passes them on, and
+EVKey sees them. It evidently ignores them (they are `VK_PACKET` and `VK_BACK`,
+not the letter keystrokes it composes from), but that is an observation, not a
+guarantee.
+
+**Tier 1 should be re-run with EVKey stopped before any of this is called
+settled.** That was not done here: EVKey is the owner's own running application
+and stopping it was not mine to do while they were away.
+
+It is also, incidentally, a real-world finding worth keeping: GlowKey's
+full-suppression model means it wins the hook chain against an already-running
+competitor, rather than fighting with it.
+
 ## Method
 
 Automated rather than by hand: a PowerShell harness launches GlowKey and Notepad,
@@ -105,6 +139,42 @@ at the caret was, accurately, wrong. Pressing Home between cases (a caret move,
 which the ladder flushes on) fixed it. **This is a small live demonstration of
 why every flush in the ladder exists.**
 
+## Tier 0 — modifiers reach the hook
+
+The doubt that mattered most, because it fails silently: GlowKey's hook thread
+never has keyboard focus, so whether `GetKeyState` sees held modifiers at all was
+unestablished. If it did not, the shortcut filter and both `Ctrl+Shift` hotkeys
+would be dead while ordinary typing looked perfect.
+
+**They arrive.**
+
+```
+KEY None vk=160 mods=Ctrl       app=notepad.exe | Passthrough
+KEY None vk=69  mods=Ctrl+Shift app=notepad.exe | ToggleApp
+TOGGLE app "notepad.exe" -> Excluded
+KEY None vk=32  mods=Ctrl+Shift app=notepad.exe | Consume
+TOGGLE mode -> English
+```
+
+- `Ctrl+Shift+E` reaches the ladder as `ToggleApp` and the exclusion takes effect
+  immediately — the keys after it log `Passthrough`.
+- `Ctrl+Shift+Space` reaches it as `Consume` and flips the mode.
+- Modifier reporting is correct: `mods=Ctrl` while only Control is down,
+  `mods=Ctrl+Shift` once both are.
+
+## Settings persistence, proven incidentally
+
+`%APPDATA%\GlowKey\settings.json` was created by these runs and contains exactly
+the shipped defaults, with an empty `removed_default_exclusions` — the toggles
+that ran during testing netted out correctly rather than leaving residue.
+
+That file existing at all is the proof that the first review's finding 8 is fixed.
+A hook callback does not make `GetMessageW` return, so `Effects::save_settings`
+was previously set and never drained: the settings file would never have been
+written on a run where the user typed, pressed a hotkey and never switched
+windows. The `PostThreadMessageW(WM_GLOWKEY_SAVE)` wake is what turns the flag
+into a write, and this file is that path completing.
+
 ## What this did NOT test
 
 Do not read the table above as more than it is.
@@ -118,20 +188,34 @@ Do not read the table above as more than it is.
   users typing other languages, and it is invisible on a US layout.
 - **No elevated window.** UIPI detection is implemented and unproven against an
   actually-elevated process.
-- **No hotkeys.** `Ctrl+Shift+E`/`W` and the mode toggle were not exercised, and
-  there is a specific doubt about whether GlowKey's hook thread — which never has
-  keyboard focus — has its per-thread key state updated at all. If it does not,
-  `GetKeyState` reports the modifiers as never held and every hotkey is silently
-  dead while ordinary typing looks fine. **This should be the next thing checked.**
+- **`Ctrl+Shift+W` (the correction hotkey) was not exercised**, though the other
+  two were — see Tier 0 above.
+- **A second Vietnamese IME was running throughout.** See the note at the top.
 - **No tray interaction.** The tray installs without error; nobody has clicked it.
 - **No timing data.** No `EMIT took=` line appeared, meaning no callback exceeded
   the 10 ms threshold in this short run. That is encouraging and not a measurement.
 - **Nothing about long-running behaviour.** Every run here was under ten seconds.
 
-## Next
+## Next, in order
 
-`docs/manual-verification-windows.md` Tier 0 item 1 (modifiers reach the hook),
-then Tier 2. The harness is at
-`scratchpad/tier1-full.ps1` and is worth keeping — it is
-reproducible in a way a human pass is not, and it caught a real defect on its
-first honest run.
+1. **Re-run Tier 1 with EVKey stopped.** Until then every result here carries the
+   caveat at the top. This is the owner's call to make, not the agent's.
+2. **Tier 2** — Chrome's address bar, Windows Terminal, VS Code, an Electron app.
+   This is where the macOS race appeared and where Notepad's evidence runs out.
+3. **An elevated window** (Task Manager), to exercise the UIPI path that is
+   implemented and entirely unproven.
+4. The Tier 4 layout cases: Caps Lock, dead keys, AltGr, two layouts at once.
+
+The harness is kept at `scripts/verify-windows-tier1.ps1`. It is reproducible in
+a way a human pass is not, and it earned its place by catching a real defect on
+its first honest run — one that a person watching a screen would have reported as
+"nothing happens", with no way to tell that from a hundred other causes.
+
+## Unresolved questions
+
+1. Does EVKey's presence change any Tier 1 result? Untested (see above).
+2. Does the keyboard hook keep working while the settings window is open? The
+   window runs `eframe` on the message-loop thread, which is the thread the hook
+   is delivered on. Not yet exercised.
+3. Does GlowKey's injected output disturb any other input method that is also
+   watching? EVKey appears to ignore it; nothing establishes that in general.

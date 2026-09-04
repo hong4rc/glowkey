@@ -86,6 +86,10 @@ pub fn run() {
         eprintln!("GlowKey: could not create the tray icon.");
         crate::log::log("STARTUP no tray icon — the indicator will not be visible");
     }
+    // After the tray exists, so the first state it shows is the real one. The
+    // session already knows the frontmost application by now — the foreground
+    // bootstrap above pushed it in — which is what keeps this from painting the
+    // fail-closed "unknown application" state at launch.
     shell::refresh_indicator();
 
     hook::run_message_loop();

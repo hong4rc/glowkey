@@ -158,18 +158,14 @@ pub fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
     })
 }
 
-/// The application the session currently believes is in front.
-#[must_use]
-pub fn current_app() -> Option<String> {
-    STATE.with(|state| state.borrow().as_ref().and_then(|s| s.last_app.clone()))
-}
-
 /// Marks the settings dirty from outside the callback — a menu toggle, a settings
 /// window save.
 pub fn mark_dirty() {
     STATE.with(|state| {
-        if let Some(state) = state.borrow().as_ref() {
-            request_save(state);
+        if let Ok(borrowed) = state.try_borrow() {
+            if let Some(state) = borrowed.as_ref() {
+                request_save(state);
+            }
         }
     });
 }
@@ -285,6 +281,13 @@ fn dispatch(code: i32, wparam: WPARAM, lparam: LPARAM) -> bool {
 fn handle_key(state: &mut HookState, info: &KBDLLHOOKSTRUCT) -> bool {
     // The frontmost application, read from the cache the notification fills.
     // Never resolved here: that is a cross-process query and this is the callback.
+    //
+    // The notification already pushed this into the session (see
+    // `shell::foreground_changed`), so this is normally a string compare that
+    // changes nothing. It is kept as the backstop for the case where the
+    // notification could not be installed at all, which `run()` logs and carries
+    // on from — without it, GlowKey would transform in whatever application
+    // happened to be in front at launch, forever.
     if let Some(app) = foreground::current() {
         if state.last_app.as_deref() != Some(app.as_str()) {
             state.session.set_frontmost_app(&app);
@@ -426,7 +429,7 @@ fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT)
 /// file write off the keystroke path.
 fn take_pending_save() -> Option<glowkey_engine::Settings> {
     STATE.with(|state| {
-        let borrowed = state.borrow();
+        let borrowed = state.try_borrow().ok()?;
         let state = borrowed.as_ref()?;
         if state.pending_save.replace(false) {
             Some(state.session.snapshot())
@@ -446,7 +449,9 @@ fn take_pending_save() -> Option<glowkey_engine::Settings> {
 fn record_timing(started: Instant) {
     let micros = started.elapsed().as_micros();
     STATE.with(|state| {
-        let borrowed = state.borrow();
+        let Ok(borrowed) = state.try_borrow() else {
+            return;
+        };
         let Some(state) = borrowed.as_ref() else {
             return;
         };

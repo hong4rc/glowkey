@@ -214,35 +214,51 @@ fn update(hwnd: HWND) {
     let layout = unsafe { GetKeyboardLayout(thread_id) } as isize;
     let reach = super::elevation::foreground_reach(hwnd);
 
+    // Everything the log lines need is taken **before** the lock, so the critical
+    // section can move `next` in rather than clone it. An allocation is not a
+    // blocking call in the way a file write is, but the allocator can take a lock
+    // of its own under memory pressure — and the rule this module states is that
+    // nothing inside the critical section can wait, not that most things cannot.
+    let described = format!("FOREGROUND -> {app} ({reach:?})");
+    let unreachable = (reach != Reach::Ok).then(|| {
+        format!("REACH {app} cannot receive injected input — typing there will silently do nothing")
+    });
     let next = State { app, layout, reach };
+
     let changed = with_state(|state| {
         // Compared on reach as well as name, because switching from an ordinary
-        // shell to an elevated one of the same executable is a real change and
+        // shell to an elevated one of the same executable is a real change, and
         // the one the indicator most needs to notice.
         let same = state
             .as_ref()
             .is_some_and(|s| s.app == next.app && s.reach == next.reach && s.layout == next.layout);
         if same {
-            return None;
+            return false;
         }
-        let previous = state.replace(next.clone());
-        Some((previous, next))
+        *state = Some(next);
+        true
     });
+    if !changed {
+        return;
+    }
 
     // Outside the lock, on purpose.
-    let Some((_, next)) = changed else {
-        return;
-    };
-    super::hook_log::log(format!("FOREGROUND -> {} ({:?})", next.app, next.reach));
-    if next.reach != Reach::Ok {
-        // Phase 5 turns this into the `⚠` tray state and a menu line naming the
-        // window. Until then it is at least in the log, because the alternative
-        // is the failure being wholly invisible — the defect `decisions/0007`
-        // exists to forbid.
-        super::hook_log::log(format!(
-            "REACH {} cannot receive injected input — typing there will silently do nothing",
-            next.app
-        ));
+    super::hook_log::log(described);
+
+    // The session learns the application here rather than waiting for the first
+    // keystroke. It has to: the engine fails closed on an unknown application, so
+    // a session that has not been told yet reports "not active", and the tray
+    // would show the excluded state over an application that is not excluded.
+    // `current()` rather than the moved `next`, because the value now lives in
+    // the shared state.
+    if let Some(app) = current() {
+        super::shell::foreground_changed(&app);
+    }
+    if let Some(line) = unreachable {
+        // The tray turns this into the `⚠` state and a menu line naming the
+        // window; the log is what makes it diagnosable afterwards. Either way the
+        // failure is never silent, which is what `decisions/0007` requires.
+        super::hook_log::log(line);
     }
 }
 

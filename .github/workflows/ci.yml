@@ -58,17 +58,39 @@ jobs:
       - run: cargo test --workspace
       # Privacy guard, the Windows half of the macOS one below. GlowKey observes
       # every keystroke on the machine, so it must not link anything that can
-      # open a socket. `windows-sys` is a bindings crate with a feature list this
-      # checks stays narrow; adding a networking group would be the way this
-      # claim quietly stops being true.
-      - name: Assert no networking feature is enabled
-        shell: bash
+      # open a socket.
+      #
+      # This checks the **built binary**, not a manifest. An earlier version
+      # grepped `app/Cargo.toml` for networking feature groups, which was honest
+      # while `windows-sys` was the only Windows dependency and stopped being so
+      # the moment the settings window brought in eframe/winit/wgpu — none of
+      # whose transitive features a grep of our own manifest can see. A guard that
+      # cannot see what it claims to check is worse than no guard, because it
+      # reads as reassurance.
+      - name: Assert no networking library is linked
+        shell: pwsh
         run: |
-          if grep -E '"Win32_Networking|"Win32_Web|"Win32_System_Rpc' app/Cargo.toml; then
-            echo "ERROR: GlowKey enabled a networking feature — a keystroke-observing IME must not." >&2
+          cargo build --release -p glowkey
+          $bin = "target/release/GlowKey.exe"
+          if (-not (Test-Path $bin)) { throw "no binary at $bin to check" }
+          # The import table, read without needing the Visual Studio tools: DLL
+          # names appear as ASCII in the file, so a linked import is findable and
+          # an absent one cannot be faked by this test passing vacuously.
+          $bytes = [System.IO.File]::ReadAllBytes($bin)
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $banned = @('ws2_32.dll', 'wininet.dll', 'winhttp.dll', 'urlmon.dll', 'wsock32.dll')
+          $found = $banned | Where-Object { $text -match [regex]::Escape($_) }
+          if ($found) {
+            Write-Error "GlowKey links a networking library ($($found -join ', ')) - a keystroke-observing IME must not."
             exit 1
-          fi
-          echo "OK: no networking feature enabled."
+          }
+          # Prove the check can fail: a DLL that IS linked must be found by the
+          # same method, or the search is looking at the wrong thing.
+          if ($text -notmatch [regex]::Escape('USER32.dll')) {
+            Write-Error "The import scan found no USER32.dll, so it is not reading imports - the guard above proves nothing."
+            exit 1
+          }
+          Write-Output "OK: no networking library linked."
 
   # Full workspace, including the objc2 CGEventTap shell, builds on macOS.
   macos:

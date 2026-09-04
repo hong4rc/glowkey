@@ -31,7 +31,11 @@ pub struct Snapshot {
 /// Takes the snapshot. `None` when the session is unavailable.
 #[must_use]
 pub fn snapshot() -> Option<Snapshot> {
-    let app = hook::current_app();
+    // From the foreground cache, not from what the session last recorded. The
+    // session's copy is written on the keystroke path, so before the user types
+    // it is `None` — and the tooltip would say "off in this app" without ever
+    // naming which, in the one state where naming it is the whole point.
+    let app = foreground::current();
     let reach = foreground::reach();
     let installed = hook::is_installed();
     hook::with_session(|session| {
@@ -48,6 +52,24 @@ pub fn snapshot() -> Option<Snapshot> {
             auto_fix: session.auto_fix(),
         }
     })
+}
+
+/// The application in front changed: tell the session, then repaint.
+///
+/// Called from the foreground notification, on the message-loop thread — the
+/// same place macOS calls `set_frontmost_app` from its `NSWorkspace` observer,
+/// and for the same reason.
+///
+/// Without this the session learned the frontmost application only on the *first
+/// keystroke*, and the engine fails closed on an unknown one — so from launch
+/// until the user typed, `is_active()` was false and the tray showed the dimmed
+/// "off in this app (ignore list)" state over an application that was not
+/// excluded at all. An indicator that is wrong until you interact with it is the
+/// defect `docs/decisions/0007` exists to forbid, and startup is exactly when a
+/// user looks at it.
+pub fn foreground_changed(app: &str) {
+    hook::with_session(|session| session.set_frontmost_app(app));
+    refresh_indicator();
 }
 
 /// Repaints the tray from the current state. Call after anything that could
@@ -71,7 +93,11 @@ pub fn toggle_mode() {
 
 /// Adds or removes the application in front from the ignore list.
 pub fn toggle_current_app() {
-    let Some(app) = hook::current_app() else {
+    // Same source as `snapshot`, and for a sharper reason: taken from the
+    // session, this was `None` until the first keystroke, so picking
+    // "Vietnamese in this app" from the tray on a freshly started GlowKey did
+    // nothing at all.
+    let Some(app) = foreground::current() else {
         crate::log::log("TOGGLE app ignored — no foreground application resolved yet");
         return;
     };

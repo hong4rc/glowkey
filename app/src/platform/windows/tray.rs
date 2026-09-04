@@ -117,9 +117,14 @@ pub fn install() -> bool {
     // SAFETY: `wc` is fully initialised and `class` outlives the call.
     unsafe { RegisterClassW(&wc) };
 
-    // A message-only window: it is never shown, never sized, and exists solely to
-    // receive the notify-icon's messages. A background agent has no business
-    // putting a window on screen.
+    // A top-level window that is never shown — deliberately **not** a
+    // message-only (`HWND_MESSAGE`) window, even though that would otherwise be
+    // the natural choice for something that exists only to receive messages.
+    //
+    // Message-only windows do not receive broadcasts, and `TaskbarCreated` is a
+    // broadcast. Using one would mean the tray icon silently never comes back
+    // after Explorer restarts, which is the state `decisions/0007` forbids. So:
+    // top-level, zero-sized, and never given `WS_VISIBLE`.
     // SAFETY: a standard window creation with a registered class.
     let hwnd = unsafe {
         CreateWindowExW(
@@ -199,6 +204,13 @@ pub fn refresh(state: Indicator, app: Option<&str>) {
     let data = notify_data(hwnd, icon, state, app);
     // SAFETY: as in `install`.
     unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+    // What the tray is now claiming, recorded.
+    //
+    // `decisions/0007` is about the indicator not lying; this is what makes the
+    // claim checkable after the fact. A report of "it said VI and did nothing"
+    // is otherwise impossible to separate from "it said VI correctly and
+    // something else was wrong", and those have different causes.
+    crate::log::log(&format!("INDICATOR {state:?} — {}", state.describe(app)));
     // The old icon is replaced, so it can go. Leaking one per state change would
     // be a slow GDI-handle leak in a process that runs for days.
     // SAFETY: created by `draw_glyph` and no longer referenced.
@@ -244,14 +256,31 @@ fn notify_data(hwnd: HWND, icon: HICON, state: Indicator, app: Option<&str>) -> 
     data.hIcon = icon;
     // The tooltip is where the two breakages actually become distinguishable to
     // a user — the glyph is the same `!` for both.
-    let tip: Vec<u16> = state
-        .describe(app)
-        .encode_utf16()
-        .take(data.szTip.len() - 1)
-        .chain(std::iter::once(0))
-        .collect();
+    let tip = tooltip_units(&state.describe(app), data.szTip.len());
     data.szTip[..tip.len()].copy_from_slice(&tip);
     data
+}
+
+/// Fits a tooltip into a fixed `capacity` of UTF-16 units, NUL included.
+///
+/// Split out from [`notify_data`] so the truncation rule can be tested — the
+/// version that lived inline could only be checked by a test that reimplemented
+/// it, which is a test that cannot fail.
+///
+/// Truncation never splits a surrogate pair. An executable name can contain
+/// characters outside the basic plane, and half a pair is not a character: it
+/// would render as a replacement glyph in the one string whose job is to name
+/// the window the user cannot type into.
+fn tooltip_units(text: &str, capacity: usize) -> Vec<u16> {
+    debug_assert!(capacity > 0, "a tooltip needs room for at least the NUL");
+    let limit = capacity - 1;
+    let mut units: Vec<u16> = text.encode_utf16().take(limit).collect();
+    // A high surrogate in the last slot lost its partner to the truncation.
+    if units.last().is_some_and(|u| (0xD800..0xDC00).contains(u)) {
+        units.pop();
+    }
+    units.push(0);
+    units
 }
 
 /// Draws the state's glyph into an icon.
@@ -458,6 +487,25 @@ fn dispatch_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRE
 
 /// Builds and shows the popup menu, mirroring the macOS one.
 fn show_menu(hwnd: HWND) {
+    // `TrackPopupMenu` runs a nested message loop, so a second right-click while
+    // the menu is open re-enters this function and stacks another menu on top of
+    // the first. Guarded rather than tolerated: the stacked menus have to be
+    // dismissed one at a time, which reads as the tray being stuck.
+    thread_local! {
+        static SHOWING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if SHOWING.with(|s| s.replace(true)) {
+        return;
+    }
+    // Cleared on every path out, including the early return below.
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SHOWING.with(|s| s.set(false));
+        }
+    }
+    let _guard = Guard;
+
     let Some(snapshot) = super::shell::snapshot() else {
         return;
     };
@@ -662,11 +710,52 @@ mod tests {
 
     /// The tooltip has a fixed 128-unit field. A long executable name in the
     /// elevated-window message must be truncated rather than overrun it.
+    /// The tooltip has a fixed field, and an over-long executable name must be
+    /// truncated to fit rather than overrun it.
+    ///
+    /// The previous version of this test built the expected value with the same
+    /// `take(127)` the code used and then asserted the result was at most 127 —
+    /// a tautology that never touched `notify_data` and could not have caught a
+    /// truncation bug. This one calls the real function.
     #[test]
-    fn a_long_tooltip_is_truncated_not_overrun() {
+    fn a_long_tooltip_is_truncated_to_fit() {
         let long = "a".repeat(500) + ".exe";
         let described = Indicator::Broken(Breakage::ElevatedWindow).describe(Some(&long));
-        let units: Vec<u16> = described.encode_utf16().take(127).collect();
-        assert!(units.len() <= 127);
+        assert!(
+            described.len() > 128,
+            "the case only bites when it overflows"
+        );
+
+        let units = tooltip_units(&described, 128);
+        assert!(units.len() <= 128, "must fit the field");
+        assert_eq!(units.last(), Some(&0), "must stay NUL-terminated");
+    }
+
+    /// Truncation must not cut a surrogate pair in half.
+    ///
+    /// Half a pair is not a character; it renders as a replacement glyph in the
+    /// one string whose job is to name the window the user cannot type into.
+    #[test]
+    fn truncation_never_splits_a_surrogate_pair() {
+        // Each emoji is two UTF-16 units, so an odd capacity forces the cut to
+        // land mid-pair unless it is handled.
+        let text = "\u{1F600}".repeat(10);
+        for capacity in 2..=20 {
+            let units = tooltip_units(&text, capacity);
+            assert!(units.len() <= capacity);
+            assert_eq!(units.last(), Some(&0));
+            // Everything before the NUL must decode.
+            assert!(
+                String::from_utf16(&units[..units.len() - 1]).is_ok(),
+                "capacity {capacity} left a lone surrogate"
+            );
+        }
+    }
+
+    /// A short tooltip is untouched apart from the terminator.
+    #[test]
+    fn a_short_tooltip_is_left_alone() {
+        let units = tooltip_units("VI", 128);
+        assert_eq!(units, vec![u16::from(b'V'), u16::from(b'I'), 0]);
     }
 }

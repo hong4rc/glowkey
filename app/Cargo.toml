@@ -20,6 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 glowkey-engine = { path = "../crates/glowkey-engine" }
+# The decision ladder, with no operating system in it. Every platform backend
+# under src/platform/ runs this same policy rather than its own reading of it.
+glowkey-input = { path = "../crates/glowkey-input" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # All-Rust macOS-native shell via objc2, matching the sibling `marau` project's

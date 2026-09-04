@@ -152,9 +152,10 @@ inline-autocomplete trailing selection Chromium's omnibox does?
 
 - [ ] With `GLOWKEY_DEBUG=1`, type `hoongf` in Safari's address bar. Record what
       happens: correct output, `hoồng`, or something else.
-- [ ] If it is wrong, add `com.apple.Safari` to `CHROMIUM_BUNDLE_PREFIXES` in
-      `app/src/tap.rs` and check both that it fixes the address bar **and** that
-      it does not fire in ordinary Safari page fields.
+- [ ] If it is wrong, add `com.apple.Safari` to `CHROMIUM_APP_PREFIXES` in
+      `crates/glowkey-engine/src/exclusion_defaults/macos.rs` and check both that
+      it fixes the address bar **and** that it does not fire in ordinary Safari
+      page fields.
 - [ ] If it is already correct, record that and change no code. Two of the three
       possible outcomes here ship nothing.
 

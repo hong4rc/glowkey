@@ -6,11 +6,10 @@
 // `use super::*` reached everything while all of this lived in one file. The
 // split means the siblings have to be named — the only change the move made to
 // this file; every test body below is byte-identical to before.
-use super::decide::Decision;
-use super::emit::is_chromium_browser;
-use super::keys::{
-    is_toggle_hotkey, KEY_CODE_DELETE, KEY_CODE_E, KEY_CODE_ESCAPE, KEY_CODE_SPACE, KEY_CODE_Z,
+use super::adapt::{
+    KEY_CODE_DELETE, KEY_CODE_E, KEY_CODE_ESCAPE, KEY_CODE_SPACE, KEY_CODE_W, KEY_CODE_Z,
 };
+use super::emit::is_chromium_browser;
 use super::*;
 use glowkey_engine::{ExclusionToggle, HotkeyPreset, KeyResponse};
 use objc2_core_graphics::CGEventFlags;
@@ -134,48 +133,45 @@ fn real_events_boundary_commits_word() {
     assert_eq!(type_via_tap(&active_state(), "hoongf z"), "hồng z");
 }
 
+/// The presets, matched the way the running app matches them: a real `CGEvent`
+/// through the adapter, then `glowkey-input`'s matcher.
+///
+/// `crates/glowkey-input/tests/hotkey.rs` covers the matching itself. What this
+/// adds is the half that only exists here — that keycode 49 really does reach the
+/// policy as Space and keycode 6 as the Z key, whatever the user's layout types.
 #[test]
 fn toggle_hotkey_presets_match_only_their_combo() {
+    let source = CGEventSource::new(CGEventSourceStateID::Private).expect("source");
     let ctrl_shift = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
     let ctrl = CGEventFlags(CGEventFlags::MaskControl.0);
     let option = CGEventFlags(CGEventFlags::MaskAlternate.0);
 
-    assert!(is_toggle_hotkey(
+    let matches = |flags: CGEventFlags, keycode: i64, preset: HotkeyPreset| {
+        let event = flagged_event(&source, keycode as u16, flags);
+        let key = super::adapt::key_event(NonNull::from(&*event));
+        glowkey_input::hotkey::resolve(preset, preset.macos_keycode()).matches(&key)
+    };
+
+    assert!(matches(
         ctrl_shift,
         KEY_CODE_SPACE,
         HotkeyPreset::CtrlShiftSpace
     ));
-    assert!(!is_toggle_hotkey(
-        ctrl,
-        KEY_CODE_SPACE,
-        HotkeyPreset::CtrlShiftSpace
-    ));
+    assert!(!matches(ctrl, KEY_CODE_SPACE, HotkeyPreset::CtrlShiftSpace));
 
-    assert!(is_toggle_hotkey(
-        ctrl,
-        KEY_CODE_SPACE,
-        HotkeyPreset::CtrlSpace
-    ));
+    assert!(matches(ctrl, KEY_CODE_SPACE, HotkeyPreset::CtrlSpace));
     // Shift must NOT be held for the plain ⌃Space preset.
-    assert!(!is_toggle_hotkey(
+    assert!(!matches(
         ctrl_shift,
         KEY_CODE_SPACE,
         HotkeyPreset::CtrlSpace
     ));
 
-    assert!(is_toggle_hotkey(
-        option,
-        KEY_CODE_SPACE,
-        HotkeyPreset::OptionSpace
-    ));
+    assert!(matches(option, KEY_CODE_SPACE, HotkeyPreset::OptionSpace));
 
-    assert!(is_toggle_hotkey(
-        ctrl_shift,
-        KEY_CODE_Z,
-        HotkeyPreset::CtrlShiftZ
-    ));
+    assert!(matches(ctrl_shift, KEY_CODE_Z, HotkeyPreset::CtrlShiftZ));
     // Right modifiers, wrong key.
-    assert!(!is_toggle_hotkey(
+    assert!(!matches(
         ctrl_shift,
         KEY_CODE_SPACE,
         HotkeyPreset::CtrlShiftZ
@@ -549,7 +545,7 @@ fn ctrl_shift_w_corrects_the_last_word() {
     state.decide(NonNull::from(&*space));
 
     let ctrl_shift = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
-    let correct = flagged_event(&state.source, super::keys::KEY_CODE_W as u16, ctrl_shift);
+    let correct = flagged_event(&state.source, KEY_CODE_W as u16, ctrl_shift);
     match state.decide(NonNull::from(&*correct)) {
         Decision::Emit(edit) => {
             assert!(edit.backspaces > 0, "the on-screen word must be replaced");
@@ -574,7 +570,7 @@ fn ctrl_shift_w_corrects_the_last_word() {
 fn ctrl_shift_w_with_nothing_to_correct_is_consumed() {
     let state = active_state();
     let ctrl_shift = CGEventFlags(CGEventFlags::MaskControl.0 | CGEventFlags::MaskShift.0);
-    let correct = flagged_event(&state.source, super::keys::KEY_CODE_W as u16, ctrl_shift);
+    let correct = flagged_event(&state.source, KEY_CODE_W as u16, ctrl_shift);
     assert!(matches!(
         state.decide(NonNull::from(&*correct)),
         Decision::Consume

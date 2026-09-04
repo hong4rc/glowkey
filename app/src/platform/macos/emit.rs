@@ -18,7 +18,7 @@ use glowkey_engine::KeyResponse;
 use objc2_app_kit::NSWorkspace;
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventSource, CGEventTapLocation};
 
-use super::keys::{KEY_CODE_DELETE, KEY_CODE_FORWARD_DELETE};
+use super::adapt::{KEY_CODE_DELETE, KEY_CODE_FORWARD_DELETE};
 use super::{debug_enabled, TapState, DISABLED, GLOWKEY_TAG, RUNAWAY_LIMIT, RUNAWAY_WINDOW};
 
 pub(super) use glowkey_engine::exclusion::is_chromium_app as is_chromium_browser;

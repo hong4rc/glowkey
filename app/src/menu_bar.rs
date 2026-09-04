@@ -19,8 +19,8 @@ use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
 use std::cell::RefCell;
 
-use crate::strings::t;
 use crate::platform::macos::TapState;
+use crate::strings::t;
 
 /// Ivars for the menu controller: a pointer to the leaked, program-lifetime
 /// `TapState` shared with the tap callback (both on the main thread), plus the

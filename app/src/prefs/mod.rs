@@ -24,8 +24,8 @@ use std::cell::RefCell;
 
 use glowkey_engine::{HotkeyPreset, InputMethod, Language, PlacementStyle};
 
-use crate::strings::t;
 use crate::platform::macos::TapState;
+use crate::strings::t;
 
 /// Ivars for the Settings window controller: the shared `TapState`, the window
 /// (built lazily on first open), the vertical stack that holds the excluded-app

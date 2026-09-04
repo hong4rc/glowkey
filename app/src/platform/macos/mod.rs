@@ -31,8 +31,10 @@
 //! - Does not work in secure input fields (passwords): macOS withholds those
 //!   events from all event taps.
 //!
-//! The decision logic ([`TapState::decide`]) is a pure function of the event and
-//! session state and is unit-tested with real `CGEvent`s (see the tests below).
+//! The decision itself is not here at all: it lives in `glowkey-input`, with no
+//! operating system in it, and this module translates into and out of it (see
+//! [`adapt`] and [`dispatch`]). The tests below still drive the whole path with
+//! real `CGEvent`s, which is what proves the translation.
 //! Only the system-level parts — installing the tap, delivering synthesized events
 //! to an app — need Accessibility and a live session to verify. See
 //! `docs/checkpoint.md`.
@@ -51,10 +53,10 @@ use objc2_core_graphics::{
     CGEvent, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapProxy, CGEventType,
 };
 
-mod decide;
+mod adapt;
+mod dispatch;
 mod emit;
 mod health;
-mod keys;
 mod permission;
 mod settings;
 #[cfg(test)]
@@ -62,6 +64,11 @@ mod tests;
 
 pub use health::tap_is_dead;
 pub use permission::open_accessibility_settings;
+
+/// The policy's verdict on one key. Re-exported so the adapter's tests can name
+/// it without reaching across crates.
+#[cfg(test)]
+use glowkey_input::Decision;
 
 use emit::{frontmost_bundle_id, is_own_event, own_bundle_id};
 use health::{create_tap, install_health_timer};
@@ -118,6 +125,11 @@ pub(crate) struct TapState {
     /// is alive, so the health monitor can skip its window-server round-trip
     /// while someone is typing — see `health::check_tap_health`.
     last_key_at: Cell<Option<Instant>>,
+    /// Whether the log already carries the note that the custom toggle hotkey is
+    /// being matched by character because it was recorded on another platform.
+    /// Once per run: it is resolved on every keystroke, and a line per keystroke
+    /// is not a warning, it is a way of hiding one.
+    warned_hotkey_fallback: Cell<bool>,
 }
 
 impl TapState {
@@ -139,6 +151,7 @@ impl TapState {
             recording_hotkey: RefCell::new(false),
             pending_save: Cell::new(false),
             last_key_at: Cell::new(None),
+            warned_hotkey_fallback: Cell::new(false),
         })
     }
 

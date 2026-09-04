@@ -33,6 +33,11 @@ omitted** — every modern macOS app is Unicode NFC, so they add no value.
 Cargo workspace:
 - **`crates/glowkey-engine`** — platform-free Vietnamese logic. Knows nothing
   about macOS; unit-tested on any OS.
+- **`crates/glowkey-input`** — platform-free **input policy**: the decision
+  ladder and hotkey matching. A `KeyEvent` in, a `Decision` plus a plain-data
+  `Effects` out. No input/output, no `unsafe`, no `cfg(target_os)`, nothing in
+  its dependency list but the engine. CI tests it on Linux with `-D warnings`,
+  which is what keeps it that way (2026-09-04, the cross-platform port).
 - **`app/`** — the macOS binary `GlowKey` (objc2 shell).
 
 ### Engine (`crates/glowkey-engine/src/`)
@@ -44,17 +49,29 @@ Cargo workspace:
   preset, macros, open-settings-at-launch, and the recomposition memory.
 - `config.rs`: `Settings` (serde JSON) — the persisted subset. Tolerant of missing
   and unknown keys.
-- `exclusion.rs`: `ExclusionList` + `DEFAULT_EXCLUSIONS` (terminals/editors).
+- `exclusion.rs`: `ExclusionList`, `is_terminal`, `is_chromium_app` — the rules,
+  which know nothing about what an application identity *is*.
+- `exclusion_defaults/`: the tables those rules read, selected per platform —
+  bundle identifiers on macOS, lowercased executable names on Windows. **The one
+  module in the engine allowed to see a target OS**, and only because it selects
+  data rather than behaviour. Linux borrows the macOS table until Phase 8 of the
+  port decides what an identity is there.
 
 ### Shell (`app/src/`)
-- `tap/` — the `CGEventTap`, split eight ways (2026-09-03; it had reached 2255
-  lines): `mod.rs` (state, run, the C callback, circuit breaker), `decide.rs`
-  (the pure decision + its `CGEvent`-driven tests live in `tests.rs`),
-  `keys.rs` (reading an event, recognising the hotkeys), `emit.rs` (everything
-  that writes to the document, plus the omnibox guard call site), `settings.rs`
-  (the `*_and_save` accessor wall the UI calls), `health.rs` (the tap health
-  monitor, §6.6, which also re-reads the frontmost app on idle ticks — §6.9),
-  `permission.rs` (the startup gate).
+- `platform/` — the backends. Exactly one compiles at a time; Windows and Linux
+  join macOS here as the port's later phases land.
+- `platform/macos/` — the `CGEventTap` (was `app/src/tap/` until 2026-09-04):
+  `mod.rs` (state, run, the C callback), `adapt.rs` (a `CGEvent` into a neutral
+  `KeyEvent` — the virtual key code tables, which are *physical* positions and so
+  survive a layout change), `dispatch.rs` (calls `glowkey_input::decide`, carries
+  out the `Decision` with `CGEventPost`, performs the `Effects`, records the
+  hotkey — was `decide.rs`, minus the ladder), `emit.rs` (everything that writes
+  to the document, plus the omnibox guard call site and the circuit breaker),
+  `settings.rs` (the `*_and_save` accessor wall the UI calls), `health.rs` (the
+  tap health monitor, §6.6, which also re-reads the frontmost app on idle ticks —
+  §6.9), `permission.rs` (the startup gate), `tests.rs` (the whole path driven by
+  real `CGEvent`s, which is what proves the translation; the policy itself is
+  pinned again in `crates/glowkey-input/tests/`).
   **Nothing in the keystroke path may block** (§5, `decisions/0008`): the
   callback sits in the system's synchronous delivery path for every key on the
   machine, so a window-server round-trip there freezes the Mac.
@@ -62,8 +79,7 @@ Cargo workspace:
   **every** letter it handles and re-emits the diff from a **single tagged
   `CGEventSource`** via `CGEventPost(SessionEventTap)`. This is the crux of
   correctness (see §5). Tags its own events and skips them (feedback-loop guard);
-  a latching **circuit breaker** caps runaways. `decide()` is a pure function of
-  event + session and is unit-tested with real `CGEvent`s.
+  a latching **circuit breaker** caps runaways.
 - `menu_bar.rs` — `NSStatusItem`, live **VI/EN glyph**, menu (per-app toggle,
   mode, auto-fix, launch-at-login, reset, reveal log, Settings, About, Quit).
 - `prefs/` — Settings window, an `NSTabView` of four panes (General / Typing /

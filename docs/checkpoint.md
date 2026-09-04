@@ -7,7 +7,7 @@ This file described the original **InputMethodKit / marked-text** prototype
 (IMKInputController subclass, `setMarkedText`, install under
 `~/Library/Input Methods`). That architecture was **replaced** by the current
 **CGEventTap** design (background menu-bar agent, full suppression, synthesized
-diffs — see `docs/decisions/` and the header of `app/src/tap.rs`), so its
+diffs — see `docs/decisions/` and the header of `app/src/platform/macos/mod.rs`), so its
 verification checklist and install steps no longer apply.
 
 Kept for history; the full old text is in git (`git log -- docs/checkpoint.md`).

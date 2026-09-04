@@ -20,17 +20,15 @@ fn reads_the_evkey_line_format() {
 #[test]
 fn skips_blank_lines_comments_and_junk_instead_of_failing() {
     // One stray line must not cost the user the other entries.
-    let table = Macro::parse_table("\n# a comment\nvn:Việt Nam\nnonsense\n:no shortcut\nhn:\nhn:Hà Nội\n");
+    let table =
+        Macro::parse_table("\n# a comment\nvn:Việt Nam\nnonsense\n:no shortcut\nhn:\nhn:Hà Nội\n");
     assert_eq!(table, vec![m("vn", "Việt Nam"), m("hn", "Hà Nội")]);
 }
 
 #[test]
 fn an_expansion_may_contain_a_colon() {
     // Only the first colon separates, so times and ratios survive.
-    assert_eq!(
-        Macro::parse_table("t:12:30"),
-        vec![m("t", "12:30")]
-    );
+    assert_eq!(Macro::parse_table("t:12:30"), vec![m("t", "12:30")]);
 }
 
 #[test]
@@ -45,7 +43,10 @@ fn falls_back_to_json_when_a_line_cannot_carry_the_macro() {
     // table is written as JSON — and still parses back.
     let table = vec![m("addr", "12 Trần Phú\nHà Nội")];
     let text = Macro::format_table(&table);
-    assert!(text.trim_start().starts_with('['), "expected JSON, got {text:?}");
+    assert!(
+        text.trim_start().starts_with('['),
+        "expected JSON, got {text:?}"
+    );
     assert_eq!(Macro::parse_table(&text), table);
 }
 
@@ -108,7 +109,10 @@ fn import_never_overwrites_an_existing_shortcut() {
         .map(|x| (x.shortcut.as_str(), x.expansion.as_str()))
         .collect();
     assert!(kept.contains(&("vn", "Việt Nam")), "user's macro survives");
-    assert!(kept.contains(&("hn", "Hà Nội")), "collision is case-insensitive");
+    assert!(
+        kept.contains(&("hn", "Hà Nội")),
+        "collision is case-insensitive"
+    );
     assert!(kept.contains(&("zz", "new one")), "the new one lands");
     assert_eq!(kept.len(), 3);
 }
@@ -121,7 +125,11 @@ fn import_counts_a_duplicate_inside_the_file_as_skipped() {
         (1, 1)
     );
     assert_eq!(
-        s.macros().iter().find(|x| x.shortcut == "aa").unwrap().expansion,
+        s.macros()
+            .iter()
+            .find(|x| x.shortcut == "aa")
+            .unwrap()
+            .expansion,
         "first"
     );
 }
@@ -187,7 +195,10 @@ fn macros_can_run_with_vietnamese_switched_off() {
     }
     let expansion = s.commit().expect("the macro should fire");
     assert_eq!(expansion.insert, "Việt Nam");
-    assert_eq!(expansion.backspaces, 2, "the two typed letters come back off");
+    assert_eq!(
+        expansion.backspaces, 2,
+        "the two typed letters come back off"
+    );
 }
 
 #[test]
@@ -202,7 +213,10 @@ fn always_macro_stays_out_of_excluded_apps() {
     s.set_always_macro(true);
     s.toggle_mode();
     s.set_frontmost_app("com.apple.Terminal");
-    assert!(!s.macros_active(), "Terminal is a shipped default exclusion");
+    assert!(
+        !s.macros_active(),
+        "Terminal is a shipped default exclusion"
+    );
     // The same session in an ordinary app does expand.
     s.set_frontmost_app("com.apple.TextEdit");
     assert!(s.macros_active());
@@ -296,6 +310,9 @@ fn an_existing_shortcut_is_reported_case_insensitively() {
     let s = session_with_two();
     assert!(s.has_macro("vn"));
     assert!(s.has_macro("VN"), "matching is case-insensitive");
-    assert!(s.has_macro("  vn  "), "the field's whitespace is not a shortcut");
+    assert!(
+        s.has_macro("  vn  "),
+        "the field's whitespace is not a shortcut"
+    );
     assert!(!s.has_macro("zz"));
 }

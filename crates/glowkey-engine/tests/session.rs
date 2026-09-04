@@ -192,11 +192,17 @@ fn terminal_hotkey_unexclusion_is_session_only() {
     assert!(session.is_active(), "session-suspended terminal transforms");
     // The snapshot (what gets persisted) still excludes it.
     let saved = session.snapshot();
-    assert!(saved.exclusions.iter().any(|id| id == "com.mitchellh.ghostty"));
+    assert!(saved
+        .exclusions
+        .iter()
+        .any(|id| id == "com.mitchellh.ghostty"));
     // And a fresh session from that snapshot excludes it again.
     let mut restarted = Session::from_settings(&saved);
     restarted.set_frontmost_app("com.mitchellh.ghostty");
-    assert!(!restarted.is_active(), "restart must re-exclude the terminal");
+    assert!(
+        !restarted.is_active(),
+        "restart must re-exclude the terminal"
+    );
 
     // Toggling again re-excludes immediately (lifts the suspension).
     assert_eq!(
@@ -211,7 +217,10 @@ fn terminal_hotkey_unexclusion_is_session_only() {
         ExclusionToggle::Enabled
     );
     let saved = session.snapshot();
-    assert!(!saved.exclusions.iter().any(|id| id == "com.microsoft.VSCode"));
+    assert!(!saved
+        .exclusions
+        .iter()
+        .any(|id| id == "com.microsoft.VSCode"));
     assert!(saved
         .removed_default_exclusions
         .iter()
@@ -246,7 +255,10 @@ fn auto_capitalize_handles_a_word_starting_with_a_bracket() {
     s.note_boundary('.');
     s.process_key(' ');
     let first = s.process_key('[');
-    assert_eq!(first.insert, "Ơ", "a bracket-started word takes the capital");
+    assert_eq!(
+        first.insert, "Ơ",
+        "a bracket-started word takes the capital"
+    );
     s.commit();
 
     // And the capital is spent, so the next word is not also capitalized.

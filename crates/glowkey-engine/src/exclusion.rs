@@ -235,7 +235,9 @@ mod tests {
         // A fresh load must not resurrect it via the defaults merge.
         let reloaded = ExclusionList::from_saved(
             list.ids().map(String::from).collect::<Vec<_>>(),
-            list.removed_default_ids().map(String::from).collect::<Vec<_>>(),
+            list.removed_default_ids()
+                .map(String::from)
+                .collect::<Vec<_>>(),
         );
         assert!(!reloaded.is_excluded("com.googlecode.iterm2"));
     }
@@ -262,8 +264,7 @@ mod tests {
     #[test]
     fn from_saved_respects_tombstones() {
         // The user deliberately removed VSCode; the merge must not resurrect it.
-        let list =
-            ExclusionList::from_saved(["com.apple.Terminal"], ["com.microsoft.VSCode"]);
+        let list = ExclusionList::from_saved(["com.apple.Terminal"], ["com.microsoft.VSCode"]);
         assert!(!list.is_excluded("com.microsoft.VSCode"));
         assert!(list.is_excluded("com.apple.Terminal"));
     }
@@ -306,7 +307,10 @@ mod tests {
         assert!(!is_terminal("com.google.Chrome"));
         // Every terminal is also a shipped default exclusion.
         for id in TERMINAL_EXCLUSIONS {
-            assert!(DEFAULT_EXCLUSIONS.contains(id), "{id} missing from defaults");
+            assert!(
+                DEFAULT_EXCLUSIONS.contains(id),
+                "{id} missing from defaults"
+            );
         }
     }
 }

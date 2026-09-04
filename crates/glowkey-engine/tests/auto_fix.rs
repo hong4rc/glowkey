@@ -267,7 +267,11 @@ fn restores_english_words_broken_by_the_stop_coda_tone_rule() {
     // exactly the three forbidden tones, which is why ordinary English hits it.
     for word in ["left", "soft", "gift", "lift", "loft"] {
         let mut s = active_session(true);
-        assert_eq!(type_then_commit(&mut s, word), word, "{word} must be restored");
+        assert_eq!(
+            type_then_commit(&mut s, word),
+            word,
+            "{word} must be restored"
+        );
     }
 }
 

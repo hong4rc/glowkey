@@ -27,6 +27,10 @@ pub(crate) fn is_common_english(raw: &str) -> bool {
 }
 
 /// Common English words. Lowercase. See the module docs for inclusion criteria.
+///
+/// Hand-packed and kept that way: rustfmt would put each word on its own line,
+/// turning a list you can scan by theme into four hundred lines you cannot.
+#[rustfmt::skip]
 static WORDS: &[&str] = &[
     // Short function words whose rendering is valid Vietnamese.
     "as", "is", "us", "if", "of", "off", "or", "was", "has", "his", "hers", "its", "this",

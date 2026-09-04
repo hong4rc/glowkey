@@ -28,7 +28,9 @@ fn w_still_adds_the_horn_and_the_breve() {
 
 #[test]
 fn everything_else_matches_full_telex() {
-    for keys in ["hoongf", "vieejt", "nguyeenx", "ddaij", "cas", "cass", "aaa"] {
+    for keys in [
+        "hoongf", "vieejt", "nguyeenx", "ddaij", "cas", "cass", "aaa",
+    ] {
         assert_eq!(
             typed(keys, InputMethod::SimpleTelex),
             typed(keys, InputMethod::Telex),

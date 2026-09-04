@@ -1,6 +1,6 @@
-//! A small About window — name, version, and a one-line description — like the
-//! About box Unikey/EVKey ship. Built once and reused; no state, so it needs no
-//! controller class.
+//! A small About window — name, version, commit, and a one-line description — in
+//! the shape of the About box UniKey ships: plain, centred, text only. Built once
+//! and reused; no state, so it needs no controller class.
 
 use objc2::rc::Retained;
 use objc2::{msg_send, MainThreadOnly};
@@ -21,6 +21,26 @@ fn version_string() -> String {
         .and_then(|obj| obj.downcast::<NSString>().ok())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "?".to_string())
+}
+
+/// The git commit this binary was built from, stamped by `build.rs`. Empty when
+/// it was built without git available.
+const COMMIT: &str = env!("GLOWKEY_COMMIT");
+
+/// `0.1.0 (44a38fa)` — the macOS convention, with the commit where a build number
+/// usually goes.
+///
+/// The version alone does not identify a build. GlowKey is installed straight
+/// from a working tree as often as from a tag, so the commit is the part that
+/// answers "which GlowKey are you running?" — and a trailing `+` says the tree
+/// had uncommitted changes, so the hash names the parent rather than the code.
+fn build_string() -> String {
+    let version = version_string();
+    if COMMIT.is_empty() {
+        version
+    } else {
+        format!("{version} ({COMMIT})")
+    }
 }
 
 fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
@@ -59,12 +79,16 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
 
     let version = NSTextField::labelWithString(
         &NSString::from_str(
-            &crate::strings::t("Version {}", "Phiên bản {}").replace("{}", &version_string()),
+            &crate::strings::t("Version {}", "Phiên bản {}").replace("{}", &build_string()),
         ),
         mtm,
     );
     version.setFont(Some(&NSFont::systemFontOfSize(12.0)));
     version.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    // Selectable so it can be copied into a bug report. This is the one string in
+    // the app someone is ever asked to quote back, and retyping a commit hash by
+    // eye is how the wrong build gets investigated.
+    version.setSelectable(true);
     stack.addArrangedSubview(&version);
 
     let desc = NSTextField::labelWithString(
@@ -78,8 +102,8 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
 
     let credit = NSTextField::labelWithString(
         &NSString::from_str(crate::strings::t(
-            "An EVKey-style keyboard wrapper, all-Rust.",
-            "Bộ gõ kiểu EVKey, viết hoàn toàn bằng Rust.",
+            "A UniKey-style input method, written entirely in Rust.",
+            "Bộ gõ kiểu UniKey, viết hoàn toàn bằng Rust.",
         )),
         mtm,
     );

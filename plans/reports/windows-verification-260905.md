@@ -139,6 +139,33 @@ at the caret was, accurately, wrong. Pressing Home between cases (a caret move,
 which the ladder flushes on) fixed it. **This is a small live demonstration of
 why every flush in the ladder exists.**
 
+## The test machine runs US-International, which matters
+
+Discovered while writing an AltGr test that assumed "a US layout has no AltGr
+mappings" and failed. Probing `ToUnicodeEx` under Ctrl+Alt on this machine:
+
+```
+vk=0x41 (A) -> á     vk=0x46 (F) -> ã     vk=0x35 (5) -> €
+```
+
+`Get-WinUserLanguageList` confirms `0409:00060409` — **United States-International**,
+alongside plain US.
+
+Two consequences:
+
+1. **AltGr is live here**, so the AltGr handling is not theoretical on this
+   machine and the Tier 1 results above were produced on a layout where it
+   matters.
+2. **US-International is a dead-key layout.** It is exactly the layout Tier 4
+   calls for to test `ToUnicodeEx` dead-key preservation, and it is already
+   installed. That check is therefore cheap and should be done next — `` ` ``
+   then `e` should give `è`, with GlowKey running and with it stopped, and the
+   two compared.
+
+It also means the earlier assumption in the code — that a US layout is the
+uninteresting default case — was wrong about the very machine the code was being
+written on.
+
 ## Tier 0 — modifiers reach the hook
 
 The doubt that mattered most, because it fails silently: GlowKey's hook thread

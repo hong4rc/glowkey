@@ -60,6 +60,11 @@ pub struct HookState {
     /// Set by the policy when something must reach the settings file. Written
     /// after the callback returns, never inside it.
     pending_save: Cell<bool>,
+    /// Set when the tray no longer matches the truth. Repainted after the
+    /// callback returns, for the same reason the save is deferred: painting it
+    /// means `Shell_NotifyIcon`, which is a `SendMessage` to the taskbar and can
+    /// wait on another process. That is not a call to make from a hook callback.
+    pending_refresh: Cell<bool>,
     /// Whether the log already carries the note that the custom toggle hotkey was
     /// recorded on another platform. Once per run: it is resolved on every
     /// keystroke, and a line per keystroke is not a warning, it is a way of
@@ -79,6 +84,7 @@ impl HookState {
             session: Session::from_settings(settings),
             last_app: None,
             pending_save: Cell::new(false),
+            pending_refresh: Cell::new(false),
             warned_hotkey_fallback: Cell::new(false),
             worst_micros: Cell::new(0),
         }
@@ -192,6 +198,9 @@ pub fn run_message_loop() {
         if let Some(settings) = take_pending_save() {
             crate::settings_store::save(&settings);
         }
+        if take_pending_refresh() {
+            super::shell::refresh_indicator();
+        }
     }
     // Once more after the loop. `WM_QUIT` ends it without running the body, so a
     // save requested by the very keystroke that led to quitting would otherwise
@@ -200,6 +209,17 @@ pub fn run_message_loop() {
     if let Some(settings) = take_pending_save() {
         crate::settings_store::save(&settings);
     }
+}
+
+/// Whether the tray needs repainting, clearing the flag.
+fn take_pending_refresh() -> bool {
+    STATE.with(|state| {
+        state
+            .try_borrow()
+            .ok()
+            .and_then(|borrowed| borrowed.as_ref().map(|s| s.pending_refresh.replace(false)))
+            .unwrap_or(false)
+    })
 }
 
 /// The hook callback.
@@ -351,9 +371,24 @@ fn handle_key(state: &mut HookState, info: &KBDLLHOOKSTRUCT) -> bool {
 /// receiver — so it is one of the few Win32 calls that may be made from here.
 const WM_GLOWKEY_SAVE: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 1;
 
+/// Marks the tray out of date and wakes the loop so it gets repainted.
+///
+/// Deferred rather than painted here for the same reason the save is: repainting
+/// calls `Shell_NotifyIcon`, which is a `SendMessage` to the taskbar and waits on
+/// another process. Inside a hook callback that is a way to lose the hook.
+fn request_refresh(state: &HookState) {
+    state.pending_refresh.set(true);
+    wake();
+}
+
 /// Marks the settings dirty and wakes the loop so the write actually happens.
 fn request_save(state: &HookState) {
     state.pending_save.set(true);
+    wake();
+}
+
+/// Nudges the message loop so its post-dispatch work runs.
+fn wake() {
     // SAFETY: posting to our own thread. Non-blocking: it enqueues and returns
     // without waiting for the receiver.
     unsafe {
@@ -378,6 +413,14 @@ fn carry_out_effects(state: &HookState, effects: Effects) {
     if effects.save_settings {
         request_save(state);
     }
+    if effects.refresh_glyph {
+        // The policy says the indicator is now wrong. Without this, toggling the
+        // mode with the hotkey left the tray claiming the old one until something
+        // unrelated repainted it — the menu path refreshed and the hotkey path
+        // did not, which is the indicator lying about the one thing the user just
+        // did deliberately.
+        request_refresh(state);
+    }
 }
 
 /// Carries out a decision. Returns `true` to suppress the original key.
@@ -393,6 +436,10 @@ fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT)
                     if outcome != glowkey_engine::ExclusionToggle::EnabledSessionOnly {
                         request_save(state);
                     }
+                    // The ladder returns `ToggleApp` without setting
+                    // `refresh_glyph` — it cannot know the platform has an
+                    // indicator — so the repaint is asked for here.
+                    request_refresh(state);
                 }
                 // No application resolved yet — the notification has not arrived
                 // and nothing has been typed. The key is still consumed (it is

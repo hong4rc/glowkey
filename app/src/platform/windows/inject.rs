@@ -10,9 +10,17 @@
 //! suppressing every handled key and re-emitting it from one queue is what fixed
 //! it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK,
 };
+
+/// Whether the current run of injection refusals has already been reported.
+///
+/// Reset by the first batch that succeeds, so a later episode is reported again
+/// rather than being swallowed for the life of the process.
+static REFUSAL_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// The tag GlowKey stamps on every event it injects, read back in the hook's
 /// first statement.
@@ -102,12 +110,31 @@ fn send(inputs: &[INPUT]) {
         // The overwhelmingly likely cause is UIPI: the foreground window belongs
         // to a higher integrity level and the whole batch was refused. That is a
         // known, permanent limitation rather than a bug, but it must never be
-        // silent — `elevation` is what turns it into a visible indicator state,
-        // and this line is what puts it in the log.
-        crate::log::log(&format!(
-            "INJECT REFUSED {sent}/{} events — the foreground window is likely elevated (UIPI)",
-            inputs.len()
-        ));
+        // silent — `elevation` turns it into a visible indicator state, and this
+        // line is what puts it in the log.
+        //
+        // Two things about how it is logged, both load-bearing:
+        //
+        // `hook_log`, never `crate::log::log`. This function runs inside the hook
+        // callback, and the direct logger takes a global lock, writes, flushes,
+        // and sometimes renames the file. That is the archetypal blocking call
+        // `decisions/0008` forbids here, and it would fire on a machine already in
+        // a degraded state — costing the hook itself, whose loss then reads as a
+        // *second*, unrelated fault.
+        //
+        // Once per run of refusals, not once per key. Injection into an elevated
+        // window fails for **every** keystroke while it is in front, so an
+        // unguarded line here is a per-keystroke write. The flag resets when a
+        // batch succeeds, so a later episode is reported again.
+        if !REFUSAL_REPORTED.swap(true, Ordering::Relaxed) {
+            super::hook_log::log(format!(
+                "INJECT REFUSED {sent}/{} events — the foreground window is likely elevated \
+                 (UIPI). Reported once; further refusals are silent until injection succeeds.",
+                inputs.len()
+            ));
+        }
+    } else {
+        REFUSAL_REPORTED.store(false, Ordering::Relaxed);
     }
 }
 

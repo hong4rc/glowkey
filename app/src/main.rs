@@ -11,6 +11,17 @@
 //! other platform this builds as a stub so the workspace (and the tested engine
 //! crate) compiles in CI without a macOS SDK.
 
+// No console window on Windows.
+//
+// GlowKey is a background agent: it has a tray icon and nothing else. A console
+// subsystem binary opens and holds a console for the life of the process, which
+// the `HKCU\...\Run` entry would then pop on every single login. The macOS
+// equivalent is `LSUIElement` in the bundle's Info.plist.
+//
+// The cost is that `eprintln!` has nowhere to go on Windows, so anything worth
+// saying must reach `crate::log` instead. Startup failures already do.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 #[cfg(target_os = "macos")]
 mod about_window;
 #[cfg(target_os = "macos")]

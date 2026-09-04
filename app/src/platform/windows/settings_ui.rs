@@ -55,9 +55,23 @@ pub fn show(initial: Settings) -> Option<Settings> {
     );
 
     if let Err(err) = run_result {
-        // Nothing was edited if the window never ran, so this is not fatal to
-        // the caller — just tell them why nothing came back.
-        eprintln!("GlowKey: settings window exited with an error: {err}");
+        // To the log, not to `eprintln!`. GlowKey builds with
+        // `windows_subsystem = "windows"` and has no console, so a message
+        // printed here goes nowhere at all — and a menu item that does nothing
+        // and says nothing is the defect `docs/decisions/0007` is about.
+        //
+        // The expected error is `RecreationAttempt`. **winit permits exactly one
+        // event loop per process**, and there is no reset outside its web
+        // backend — so the second time a user picks Settings in a process that
+        // has been up for days, this is where they land. That is a real
+        // limitation of running the window in-process and it is named here
+        // rather than left as a mystery; the fix is a design decision (a
+        // separate process, or a dedicated long-lived UI thread), not a patch.
+        crate::log::log(&format!(
+            "SETTINGS window could not run: {err}. If this says RecreationAttempt, \
+             the window has already been opened once this run — restart GlowKey to \
+             open it again."
+        ));
     }
 
     let mut slot = result_slot.borrow_mut();

@@ -197,6 +197,13 @@ pub fn run_message_loop() {
             crate::settings_store::save(&settings);
         }
     }
+    // Once more after the loop. `WM_QUIT` ends it without running the body, so a
+    // save requested by the very keystroke that led to quitting would otherwise
+    // be dropped on the way out — which is the same class of loss the wake above
+    // exists to prevent, at the one moment there is no next message to rely on.
+    if let Some(settings) = take_pending_save() {
+        crate::settings_store::save(&settings);
+    }
 }
 
 /// The hook callback.

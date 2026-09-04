@@ -16,9 +16,10 @@ use std::cell::RefCell;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, DT_CENTER,
-    DT_SINGLELINE, DT_VCENTER, FW_BOLD, TRANSPARENT,
+    CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject,
+    DrawTextW, GdiFlush, GetDC, ReleaseDC, SelectObject, SetBkMode, SetTextColor, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, FW_BOLD,
+    TRANSPARENT,
 };
 use windows_sys::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
@@ -26,9 +27,10 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyMenu, DestroyWindow, GetCursorPos, PostQuitMessage, RegisterClassW, SetForegroundWindow,
-    TrackPopupMenu, HICON, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN,
-    TPM_RIGHTALIGN, WM_APP, WM_COMMAND, WM_DESTROY, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    DestroyMenu, DestroyWindow, GetCursorPos, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
+    MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use super::indicator::{Breakage, Indicator};
@@ -62,6 +64,48 @@ struct Tray {
     hwnd: HWND,
     icon: HICON,
     shown: Indicator,
+    /// The application named in the tooltip.
+    ///
+    /// Kept alongside the state because the two are not redundant: switching from
+    /// one elevated window to another leaves the state at
+    /// `Broken(ElevatedWindow)` while the *right answer* changes, and the tooltip
+    /// is the only place the user learns **which** window cannot be typed into.
+    /// Comparing state alone would leave it naming the first one forever.
+    shown_app: Option<String>,
+}
+
+/// The broadcast Explorer sends when the notification area is rebuilt.
+///
+/// Registered once and cached; the id is per-session, not a constant.
+fn taskbar_created_message() -> u32 {
+    use std::sync::OnceLock;
+    static MSG: OnceLock<u32> = OnceLock::new();
+    *MSG.get_or_init(|| {
+        let name = wide("TaskbarCreated");
+        // SAFETY: a plain registration of a well-known message name.
+        unsafe { RegisterWindowMessageW(name.as_ptr()) }
+    })
+}
+
+/// Re-adds the icon after Explorer has restarted.
+fn readd() {
+    let (hwnd, icon, state, app) = TRAY.with(|t| {
+        t.borrow()
+            .as_ref()
+            .map(|tray| (tray.hwnd, tray.icon, tray.shown, tray.shown_app.clone()))
+            .unwrap_or((
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                Indicator::English,
+                None,
+            ))
+    });
+    if hwnd.is_null() {
+        return;
+    }
+    let data = notify_data(hwnd, icon, state, app.as_deref());
+    // SAFETY: re-adding an icon for a window this module owns.
+    unsafe { Shell_NotifyIconW(NIM_ADD, &data) };
 }
 
 /// Creates the tray icon. Must run on the message-loop thread.
@@ -105,6 +149,14 @@ pub fn install() -> bool {
     let ok = unsafe { Shell_NotifyIconW(NIM_ADD, &data) } != 0;
     if !ok {
         crate::log::log("TRAY FAILED to add the notify icon");
+        // Released rather than leaked: this path is reachable (the shell can be
+        // mid-restart) and the caller treats it as non-fatal, so the process
+        // carries on and would keep both handles for its whole life.
+        // SAFETY: created above and referenced by nothing else.
+        unsafe {
+            DestroyIcon(icon);
+            DestroyWindow(hwnd);
+        }
         return false;
     }
     TRAY.with(|t| {
@@ -112,6 +164,7 @@ pub fn install() -> bool {
             hwnd,
             icon,
             shown: state,
+            shown_app: None,
         });
     });
     true
@@ -122,24 +175,41 @@ pub fn install() -> bool {
 /// Cheap to call on every foreground change and every mode toggle: an unchanged
 /// state does no work, and a changed one is one icon and one tooltip.
 pub fn refresh(state: Indicator, app: Option<&str>) {
-    TRAY.with(|t| {
-        let mut borrowed = t.borrow_mut();
-        let Some(tray) = borrowed.as_mut() else {
-            return;
-        };
-        if tray.shown == state {
-            return;
+    // Everything is decided and the borrow released before any Win32 call.
+    // `Shell_NotifyIcon` is a SendMessage to the taskbar and dispatches sent
+    // messages to this thread while it waits, so holding a RefCell borrow across
+    // it is one such message away from a BorrowMutError — inside a window
+    // procedure, where a panic is a process abort.
+    let plan = TRAY.with(|t| {
+        let borrowed = t.borrow();
+        let tray = borrowed.as_ref()?;
+        // Compared on the named application as well as the state: the two
+        // breakages share a glyph and separate only in the tooltip, so a tooltip
+        // that goes stale is the indicator quietly lying again.
+        if tray.shown == state && tray.shown_app.as_deref() == app {
+            return None;
         }
-        let icon = draw_glyph(state);
-        let data = notify_data(tray.hwnd, icon, state, app);
-        // SAFETY: as in `install`.
-        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
-        // The old icon is replaced, so it can go. Leaking one per state change
-        // would be a slow GDI-handle leak in a process that runs for days.
-        // SAFETY: created by `draw_glyph` and no longer referenced.
-        unsafe { DestroyIcon(tray.icon) };
-        tray.icon = icon;
-        tray.shown = state;
+        Some((tray.hwnd, tray.icon))
+    });
+    let Some((hwnd, old_icon)) = plan else {
+        return;
+    };
+
+    let icon = draw_glyph(state);
+    let data = notify_data(hwnd, icon, state, app);
+    // SAFETY: as in `install`.
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+    // The old icon is replaced, so it can go. Leaking one per state change would
+    // be a slow GDI-handle leak in a process that runs for days.
+    // SAFETY: created by `draw_glyph` and no longer referenced.
+    unsafe { DestroyIcon(old_icon) };
+
+    TRAY.with(|t| {
+        if let Some(tray) = t.borrow_mut().as_mut() {
+            tray.icon = icon;
+            tray.shown = state;
+            tray.shown_app = app.map(str::to_owned);
+        }
     });
 }
 
@@ -193,32 +263,66 @@ fn notify_data(hwnd: HWND, icon: HICON, state: Indicator, app: Option<&str>) -> 
 fn draw_glyph(state: Indicator) -> HICON {
     const SIZE: i32 = 16;
     let text = wide(state.glyph());
-    let colour: u32 = match state {
-        Indicator::Broken(_) => 0x00_00_00_CC, // BGR: red
-        _ if state.dimmed() => 0x00_80_80_80,  // grey
-        _ => 0x00_F0_F0_F0,                    // near-white, for a dark taskbar
+    let (r, g, b) = match state {
+        Indicator::Broken(_) => (0xCCu8, 0x20u8, 0x20u8), // red
+        _ if state.dimmed() => (0x80, 0x80, 0x80),        // grey: on, but not here
+        _ => (0xF0, 0xF0, 0xF0),                          // near-white, for a dark taskbar
     };
 
-    // SAFETY: a standard offscreen GDI composition. Every object created here is
-    // released before returning; the two bitmaps are handed to `CreateIconIndirect`,
-    // which copies them.
+    // A 32-bit DIB section with an explicit alpha channel, not a
+    // `CreateCompatibleBitmap`.
+    //
+    // Two things go wrong with the obvious version, and both are invisible on the
+    // machine that wrote it:
+    //
+    // - `CreateCompatibleBitmap` returns **uninitialised** bits, and `ICONINFO`'s
+    //   mask must be a *monochrome* bitmap. Handing the shell a screen-format
+    //   colour bitmap as an AND mask is not a supported input, so what renders is
+    //   decided by whatever happened to be in that memory.
+    // - GDI text drawing does not touch the alpha channel. A black `FillRect`
+    //   writes alpha 0 and `DrawTextW` leaves it at 0, so every pixel of a 32-bit
+    //   icon is fully transparent — a blank square wherever the shell honours
+    //   alpha.
+    //
+    // So the pixels are composed directly: opaque where the glyph covers,
+    // transparent elsewhere, with an all-zero monochrome mask, which for a 32-bit
+    // colour icon means "keep every pixel and use the alpha".
+    // SAFETY: a standard offscreen GDI composition. Every object is released
+    // before returning, and both bitmaps are copied by `CreateIconIndirect`.
     unsafe {
         let screen = GetDC(std::ptr::null_mut());
         let dc = CreateCompatibleDC(screen);
-        let colour_bmp = CreateCompatibleBitmap(screen, SIZE, SIZE);
-        let mask_bmp = CreateCompatibleBitmap(screen, SIZE, SIZE);
+
+        let mut header: BITMAPINFO = std::mem::zeroed();
+        header.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        header.bmiHeader.biWidth = SIZE;
+        // Negative: a top-down DIB, so row 0 is the top and the pixel maths below
+        // reads the way it looks.
+        header.bmiHeader.biHeight = -SIZE;
+        header.bmiHeader.biPlanes = 1;
+        header.bmiHeader.biBitCount = 32;
+        header.bmiHeader.biCompression = BI_RGB;
+
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let colour_bmp = CreateDIBSection(
+            dc,
+            &header,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+        if colour_bmp.is_null() || bits.is_null() {
+            DeleteDC(dc);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            crate::log::log("TRAY FAILED to create the icon bitmap");
+            return std::ptr::null_mut();
+        }
         let old = SelectObject(dc, colour_bmp.cast());
 
-        let brush = CreateSolidBrush(0);
-        let mut rect = windows_sys::Win32::Foundation::RECT {
-            left: 0,
-            top: 0,
-            right: SIZE,
-            bottom: SIZE,
-        };
-        windows_sys::Win32::Graphics::Gdi::FillRect(dc, &rect, brush);
-        DeleteObject(brush.cast());
-
+        // Draw the glyph in pure white on the zeroed (black, transparent)
+        // surface. GDI antialiases, so each pixel's brightness is how much of the
+        // glyph covers it — which is exactly the alpha the icon needs.
         let font = CreateFontW(
             12,
             0,
@@ -237,7 +341,13 @@ fn draw_glyph(state: Indicator) -> HICON {
         );
         let old_font = SelectObject(dc, font.cast());
         SetBkMode(dc, TRANSPARENT as i32);
-        SetTextColor(dc, colour);
+        SetTextColor(dc, 0x00FF_FFFF);
+        let mut rect = windows_sys::Win32::Foundation::RECT {
+            left: 0,
+            top: 0,
+            right: SIZE,
+            bottom: SIZE,
+        };
         DrawTextW(
             dc,
             text.as_ptr(),
@@ -245,12 +355,31 @@ fn draw_glyph(state: Indicator) -> HICON {
             &mut rect,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
-
         SelectObject(dc, old_font);
         DeleteObject(font.cast());
+        // GDI batches, so the drawing above may not have reached the buffer yet.
+        // Reading the bits without this can produce an empty icon on a fast path.
+        GdiFlush();
+
+        // Turn the coverage map into premultiplied BGRA, in place.
+        let pixels = bits.cast::<u32>();
+        for i in 0..(SIZE * SIZE) as usize {
+            // Any channel carries the coverage — the text was white on black.
+            let coverage = *pixels.add(i) & 0xFF;
+            // Premultiplied, which is what a 32-bit alpha icon must be.
+            let pr = (u32::from(r) * coverage) / 255;
+            let pg = (u32::from(g) * coverage) / 255;
+            let pb = (u32::from(b) * coverage) / 255;
+            *pixels.add(i) = (coverage << 24) | (pr << 16) | (pg << 8) | pb;
+        }
+
         SelectObject(dc, old);
         DeleteDC(dc);
         ReleaseDC(std::ptr::null_mut(), screen);
+
+        // A real monochrome mask, all zero: "keep every pixel", leaving the alpha
+        // channel to decide.
+        let mask_bmp = CreateBitmap(SIZE, SIZE, 1, 1, std::ptr::null());
 
         let mut info: ICONINFO = std::mem::zeroed();
         info.fIcon = 1;
@@ -265,12 +394,49 @@ fn draw_glyph(state: Indicator) -> HICON {
 }
 
 /// The tray window's message handler.
+///
+/// Wrapped in `catch_unwind` for the same reason the hook callback is, and with
+/// more at stake: this one reaches the whole settings-window stack, so a panic
+/// anywhere in it would unwind out of an `extern "system"` function across
+/// `DispatchMessageW`, which Rust defines as a process abort. GlowKey would
+/// vanish — no log line, no saved settings, and the tray icon left behind as a
+/// ghost until someone hovers over it.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch_message(hwnd, msg, wparam, lparam)
+    }));
+    match handled {
+        Ok(result) => result,
+        Err(payload) => {
+            let what = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "a non-string panic".to_string());
+            crate::log::log(&format!("TRAY panic in the window procedure: {what}"));
+            // SAFETY: the documented default handler; the safe answer for a
+            // message we failed to process.
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+    }
+}
+
+/// The handler's body, separated so it can be wrapped above.
+fn dispatch_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // Explorer restarting rebuilds the notification area and every icon has to
+    // add itself back. Without this the tray silently disappears for the rest of
+    // the run while the hook keeps transforming keys — working software with no
+    // visible truth about its state, which is what `decisions/0007` forbids.
+    if msg == taskbar_created_message() {
+        crate::log::log("TRAY the taskbar restarted — re-adding the icon");
+        readd();
+        return 0;
+    }
     match msg {
         WM_TRAY if lparam as u32 == WM_RBUTTONUP => {
             show_menu(hwnd);

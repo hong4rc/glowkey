@@ -124,24 +124,39 @@ pub fn open_settings() {
     let Some(current) = hook::with_session(|session| session.snapshot()) else {
         return;
     };
-    let Some(updated) = super::settings_ui::show(current) else {
+    let Some(updated) = super::settings_ui::show(current.clone()) else {
         return; // nothing changed
     };
-    crate::settings_store::save(&updated);
 
-    // Rebuilt rather than patched field by field: `Settings` is the whole of
-    // what the window can change, and a per-field apply would need a line per
-    // field that someone will forget to add when the next one lands.
+    // **The hook keeps running while the window is open**, so the live session is
+    // not the one the window was handed. It can have learned things in the
+    // meantime: a mode toggle or a per-app exclusion from the hotkeys, and — the
+    // one that actually hurts — a word the user taught GlowKey with ⌃⇧W, which is
+    // a deliberate act they will not think to repeat.
     //
-    // The cost is that the session's *runtime* state — which application is in
-    // front, any word being composed — is not in the file and does not survive
-    // the rebuild. The composing word is genuinely gone, which is correct: the
-    // user was in a settings window, so the caret has moved and GlowKey's diff
-    // baseline is stale either way. The frontmost application is not gone, it is
-    // just not persisted, so it is put back.
+    // Writing `updated` straight back would destroy all of it twice over: once in
+    // memory and once on disk, because `updated` carries the *pre-window*
+    // baseline for every field the user did not touch.
+    //
+    // So the window's edits are applied as a diff against the baseline it was
+    // given, on top of whatever the session looks like now. Only fields the user
+    // actually changed move.
+    let live = hook::with_session(|session| session.snapshot()).unwrap_or_else(|| current.clone());
+    let merged = merge_settings(&current, &updated, live);
+
+    crate::settings_store::save(&merged);
+
+    // Rebuilt rather than patched: `Settings` is the whole of what is persisted,
+    // and the merge above has already decided every field.
+    //
+    // The session's *runtime* state is not in the file and does not survive the
+    // rebuild. The composing word is genuinely gone, which is correct — the user
+    // was in a settings window, so the caret has moved and the diff baseline is
+    // stale either way. The frontmost application is not gone, only unpersisted,
+    // so it is put back.
     let app = foreground::current();
     hook::with_session(|session| {
-        *session = glowkey_engine::Session::from_settings(&updated);
+        *session = glowkey_engine::Session::from_settings(&merged);
         if let Some(app) = app.as_deref() {
             session.set_frontmost_app(app);
         }
@@ -160,4 +175,199 @@ pub fn reinstall_hook() {
     let ok = hook::install();
     crate::log::log(&format!("HOOK reinstall requested from the menu (ok={ok})"));
     refresh_indicator();
+}
+
+/// Applies the settings window's edits without discarding what the session
+/// learned while the window was open.
+///
+/// Three values, not two:
+///
+/// - `baseline` — what the window was handed when it opened.
+/// - `edited` — what it returned.
+/// - `live` — what the session looks like *now*, which may have moved: the hook
+///   keeps running behind the window, so a hotkey press, a per-app toggle or a
+///   ⌃⇧W correction can all have landed in between.
+///
+/// A field the user changed in the window takes the window's value. Every other
+/// field keeps the live one. Writing `edited` straight back would silently
+/// destroy the rest — including a word the user deliberately taught GlowKey,
+/// which is the kind of loss that is never noticed until it is needed.
+///
+/// Field-by-field rather than clever, because there is no cleverness available:
+/// `Settings` has no per-field dirty tracking, and inventing one for this is a
+/// larger change than the list below.
+fn merge_settings(
+    baseline: &glowkey_engine::Settings,
+    edited: &glowkey_engine::Settings,
+    live: glowkey_engine::Settings,
+) -> glowkey_engine::Settings {
+    /// The window's value if the user changed it, otherwise the live one.
+    fn pick<T: PartialEq + Clone>(baseline: &T, edited: &T, live: &T) -> T {
+        if edited == baseline {
+            live.clone()
+        } else {
+            edited.clone()
+        }
+    }
+
+    glowkey_engine::Settings {
+        exclusions: pick(&baseline.exclusions, &edited.exclusions, &live.exclusions),
+        removed_default_exclusions: pick(
+            &baseline.removed_default_exclusions,
+            &edited.removed_default_exclusions,
+            &live.removed_default_exclusions,
+        ),
+        auto_fix: pick(&baseline.auto_fix, &edited.auto_fix, &live.auto_fix),
+        style: pick(&baseline.style, &edited.style, &live.style),
+        input_method: pick(
+            &baseline.input_method,
+            &edited.input_method,
+            &live.input_method,
+        ),
+        auto_capitalize: pick(
+            &baseline.auto_capitalize,
+            &edited.auto_capitalize,
+            &live.auto_capitalize,
+        ),
+        toggle_hotkey: pick(
+            &baseline.toggle_hotkey,
+            &edited.toggle_hotkey,
+            &live.toggle_hotkey,
+        ),
+        macros: pick(&baseline.macros, &edited.macros, &live.macros),
+        restore_english_words: pick(
+            &baseline.restore_english_words,
+            &edited.restore_english_words,
+            &live.restore_english_words,
+        ),
+        open_settings_at_launch: pick(
+            &baseline.open_settings_at_launch,
+            &edited.open_settings_at_launch,
+            &live.open_settings_at_launch,
+        ),
+        language: pick(&baseline.language, &edited.language, &live.language),
+        quick_telex: pick(
+            &baseline.quick_telex,
+            &edited.quick_telex,
+            &live.quick_telex,
+        ),
+        telex_brackets: pick(
+            &baseline.telex_brackets,
+            &edited.telex_brackets,
+            &live.telex_brackets,
+        ),
+        strict_spell_check: pick(
+            &baseline.strict_spell_check,
+            &edited.strict_spell_check,
+            &live.strict_spell_check,
+        ),
+        always_macro: pick(
+            &baseline.always_macro,
+            &edited.always_macro,
+            &live.always_macro,
+        ),
+        welcome_shown: pick(
+            &baseline.welcome_shown,
+            &edited.welcome_shown,
+            &live.welcome_shown,
+        ),
+        word_overrides: pick(
+            &baseline.word_overrides,
+            &edited.word_overrides,
+            &live.word_overrides,
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glowkey_engine::{Settings, WordOverride, WordPreference};
+
+    fn taught_word() -> WordOverride {
+        WordOverride {
+            keys: "cats".into(),
+            prefer: WordPreference::Vietnamese,
+        }
+    }
+
+    /// The defect this exists for: a word taught with ⌃⇧W while the settings
+    /// window was open must survive the window closing.
+    ///
+    /// The window was handed a baseline with no word overrides and did not touch
+    /// that field, so its "empty" is not an edit — it is a stale copy of the
+    /// baseline, and treating it as an edit is what destroyed the word.
+    #[test]
+    fn a_word_taught_while_the_window_was_open_survives() {
+        let baseline = Settings::default();
+        // The user changed one unrelated thing in the window.
+        let edited = Settings {
+            auto_capitalize: true,
+            ..baseline.clone()
+        };
+        // Meanwhile the hook learned a word.
+        let live = Settings {
+            word_overrides: vec![taught_word()],
+            ..baseline.clone()
+        };
+
+        let merged = merge_settings(&baseline, &edited, live);
+        assert_eq!(
+            merged.word_overrides,
+            vec![taught_word()],
+            "the taught word must not be destroyed by an unrelated settings edit"
+        );
+        assert!(
+            merged.auto_capitalize,
+            "the window's own edit still applies"
+        );
+    }
+
+    /// A mode or per-app change made by hotkey while the window was open also
+    /// survives.
+    #[test]
+    fn a_hotkey_exclusion_made_while_the_window_was_open_survives() {
+        let baseline = Settings::default();
+        let edited = Settings {
+            quick_telex: true,
+            ..baseline.clone()
+        };
+        let mut live = baseline.clone();
+        live.exclusions.push("someapp.exe".into());
+
+        let merged = merge_settings(&baseline, &edited, live);
+        assert!(merged.exclusions.iter().any(|id| id == "someapp.exe"));
+        assert!(merged.quick_telex);
+    }
+
+    /// The window still wins where the user actually edited, including when they
+    /// edited the same field the session changed. Someone has to win, and the
+    /// person looking at the control is the better answer.
+    #[test]
+    fn the_window_wins_the_fields_the_user_edited() {
+        let baseline = Settings::default();
+        let edited = Settings {
+            auto_fix: !baseline.auto_fix,
+            ..baseline.clone()
+        };
+        let live = Settings {
+            auto_fix: baseline.auto_fix,
+            ..baseline.clone()
+        };
+        let merged = merge_settings(&baseline, &edited, live);
+        assert_eq!(merged.auto_fix, !baseline.auto_fix);
+    }
+
+    /// Nothing edited anywhere leaves the live value untouched — the merge must
+    /// not be a way to quietly rewrite a file.
+    #[test]
+    fn no_edits_anywhere_changes_nothing() {
+        let baseline = Settings::default();
+        let live = Settings {
+            word_overrides: vec![taught_word()],
+            ..baseline.clone()
+        };
+        let merged = merge_settings(&baseline, &baseline, live.clone());
+        assert_eq!(merged, live);
+    }
 }

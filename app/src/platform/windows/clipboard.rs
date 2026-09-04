@@ -10,7 +10,7 @@
 //! processes hold, so opening it can wait, and `docs/decisions/0008` forbids
 //! waiting in the hook. These run from the tray menu.
 
-use windows_sys::Win32::Foundation::{HANDLE, HWND};
+use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
@@ -125,6 +125,10 @@ fn write_text(text: &str) -> bool {
     // SAFETY: locking the block just allocated.
     let ptr = unsafe { GlobalLock(handle) }.cast::<u16>();
     if ptr.is_null() {
+        // Ownership only passes to the clipboard on a successful
+        // `SetClipboardData`, so this block is still ours to release.
+        // SAFETY: allocated above and not handed to anyone.
+        unsafe { GlobalFree(handle) };
         return false;
     }
     // SAFETY: `handle` was allocated with exactly `bytes` bytes, which is the
@@ -134,14 +138,27 @@ fn write_text(text: &str) -> bool {
         GlobalUnlock(handle);
     }
 
-    // Emptying first is required before setting, and it is also what drops the
-    // other formats deliberately rather than leaving a stale RTF copy of the
-    // untransformed text behind for the next paste to pick up.
+    // The block is fully prepared *before* the clipboard is emptied.
+    //
+    // `EmptyClipboard` is required before `SetClipboardData`, but running it
+    // early means a later failure leaves the clipboard **empty** — the user's
+    // text destroyed by a menu item whose whole contract is that a stray click
+    // costs nothing. Everything that can fail has now already failed or
+    // succeeded, so the destructive step is as close to the write as it can be.
+    //
+    // Emptying also drops the other formats deliberately: a stale RTF copy of the
+    // untransformed text would otherwise be what the next paste picks up.
     // SAFETY: the clipboard is open and owned by this process.
     unsafe {
         EmptyClipboard();
-        !SetClipboardData(CF_UNICODETEXT as u32, handle).is_null()
+        if SetClipboardData(CF_UNICODETEXT as u32, handle).is_null() {
+            // The clipboard did not take ownership, so the block is still ours.
+            GlobalFree(handle);
+            crate::log::log("CLIPBOARD failed to write the transformed text");
+            return false;
+        }
     }
+    true
 }
 
 #[cfg(test)]

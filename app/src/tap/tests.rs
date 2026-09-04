@@ -602,7 +602,7 @@ fn backspace_that_unescapes_a_word_emits_instead_of_passing_through() {
     state.decide(NonNull::from(&*mistake));
     assert_eq!(state.session.borrow().current_word(), "hoongfa");
 
-    let delete = nav_event(&state.source, super::keys::KEY_CODE_DELETE as u16);
+    let delete = backspace_event(&state.source);
     match state.decide(NonNull::from(&*delete)) {
         Decision::Emit(edit) => {
             assert_eq!(
@@ -627,7 +627,7 @@ fn an_ordinary_mid_word_backspace_still_passes_through() {
         let event = key_event(&state.source, ch);
         state.decide(NonNull::from(&*event));
     }
-    let delete = nav_event(&state.source, super::keys::KEY_CODE_DELETE as u16);
+    let delete = backspace_event(&state.source);
     assert!(matches!(
         state.decide(NonNull::from(&*delete)),
         Decision::Passthrough

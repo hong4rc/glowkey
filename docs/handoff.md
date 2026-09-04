@@ -121,12 +121,19 @@ Cargo workspace:
   race §5 exists to remove. `BackspaceOutcome` is the three-way answer that makes
   the caller decide explicitly; a `bool` could not.
 
-  **Deletes after a repair stay visible-character deletes**, questioned in live
-  use and reaffirmed 2026-09-04. `hoongf` `a` ⌫ ⌫ `z` gives `hôn`, not `hông`:
+  **Deletes stay visible-character deletes**, questioned twice in live use and
+  reaffirmed both times (2026-09-04). `hoongf` `a` ⌫ ⌫ `z` gives `hôn`, not `hông`:
   the second ⌫ removes the visible `g`, not the tone key `f`. The two diverge
   only at a tone key — `hồng` is four characters and six keystrokes — and
   keystroke-undo would have meant a second Backspace mode that exists only after
   a repair, or reversing the contract above for every word.
+
+  The second report was `hoongf` `s` ⌫ ⌫ `z`, wanting `hông`. Same root: `s` is
+  a tone key, so `hống` is four characters and seven keystrokes, and deleting
+  characters gives `hốn` → `hố` where deleting keystrokes would give `hoong` →
+  `hông`. Worth knowing if it comes up a third time — the disagreement is always
+  a tone key, never anything else, because that is the only place a keystroke
+  produces no character of its own.
 - **Mid-word backspace stays composed**: `hoongf`⌫`z` → `hôn`. The host does the
   delete, so the engine has to land on exactly what the screen shows — the render
   minus its last character (`hồn`), which means dropping the raw `g` and keeping

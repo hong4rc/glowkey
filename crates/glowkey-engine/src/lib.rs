@@ -649,26 +649,26 @@ impl Engine {
     /// `người` — is. Pure-ASCII renders are what the user typed verbatim and are
     /// never refused, which is also what keeps English out of this path.
     fn last_key_made_it_impossible(&self) -> bool {
-        // Render a candidate rather than calling `rerender`, which installs its
-        // result as `self.rendered` — the diff baseline. Committing a render the
-        // shell never applied, then diffing the next one against it, made the
-        // emitted backspace count overshoot by exactly the discarded edit and ate
-        // a character of the document to the left of the word.
-        let candidate = self.render_keys(&self.raw);
-        if !is_invalid_vietnamese(&candidate) {
-            return false;
-        }
-        // One exception: repeating a diacritic key is the user deliberately
-        // rejecting the mark (`hoongff` → `hôngf`), and the literal key it leaves
-        // behind is exactly what makes the word "impossible". Refusing that would
-        // undo a rejection the user asked for. `cass`/`aaa`/`ddd` never reach here
-        // — they render pure ASCII.
-        let repeated = matches!(
-            (self.raw.last(), self.raw.iter().nth_back(1)),
-            (Some(last), Some(prev))
-                if last.eq_ignore_ascii_case(prev) && last.is_ascii_alphabetic()
-        );
-        !repeated
+        // The exact complement of [`Self::can_unescape`], and deliberately
+        // written as such: the rule that refuses a word and the rule that lets it
+        // back in have to agree, and two hand-written copies of "is this
+        // spellable" would eventually disagree. Only reached with `escaped`
+        // false, so `render_keys` and `can_unescape`'s render are the same thing.
+        //
+        // Rendering a candidate rather than calling `rerender` matters: `rerender`
+        // installs its result as `self.rendered`, the diff baseline, and
+        // committing a render the shell never applied then diffing the next one
+        // against it made the emitted backspace count overshoot by exactly the
+        // discarded edit — eating a character of the document to the left.
+        //
+        // There is no carve-out for the repeat-key rejection gesture. There used
+        // to be: `hoongff` → `hôngf` was exempted on the grounds that refusing a
+        // rejection undoes what the user asked for. Removed 2026-09-04 at the
+        // owner's direction, from live use — with this check on, `hôngf` is not
+        // something Vietnamese can spell, and the check's whole promise is to show
+        // you what you typed when the result is impossible. The gesture itself is
+        // untouched with the check off, which is the default.
+        !self.can_unescape()
     }
 
     /// Composes without transforming: the keys accumulate so a macro can still be
@@ -760,6 +760,15 @@ impl Engine {
                     self.escaped = false;
                     return BackspaceOutcome::InStep;
                 }
+                // Only the spell check's escape can be lifted here in practice.
+                // `process_key_verbatim` sets the same flag for the always-macro
+                // path, but that is unreachable through `Session`: it needs
+                // English mode, where `is_active()` is false and this returns
+                // `Flush` before the engine is consulted — and every route back
+                // to an active session (`toggle_mode`, `set_frontmost_app`,
+                // `toggle_app_exclusion`) resets the engine on the way. Worth
+                // stating rather than re-deriving: `Engine` is public, and the
+                // two escapes share one flag.
                 if self.escaped && self.can_unescape() {
                     self.escaped = false;
                     self.rendered = self.render_keys(&self.raw);
@@ -1816,8 +1825,12 @@ impl Session {
 
     /// Mid-word Backspace: shrink the composition by one visible character so the
     /// keys that follow keep editing the same word (`hoongf`⌫`z` → `hôn`, because
-    /// `z` still reaches the engine as the tone-removal key). Returns `false` when
-    /// the engine cannot stay in step with the host, and the caller must flush.
+    /// `z` still reaches the engine as the tone-removal key).
+    ///
+    /// Answers with a [`BackspaceOutcome`]: `InStep` (the host performs the
+    /// delete, as it always has), `Repair` (the keystroke must be **suppressed**
+    /// and this edit applied instead — it undoes a spell-check escape), or
+    /// `Flush` (the engine cannot stay in step and the caller must flush).
     pub fn backspace_visible_char(&mut self) -> BackspaceOutcome {
         if !self.is_active() {
             return BackspaceOutcome::Flush;

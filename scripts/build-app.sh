@@ -118,7 +118,12 @@ SIGN_IDENTITY="${GLOWKEY_SIGN_IDENTITY:-GlowKey Developer}"
 # identity was found. That would silently fall back to ad-hoc signing, which is
 # precisely the problem this signing work exists to remove, announced by nothing
 # but one line of build output.
-AVAILABLE_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+# `-p codesigning` without `-v`: a self-signed certificate is not *trusted*, so
+# `-v` ("valid identities only") hides it — but trust governs signature
+# verification, not signing. codesign uses it happily, and the designated
+# requirement it produces names the identifier and the certificate rather than a
+# hash of the code, which is the entire point.
+AVAILABLE_IDENTITIES="$(security find-identity -p codesigning 2>/dev/null || true)"
 if [ "${AVAILABLE_IDENTITIES#*"$SIGN_IDENTITY"}" != "$AVAILABLE_IDENTITIES" ]; then
     # Deliberately not silenced: with a certificate present, a signing failure is
     # a real problem and must be loud rather than falling back behind your back.
@@ -136,4 +141,8 @@ echo "    Architectures: $(lipo -archs "$APP/Contents/MacOS/$APP_NAME")"
 echo "    Signed with:   $SIGNED_WITH"
 # The designated requirement is what TCC actually matches on, so print it: a
 # broken signature is then visible at build time instead of at permission time.
-echo "    Requirement:   $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^# designated => //p')"
+# The prefix differs by signature kind — ad-hoc prints "# designated => ", a
+# certificate prints "designated => " — so accept either rather than silently
+# printing nothing, which is what made this line useless exactly when it was
+# most interesting.
+echo "    Requirement:   $(codesign -d -r- "$APP" 2>&1 | sed -n 's/^#* *designated => //p')"

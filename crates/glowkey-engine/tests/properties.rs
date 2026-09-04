@@ -615,12 +615,16 @@ proptest! {
                 expected
             ),
             // A repair replaces the whole word instead, so the render-minus-one
-            // rule does not apply — what must hold is that the edit and the
-            // engine agree, which `backspace_step` checks on the modelled path.
+            // rule does not apply. Assert the count, not the insert: `insert` is
+            // cloned from `rendered` two lines from where `current_word` reads
+            // it, so comparing them cannot fail for any implementation — a
+            // phantom check, in the one file whose premise is that a modelled but
+            // unexercised path is worse than no path. What can actually be wrong
+            // is how much it deletes.
             BackspaceOutcome::Repair(edit) => prop_assert_eq!(
-                edit.insert.as_str(),
-                session.current_word(),
-                "{:?}: repaired {:?} but inserted something else",
+                edit.backspaces,
+                before.encode_utf16().count(),
+                "{:?}: repairing {:?} must replace the whole on-screen word",
                 options,
                 before
             ),

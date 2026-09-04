@@ -273,13 +273,17 @@ impl TapState {
         }
 
         if keycode == KEY_CODE_DELETE {
-            // The host always performs the delete; we only re-sync the engine to
-            // whatever the screen will then show. Three cases, in order:
+            // Usually the host performs the delete and we only re-sync the engine
+            // to whatever the screen will then show — but not always: undoing a
+            // spell-check escape suppresses the key and rewrites the word
+            // instead. Four cases, in order:
             //   - deleting the boundary right after a committed word re-composes it
             //     so the next keys keep editing it (hồng␣⌫z → hông);
             //   - mid-word, shrink the composition by one visible character and
             //     stay composed, so the next key is still a Telex key rather than a
             //     literal (hoongf⌫z → hôn, not hồnz);
+            //   - undoing a spell-check escape rewrites the word in one edit and
+            //     swallows the keystroke (`hoongfa`⌫ → `hồng`);
             //   - if the engine cannot stay in step, flush and stop composing.
             if session.recompose_after_boundary_backspace() {
                 return Decision::Passthrough;

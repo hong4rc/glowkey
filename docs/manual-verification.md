@@ -70,8 +70,10 @@ Accessibility grant.
 - [ ] **Deleting a mistake undoes the escape** (reported from live use): type
       `hoongf` → `hồng`, then `a` → `hoongfa`, then ⌫ → **`hồng`**, and typing
       `s` after it gives `hống` — the word is still live, not dead literal text.
-      One character is removed on screen per press, never two: the Backspace is
-      suppressed and the repair replaces the whole word in one edit.
+      The word is replaced once per press and **nothing to the left of it moves**
+      — that is the check, not a character count. The glyph count legitimately
+      jumps (`hoongfa` is seven, `hồng` is four), because the Backspace is
+      suppressed and the repair rewrites the whole word in a single edit.
 - [ ] Same sequence in Chrome's address bar — the repair emits backspaces, so it
       goes through the omnibox guard.
 - [ ] Keep deleting: `hồng` → `hồn` → `hồ`, still transforming, never re-escaping.

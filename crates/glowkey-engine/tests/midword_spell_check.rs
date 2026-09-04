@@ -96,16 +96,27 @@ fn off_by_default() {
 
 #[test]
 fn the_repeat_key_escape_hatch_still_works() {
-    // Pressing the diacritic key again is a deliberate rejection by the user and
-    // must not be double-refused by the check.
-    for (keys, expected) in [
-        ("cass", "cas"),
-        ("aaa", "aa"),
-        ("ddd", "dd"),
-        ("hoongff", "hôngf"),
-    ] {
+    // Pressing the diacritic key again is a deliberate rejection by the user, and
+    // for every result Vietnamese can actually spell the check leaves it alone.
+    // These three render pure ASCII, which is never refused.
+    for (keys, expected) in [("cass", "cas"), ("aaa", "aa"), ("ddd", "dd")] {
         assert_eq!(typed(keys, true), expected, "{keys} with strict check on");
     }
+}
+
+/// A rejection that lands on something unspellable is still unspellable.
+///
+/// `hoongff` rejects the tone and leaves `hôngf`, which Vietnamese cannot spell.
+/// The check used to exempt it, on the grounds that refusing a rejection undoes
+/// what the user asked for. Changed 2026-09-04 from live use: with the check on,
+/// the promise is that an impossible result shows you what you typed, and
+/// `hôngf` is impossible like any other.
+#[test]
+fn a_rejection_that_is_still_unspellable_shows_the_raw_keys() {
+    assert_eq!(typed("hoongff", true), "hoongff", "with the spell check on");
+    // The gesture itself is untouched: with the check off — the default — the
+    // rejection behaves exactly as it always has.
+    assert_eq!(typed("hoongff", false), "hôngf", "with the spell check off");
 }
 
 #[test]
@@ -291,4 +302,45 @@ fn with_the_spell_check_off_nothing_changes() {
     assert_eq!(engine.current_word(), "hồnga");
     assert_eq!(engine.backspace_visible_char(), BackspaceOutcome::InStep);
     assert_eq!(engine.current_word(), "hồng");
+}
+
+/// Deleting an escaped word away must clear the escape — guarded directly.
+///
+/// `the_escape_does_not_outlive_the_word` above used to be this guard, and the
+/// un-escape-on-backspace fix silently took its teeth away: with the escape now
+/// lifting on the *first* backspace, that word never reaches empty while still
+/// escaped, so the empty-word clear became unreachable from it. Deleting
+/// `escaped = false` from the `raw.is_empty()` branch left the whole engine
+/// suite green.
+///
+/// The line is not dead in principle — `process_key_verbatim` escapes a word
+/// with no spell check involved and no un-escape path — so this reaches empty
+/// through that door and asserts the next word still transforms.
+#[test]
+fn deleting_a_verbatim_word_away_clears_the_escape() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    // The always-macro path: keys compose verbatim so a shortcut can still match
+    // at the boundary. A **single** key is the case that matters — with two, the
+    // first backspace un-escapes (a one-key ASCII render is spellable) and the
+    // word never reaches empty while still escaped, which is exactly how the
+    // original guard lost its teeth.
+    engine.process_key_verbatim('v');
+    assert_eq!(engine.current_word(), "v");
+
+    assert_eq!(
+        engine.backspace_visible_char(),
+        BackspaceOutcome::InStep,
+        "the last key deletes normally"
+    );
+    assert!(!engine.is_composing(), "the word is now empty");
+
+    // The escape must not outlive the word: the next word transforms normally.
+    for ch in "hoongf".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(
+        engine.current_word(),
+        "hồng",
+        "the escape leaked into the next word"
+    );
 }

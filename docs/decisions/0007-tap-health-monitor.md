@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (2026-09-03).
+Accepted (2026-09-03). **Amended 2026-09-04** — the poll skips itself while the
+user is typing, because the poll as first written was one of two causes of a
+system-wide input freeze. See the amendment at the end, and `0008`.
 
 ## Context
 
@@ -99,7 +101,8 @@ worse than one that is briefly wrong.
   bound.
 - One timer wakeup every two seconds, forever. Measurable in principle,
   negligible in practice; if it ever shows up in battery terms the fix is to back
-  off to five seconds once the tap has been healthy for a while.
+  off to five seconds once the tap has been healthy for a while. **The wakeup is
+  cheap; the call it made was not** — see the amendment.
 - **Not yet verified on screen.** On some macOS versions revoking the permission
   terminates the process outright, which would make the recovery path unreachable
   (and harmless). That reproduction is the one step of this work a human has to
@@ -115,3 +118,40 @@ worse than one that is briefly wrong.
   dialog appearing unbidden while the user is in another app is worse than a
   glyph that changed. The alert stays reserved for the startup gate, where the
   user is already waiting on the app.
+
+## Amendment (2026-09-04): the poll must not run while the user is typing
+
+The check above is one `CGEventTapIsEnabled` call, described here as costing
+nothing. That was wrong in one specific and serious way: **it is a round-trip to
+the window server, made from a timer on the same run loop as the tap callback.**
+When the window server is busy — an authentication sheet, `loginwindow`, the
+Accessibility pane being toggled — the call blocks, the callback behind it is
+delayed, and macOS disables the tap for timing out. While that is happening every
+keystroke on the machine is waiting on GlowKey, which the user experiences as
+their Mac freezing.
+
+The user hit exactly this, and the log named it: five `TAP disabled by timeout`
+lines in one run, bracketing `FRONTMOST -> com.apple.systempreferences` and
+`FRONTMOST -> com.apple.loginwindow`. Ironically, the situation this monitor
+exists to detect — the user revoking the grant — is precisely the situation in
+which its own detection method stalls the system.
+
+**The fix keeps the detection and drops the cost.** `check_tap_health` returns
+immediately if a keystroke arrived within the last three seconds
+(`HEALTH_SKIP_AFTER_KEYSTROKE`). A keystroke reaching the callback *is* proof the
+tap is enabled — better proof than the API call, and free. During real idle,
+which is when a silently dead tap actually needs finding, the poll behaves
+exactly as this record describes.
+
+Nothing else about the decision changes: still two seconds, still the same branch
+table, still two consecutive failures before the glyph moves, still a rebuild
+rather than a re-enable when trust returns. The "Why polling, and why two
+seconds" section stands as written — the claim that needed correcting was
+"it is one `CGEventTapIsEnabled` call, on a run loop that already handles twenty
+keystrokes a second", which read the shared run loop as evidence of headroom when
+it was the hazard.
+
+The idle tick gained one job while it was there: re-reading the frontmost
+application, which used to happen on every keystroke inside the callback and was
+the *other* half of the freeze. `0008` records the general rule both halves
+violated.

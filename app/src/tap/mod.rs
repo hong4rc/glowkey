@@ -114,6 +114,10 @@ pub(crate) struct TapState {
     /// the Personal Words window even showed the word, and a restart forgot all
     /// of it.
     pending_save: Cell<bool>,
+    /// When the tap last handled a key. A keystroke arriving *is* proof the tap
+    /// is alive, so the health monitor can skip its window-server round-trip
+    /// while someone is typing — see `health::check_tap_health`.
+    last_key_at: Cell<Option<Instant>>,
 }
 
 impl TapState {
@@ -134,6 +138,7 @@ impl TapState {
             recent_emits: RefCell::new(VecDeque::new()),
             recording_hotkey: RefCell::new(false),
             pending_save: Cell::new(false),
+            last_key_at: Cell::new(None),
         })
     }
 
@@ -182,19 +187,55 @@ impl TapState {
     /// tells the session — keeping the ignore list honest without a per-keystroke
     /// workspace query. Separated from [`decide`](Self::decide) so the decision
     /// logic is a pure function of the event and session state, and testable.
+    /// Re-reads the frontmost application, for the health timer to call when the
+    /// user is not typing.
+    ///
+    /// Deliberately never called from the keystroke path: it is a synchronous
+    /// window-server round-trip, and blocking there is what makes macOS disable
+    /// the tap for timing out.
+    pub(super) fn refresh_frontmost_if_idle(&self) {
+        let Some(bundle_id) = frontmost_bundle_id() else {
+            return;
+        };
+        if self.last_bundle_id.borrow().as_deref() == Some(bundle_id.as_str()) {
+            return;
+        }
+        if let Ok(mut session) = self.session.try_borrow_mut() {
+            session.set_frontmost_app(bundle_id.clone());
+        }
+        *self.last_bundle_id.borrow_mut() = Some(bundle_id);
+    }
+
     fn refresh_frontmost_at_word_start(&self) {
+        // **Only on the very first keystroke.** After that the frontmost app
+        // comes from `NSWorkspaceDidActivateApplicationNotification`, which
+        // `menu_bar::install` observes and which calls `set_frontmost_app` for
+        // every switch.
+        //
+        // This used to ask NSWorkspace on every keystroke at a word start, and
+        // that is a synchronous round-trip to the window server **inside the tap
+        // callback**. When the window server is busy — an authentication sheet,
+        // loginwindow, the Accessibility pane being toggled — the call blocks,
+        // the callback does not return, and macOS disables the tap with
+        // `kCGEventTapDisabledByTimeout`. While that happens every keystroke in
+        // the system is waiting on us, which is a frozen Mac, not a missing
+        // diacritic.
+        //
+        // Read straight off a user's log: five timeouts in one run, bracketing
+        // `FRONTMOST -> com.apple.systempreferences` and
+        // `FRONTMOST -> com.apple.loginwindow`, while they revoked the
+        // Accessibility grant. Nothing may block on this thread.
+        if self.last_bundle_id.borrow().is_some() {
+            return;
+        }
         let Ok(mut session) = self.session.try_borrow_mut() else {
             return;
         };
-        if session.is_composing() {
-            return;
-        }
+        // The bootstrap: GlowKey can start while an app is already frontmost, so
+        // no activation notification is coming for it. One query, once.
         if let Some(bundle_id) = frontmost_bundle_id() {
-            let mut last = self.last_bundle_id.borrow_mut();
-            if last.as_deref() != Some(bundle_id.as_str()) {
-                session.set_frontmost_app(bundle_id.clone());
-                *last = Some(bundle_id);
-            }
+            session.set_frontmost_app(bundle_id.clone());
+            *self.last_bundle_id.borrow_mut() = Some(bundle_id);
         }
     }
     /// Cancels an in-progress hotkey recording (Esc, a mouse click, or an app
@@ -308,6 +349,7 @@ fn tap_dispatch(
         return event.as_ptr();
     }
 
+    ctx.state.last_key_at.set(Some(Instant::now()));
     if ctx.state.handle_key_down(event) {
         std::ptr::null_mut() // consumed: suppress the original event
     } else {

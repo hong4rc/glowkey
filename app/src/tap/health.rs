@@ -7,6 +7,7 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use objc2_core_foundation::{kCFRunLoopCommonModes, CFRunLoop};
 use objc2_core_graphics::{CGEvent, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement};
@@ -37,6 +38,11 @@ use super::{tap_callback, TapContext};
 /// cheaper than a single keystroke, which this same run loop already handles
 /// twenty times a second.
 const HEALTH_CHECK_SECONDS: f64 = 2.0;
+
+/// Skip the health check entirely if a keystroke arrived more recently than
+/// this. Typing proves the tap works, and asking the window server to confirm it
+/// costs a round-trip on the thread that must stay responsive.
+const HEALTH_SKIP_AFTER_KEYSTROKE: Duration = Duration::from_secs(3);
 
 /// Consecutive failed checks before the glyph changes. A tap disabled under load
 /// is usually re-enabled on the next tick, and a glyph that flickers is worse
@@ -228,6 +234,19 @@ extern "C-unwind" fn health_timer_callback(
 /// the system has already invalidated, and the app would sit there looking
 /// healthy and typing nothing.
 pub(super) fn check_tap_health(ctx: &TapContext, ctx_ptr: *mut c_void) {
+    // **A recent keystroke is proof the tap is alive**, so do not ask the system.
+    //
+    // `CGEventTapIsEnabled` is a round-trip to the window server, and this timer
+    // runs on the same run loop as the tap callback — so a slow answer here
+    // delays the callback, and a delayed callback is how macOS comes to disable
+    // the tap for timing out, which freezes input system-wide. The one thread
+    // that must never block should not be making periodic IPC calls for
+    // information that just arrived for free.
+    if let Some(at) = ctx.state.last_key_at.get() {
+        if at.elapsed() < HEALTH_SKIP_AFTER_KEYSTROKE {
+            return;
+        }
+    }
     let enabled = match ctx.port.try_borrow() {
         Ok(slot) => slot
             .as_ref()
@@ -238,6 +257,16 @@ pub(super) fn check_tap_health(ctx: &TapContext, ctx_ptr: *mut c_void) {
 
     if enabled {
         ctx.health_failures.set(0);
+        // While we are here and idle, re-check which application is in front.
+        //
+        // The authoritative source is
+        // `NSWorkspaceDidActivateApplicationNotification`, which `menu_bar`
+        // observes. This is the belt-and-braces that used to live in the tap
+        // callback, where it cost a blocking window-server round-trip on every
+        // keystroke; here it costs one on an idle timer instead. Same safety net
+        // for the per-app ignore list — a stale frontmost app means Vietnamese
+        // firing in a terminal — off the one thread that must never block.
+        ctx.state.refresh_frontmost_if_idle();
         if TAP_DEAD.swap(false, Ordering::Relaxed) {
             // Coming back from dead **must** flush. See `flush_after_gap`.
             flush_after_gap(ctx, "tap is working again");

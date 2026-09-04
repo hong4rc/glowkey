@@ -1,9 +1,13 @@
 //! The per-application ignore list — GlowKey's primary feature.
 //!
 //! An excluded application never transforms a keystroke, and the exclusion always
-//! wins over VN/EN mode and over any remembered per-app state. This module is pure
-//! logic keyed on bundle identifiers, so it is fully testable without macOS; the
-//! shell supplies the frontmost bundle identifier and persists the set.
+//! wins over VN/EN mode and over any remembered per-app state.
+//!
+//! The rules here are pure and know nothing about what an application identity
+//! *is*: macOS supplies a bundle identifier, Windows an executable file name.
+//! Only the shipped tables differ, and they live in
+//! [`crate::exclusion_defaults`]. The shell supplies the frontmost identity and
+//! persists the set.
 
 use std::collections::BTreeSet;
 
@@ -158,57 +162,49 @@ impl ExclusionList {
     }
 }
 
-/// Terminal applications. Synthetic backspaces cannot delete inside a PTY (the
-/// shell owns line editing), so Vietnamese in a terminal always produces garbage.
-/// Un-excluding one via the ⌃⇧E hotkey is therefore session-only — a deliberate,
-/// permanent removal must go through the Excluded Apps window.
-pub const TERMINAL_EXCLUSIONS: &[&str] = &[
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "dev.warp.Warp-Stable",
-    "dev.warp.Warp-Preview",
-    "net.kovidgoyal.kitty",
-    "com.github.wez.wezterm",
-    "com.mitchellh.ghostty",
-    "org.alacritty",
-    "co.zeit.hyper",
-];
+pub use crate::exclusion_defaults::{
+    CHROMIUM_APP_PREFIXES, DEFAULT_EXCLUSIONS, TERMINAL_EXCLUSIONS,
+};
 
-/// Whether this bundle identifier is a known terminal (see [`TERMINAL_EXCLUSIONS`]).
+/// Whether this application identity is a known terminal (see
+/// [`TERMINAL_EXCLUSIONS`]).
 #[must_use]
-pub fn is_terminal(bundle_id: &str) -> bool {
-    TERMINAL_EXCLUSIONS.contains(&bundle_id)
+pub fn is_terminal(app_id: &str) -> bool {
+    TERMINAL_EXCLUSIONS.contains(&app_id)
 }
 
-/// Applications excluded on first run — terminals and editors, where users
-/// overwhelmingly want raw ASCII.
-pub const DEFAULT_EXCLUSIONS: &[&str] = &[
-    "com.apple.Terminal",
-    "com.googlecode.iterm2",
-    "com.apple.dt.Xcode",
-    "com.microsoft.VSCode",
-    "com.jetbrains.intellij",
-    "com.jetbrains.pycharm",
-    "com.jetbrains.WebStorm",
-    "dev.warp.Warp-Stable",
-    "dev.warp.Warp-Preview",
-    "net.kovidgoyal.kitty",
-    "com.github.wez.wezterm",
-    "com.mitchellh.ghostty",
-    "org.alacritty",
-    "co.zeit.hyper",
-];
+/// Whether this application identity is a Chromium-family browser (see
+/// [`CHROMIUM_APP_PREFIXES`]).
+///
+/// A prefix match, because macOS ships channel-suffixed bundle identifiers —
+/// `com.google.Chrome.canary` is Chrome and must be guarded like Chrome.
+#[must_use]
+pub fn is_chromium_app(app_id: &str) -> bool {
+    CHROMIUM_APP_PREFIXES
+        .iter()
+        .any(|prefix| app_id.starts_with(prefix))
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A shipped default and a shipped terminal, whatever this platform's table
+    /// calls them. Written this way so the same tests hold on either side of the
+    /// macOS/Windows table split rather than quietly becoming macOS-only.
+    fn a_default() -> &'static str {
+        DEFAULT_EXCLUSIONS[0]
+    }
+    fn another_default() -> &'static str {
+        DEFAULT_EXCLUSIONS[1]
+    }
+
     #[test]
     fn excluded_apps_are_recognized() {
         let list = ExclusionList::with_defaults();
-        assert!(list.is_excluded("com.apple.Terminal"));
-        assert!(list.is_excluded("com.microsoft.VSCode"));
-        assert!(!list.is_excluded("com.tinyspeck.slackmacgap"));
+        assert!(list.is_excluded(a_default()));
+        assert!(list.is_excluded(another_default()));
+        assert!(!list.is_excluded("com.example.definitely-not-shipped"));
     }
 
     #[test]
@@ -225,13 +221,12 @@ mod tests {
     fn tombstone_survives_a_remove_add_pair() {
         // A deliberate removal must not be silently destroyed by a later
         // add/remove pair (e.g. two accidental ⌃⇧E presses).
+        let victim = another_default();
         let mut list = ExclusionList::with_defaults();
-        list.remove("com.googlecode.iterm2"); // deliberate, tombstoned
-        list.add("com.googlecode.iterm2"); // toggled back on
-        list.remove("com.googlecode.iterm2"); // and off again
-        assert!(list
-            .removed_default_ids()
-            .any(|id| id == "com.googlecode.iterm2"));
+        list.remove(victim); // deliberate, tombstoned
+        list.add(victim); // toggled back on
+        list.remove(victim); // and off again
+        assert!(list.removed_default_ids().any(|id| id == victim));
         // A fresh load must not resurrect it via the defaults merge.
         let reloaded = ExclusionList::from_saved(
             list.ids().map(String::from).collect::<Vec<_>>(),
@@ -239,7 +234,7 @@ mod tests {
                 .map(String::from)
                 .collect::<Vec<_>>(),
         );
-        assert!(!reloaded.is_excluded("com.googlecode.iterm2"));
+        assert!(!reloaded.is_excluded(victim));
     }
 
     #[test]
@@ -252,33 +247,32 @@ mod tests {
 
     #[test]
     fn from_saved_merges_new_defaults_into_old_files() {
-        // A settings file written before Ghostty was a default: loading must add it.
-        let list = ExclusionList::from_saved(
-            ["com.apple.Terminal", "com.example.custom"],
-            Vec::<String>::new(),
-        );
-        assert!(list.is_excluded("com.mitchellh.ghostty"));
+        // A settings file written before the last default was shipped: loading
+        // must add it, and must keep the user's own entry.
+        let list =
+            ExclusionList::from_saved([a_default(), "com.example.custom"], Vec::<String>::new());
+        assert!(list.is_excluded(DEFAULT_EXCLUSIONS[DEFAULT_EXCLUSIONS.len() - 1]));
         assert!(list.is_excluded("com.example.custom"));
     }
 
     #[test]
     fn from_saved_respects_tombstones() {
-        // The user deliberately removed VSCode; the merge must not resurrect it.
-        let list = ExclusionList::from_saved(["com.apple.Terminal"], ["com.microsoft.VSCode"]);
-        assert!(!list.is_excluded("com.microsoft.VSCode"));
-        assert!(list.is_excluded("com.apple.Terminal"));
+        // The user deliberately removed one; the merge must not resurrect it.
+        let list = ExclusionList::from_saved([a_default()], [another_default()]);
+        assert!(!list.is_excluded(another_default()));
+        assert!(list.is_excluded(a_default()));
     }
 
     #[test]
     fn removing_a_default_tombstones_it() {
         let mut list = ExclusionList::with_defaults();
-        assert!(list.remove("com.microsoft.VSCode"));
+        assert!(list.remove(another_default()));
         let tombstones: Vec<&str> = list.removed_default_ids().collect();
-        assert_eq!(tombstones, vec!["com.microsoft.VSCode"]);
+        assert_eq!(tombstones, vec![another_default()]);
         // Re-adding keeps the tombstone (the explicit entry wins over it anyway,
         // and it must survive an accidental remove/add pair).
-        list.add("com.microsoft.VSCode");
-        assert!(list.is_excluded("com.microsoft.VSCode"));
+        list.add(another_default());
+        assert!(list.is_excluded(another_default()));
         assert_eq!(list.removed_default_ids().count(), 1);
         // A non-default removal never tombstones.
         list.add("com.example.app");
@@ -288,29 +282,77 @@ mod tests {
 
     #[test]
     fn session_suspension_is_not_a_removal() {
+        let terminal = TERMINAL_EXCLUSIONS[0];
         let mut list = ExclusionList::with_defaults();
-        list.suspend_for_session("com.mitchellh.ghostty");
-        assert!(!list.is_excluded("com.mitchellh.ghostty"));
-        assert!(list.is_session_suspended("com.mitchellh.ghostty"));
+        list.suspend_for_session(terminal);
+        assert!(!list.is_excluded(terminal));
+        assert!(list.is_session_suspended(terminal));
         // The persisted ids still contain it — a restart re-excludes.
-        assert!(list.ids().any(|id| id == "com.mitchellh.ghostty"));
+        assert!(list.ids().any(|id| id == terminal));
         // Resuming re-excludes immediately.
-        assert!(list.resume("com.mitchellh.ghostty"));
-        assert!(list.is_excluded("com.mitchellh.ghostty"));
+        assert!(list.resume(terminal));
+        assert!(list.is_excluded(terminal));
     }
 
+    /// The invariant that makes the session-only terminal toggle safe: a hotkey
+    /// can only *suspend* a terminal's exclusion, and that check reads the
+    /// terminal table, so a terminal missing from the defaults would be
+    /// permanently un-excludable by accident.
     #[test]
-    fn terminals_are_classified() {
-        assert!(is_terminal("com.mitchellh.ghostty"));
-        assert!(is_terminal("com.apple.Terminal"));
-        assert!(!is_terminal("com.microsoft.VSCode")); // editor, not a terminal
-        assert!(!is_terminal("com.google.Chrome"));
-        // Every terminal is also a shipped default exclusion.
+    fn every_terminal_is_also_a_shipped_default() {
         for id in TERMINAL_EXCLUSIONS {
             assert!(
                 DEFAULT_EXCLUSIONS.contains(id),
                 "{id} missing from defaults"
             );
         }
+    }
+
+    #[test]
+    fn terminals_are_told_apart_from_editors() {
+        assert!(is_terminal(TERMINAL_EXCLUSIONS[0]));
+        assert!(!is_terminal("com.example.definitely-not-a-terminal"));
+        // Some shipped default is an editor rather than a terminal, or the
+        // session-only rule would apply to everything.
+        assert!(
+            DEFAULT_EXCLUSIONS.iter().any(|id| !is_terminal(id)),
+            "the defaults are all terminals — the editor entries went missing"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn the_macos_table_still_names_the_apps_existing_settings_files_do() {
+        // Bundle identifiers a shipped settings file already contains. Changing
+        // any of these silently un-excludes an app for every existing user.
+        for id in [
+            "com.apple.Terminal",
+            "com.googlecode.iterm2",
+            "com.apple.dt.Xcode",
+            "com.microsoft.VSCode",
+            "com.mitchellh.ghostty",
+        ] {
+            assert!(DEFAULT_EXCLUSIONS.contains(&id), "{id} left the defaults");
+        }
+        assert!(is_terminal("com.mitchellh.ghostty"));
+        assert!(!is_terminal("com.microsoft.VSCode")); // editor, not a terminal
+        assert!(is_chromium_app("com.google.Chrome"));
+        assert!(is_chromium_app("com.google.Chrome.canary"));
+        assert!(!is_chromium_app("com.apple.Safari"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_windows_table_is_lowercased_executable_names() {
+        // The identity Windows supplies is the executable file name, lowercased.
+        // An entry with a capital in it would never match anything.
+        for id in DEFAULT_EXCLUSIONS.iter().chain(CHROMIUM_APP_PREFIXES) {
+            assert_eq!(*id, id.to_ascii_lowercase(), "{id} is not lowercased");
+            assert!(id.ends_with(".exe"), "{id} is not an executable name");
+        }
+        assert!(is_terminal("windowsterminal.exe"));
+        assert!(!is_terminal("code.exe")); // editor, not a terminal
+        assert!(is_chromium_app("chrome.exe"));
+        assert!(!is_chromium_app("firefox.exe"));
     }
 }

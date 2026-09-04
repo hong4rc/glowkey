@@ -420,7 +420,7 @@ fn hotkey_recording_captures_a_custom_combo() {
             control: true,
             shift: false,
             option: true,
-            keycode: 40,
+            macos_keycode: Some(40),
             ..
         }
     ));

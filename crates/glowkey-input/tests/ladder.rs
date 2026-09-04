@@ -713,8 +713,9 @@ fn a_recorded_custom_hotkey_toggles_and_the_old_preset_stops() {
         control: true,
         shift: false,
         option: true,
-        keycode: 40,
         key_char: 'K',
+        macos_keycode: Some(40),
+        windows_vk: None,
     });
     tap.recorded_code = Some(40);
 

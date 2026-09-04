@@ -62,9 +62,14 @@ pub(super) fn is_toggle_hotkey(flags: CGEventFlags, keycode: i64, preset: Hotkey
             control,
             shift,
             option,
-            keycode,
+            macos_keycode,
             ..
-        } => (control, shift, option, keycode),
+        // A combination recorded on another platform has no macOS key code, and
+        // -1 is not one either, so it simply never matches here. That case cannot
+        // arise yet — no other platform writes a settings file — and Phase 3
+        // replaces this whole function with `glowkey_input`'s matcher, which falls
+        // back to the display character and says in the log that it did.
+        } => (control, shift, option, macos_keycode.unwrap_or(-1)),
     };
     if keycode != target {
         return false;

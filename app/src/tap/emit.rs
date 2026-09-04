@@ -21,26 +21,7 @@ use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventSource, CGEventTapLocati
 use super::keys::{KEY_CODE_DELETE, KEY_CODE_FORWARD_DELETE};
 use super::{debug_enabled, TapState, DISABLED, GLOWKEY_TAG, RUNAWAY_LIMIT, RUNAWAY_WINDOW};
 
-/// Chromium-family browsers, matched by bundle-id prefix. Their omnibox keeps an
-/// inline-autocomplete **trailing selection** after each keystroke, which a
-/// synthetic Backspace deletes instead of a character (`hoongf`→`hoồng`). The
-/// omnibox guard (see [`TapState::emit_edit`]) applies only in these apps.
-const CHROMIUM_BUNDLE_PREFIXES: &[&str] = &[
-    "com.google.Chrome",
-    "com.microsoft.edgemac",
-    "org.chromium.Chromium",
-    "com.brave.Browser",
-    "com.vivaldi.Vivaldi",
-    "com.operasoftware.Opera",
-    "company.thebrowser.Browser", // Arc
-];
-
-/// Whether `bundle_id` is a Chromium-family browser (see [`CHROMIUM_BUNDLE_PREFIXES`]).
-pub(super) fn is_chromium_browser(bundle_id: &str) -> bool {
-    CHROMIUM_BUNDLE_PREFIXES
-        .iter()
-        .any(|prefix| bundle_id.starts_with(prefix))
-}
+pub(super) use glowkey_engine::exclusion::is_chromium_app as is_chromium_browser;
 
 impl TapState {
     /// Records an emit and returns false if the rate indicates a runaway; latches

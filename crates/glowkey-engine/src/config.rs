@@ -252,13 +252,78 @@ mod tests {
                 control: true,
                 shift: false,
                 option: true,
-                keycode: 40,
                 key_char: 'K',
+                macos_keycode: Some(40),
+                windows_vk: None,
             },
             ..Settings::default()
         };
         let restored = Settings::from_json(&settings.to_json());
         assert_eq!(settings, restored);
+    }
+
+    /// A settings file written by the build that shipped before the port, with a
+    /// custom hotkey in it, captured verbatim and committed as a fixture.
+    ///
+    /// **If this fails, the schema change is wrong.** The fixture is evidence,
+    /// not an expectation to be updated: regenerating it would turn a silent
+    /// reinterpretation of somebody's hotkey into a green test, and a hotkey that
+    /// quietly starts doing something else is the worst outcome this whole change
+    /// can produce — worse than refusing to load, because nothing tells the user.
+    #[test]
+    fn a_pre_port_custom_hotkey_loads_as_the_key_it_was_recorded_on() {
+        let settings = Settings::from_json(include_str!(
+            "../tests/fixtures/settings-macos-custom-hotkey.json"
+        ));
+        assert_eq!(
+            settings.toggle_hotkey,
+            HotkeyPreset::Custom {
+                control: true,
+                shift: false,
+                option: true,
+                key_char: 'K',
+                // The old file's `keycode: 40`, read through the alias. Not a
+                // Windows key, and not a character match: the same physical key.
+                macos_keycode: Some(40),
+                windows_vk: None,
+            }
+        );
+        assert_eq!(settings.toggle_hotkey.macos_keycode(), Some(40));
+        assert_eq!(settings.toggle_hotkey.windows_vk(), None);
+        // Nothing else in the file may have shifted on the way through either.
+        assert_eq!(
+            Settings {
+                toggle_hotkey: HotkeyPreset::default(),
+                ..settings.clone()
+            },
+            Settings::default()
+        );
+    }
+
+    /// A real settings file lifted off a working installation. It has no custom
+    /// hotkey, which is the common case, and it exists to catch a schema change
+    /// that breaks every *ordinary* file while the interesting one still loads.
+    #[test]
+    fn a_real_settings_file_loads_field_for_field() {
+        let settings =
+            Settings::from_json(include_str!("../tests/fixtures/settings-real-macos.json"));
+        assert_eq!(settings.toggle_hotkey, HotkeyPreset::CtrlShiftSpace);
+        assert_eq!(settings.style, PlacementStyle::Old);
+        assert_eq!(settings.input_method, InputMethod::Telex);
+        assert!(settings.auto_fix);
+        assert!(settings.auto_capitalize);
+        assert!(settings.quick_telex);
+        assert!(settings.strict_spell_check);
+        assert!(settings.welcome_shown);
+        assert!(settings.open_settings_at_launch);
+        assert!(!settings.telex_brackets);
+        assert!(!settings.always_macro);
+        assert!(!settings.restore_english_words);
+        assert!(settings.removed_default_exclusions.is_empty());
+        // An entry the user added by hand, on top of the shipped defaults.
+        assert!(settings
+            .exclusion_list()
+            .is_excluded("com.apple.ActivityMonitor"));
     }
 
     #[test]

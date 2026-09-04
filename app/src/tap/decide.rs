@@ -431,8 +431,10 @@ impl TapState {
             control,
             shift,
             option,
-            keycode,
             key_char,
+            // Recorded here, so this is the platform whose key code we know.
+            macos_keycode: Some(keycode),
+            windows_vk: None,
         };
         let Ok(mut session) = self.session.try_borrow_mut() else {
             // Could not store the combo — stay armed rather than silently ending

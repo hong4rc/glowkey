@@ -56,7 +56,10 @@ fn build(mtm: MainThreadMarker) -> Retained<NSWindow> {
             defer: false,
         ]
     };
-    window.setTitle(&NSString::from_str(crate::strings::t("About GlowKey", "Giới thiệu GlowKey")));
+    window.setTitle(&NSString::from_str(crate::strings::t(
+        "About GlowKey",
+        "Giới thiệu GlowKey",
+    )));
     unsafe { window.setReleasedWhenClosed(false) };
 
     let stack = NSStackView::new(mtm);

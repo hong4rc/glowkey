@@ -12,8 +12,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSPasteboard, NSPasteboardTypeString, NSVariableStatusItemLength, NSWorkspace,
+    NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSPasteboard, NSPasteboardTypeString,
+    NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
 
@@ -231,9 +231,8 @@ impl MenuController {
         menu.removeAllItems();
         let mtm = MainThreadMarker::from(self);
 
-        let (app_name, bundle_id) =
-            crate::app_info::frontmost()
-                .unwrap_or_else(|| (t("this app", "ứng dụng này").to_string(), String::new()));
+        let (app_name, bundle_id) = crate::app_info::frontmost()
+            .unwrap_or_else(|| (t("this app", "ứng dụng này").to_string(), String::new()));
         let (mode, auto_fix, excluded) = self.state().menu_state(&bundle_id);
 
         // A dead tap is the only thing worth saying before anything else: every
@@ -261,7 +260,9 @@ impl MenuController {
         // Header: current state.
         let header = match (excluded, mode) {
             (true, _) => t("Excluded in {}", "Đã tắt trong {}").replace("{}", &app_name),
-            (false, glowkey_engine::InputMode::Vietnamese) => t("Vietnamese", "Tiếng Việt").to_string(),
+            (false, glowkey_engine::InputMode::Vietnamese) => {
+                t("Vietnamese", "Tiếng Việt").to_string()
+            }
             (false, glowkey_engine::InputMode::English) => t("English", "Tiếng Anh").to_string(),
         };
         self.add_disabled(menu, &header, mtm);

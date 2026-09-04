@@ -4,7 +4,7 @@ title: "Windows packaging and CI"
 status: pending
 priority: P2
 effort: "2d"
-dependencies: [6]
+dependencies: [0]
 ---
 
 # Phase 7: Windows packaging and CI
@@ -13,6 +13,20 @@ dependencies: [6]
 
 Make the Windows build reproducible in CI and installable by someone who is not the
 author.
+
+## The CI job does not wait for Phase 6
+
+This phase splits in two, and the halves have different dependencies:
+
+- **The `windows-latest` CI job depends on Phase 0 only.** The moment the engine's
+  tests pass on Windows, CI should be the thing that keeps them passing — the six
+  failures Phase 0 fixes were introduced by Phase 2 and went unnoticed precisely
+  because no job ran them on Windows. Land the job with Phase 0 or immediately after.
+  It starts by running the engine and input tests, and grows to build the app as
+  Phase 4 lands. Issue #1 lists it as unblocked work, and it is.
+- **Packaging and the release artifact depend on Phase 6.** Shipping a binary to
+  someone before a human has typed into real applications with it is the one thing
+  this plan's verification ceiling exists to prevent.
 
 ## Requirements
 
@@ -50,6 +64,10 @@ wants Add/Remove Programs integration.
 ## Implementation Steps
 
 1. Extend CI with the `windows-latest` job; make it run the full test suite there.
+   Do this first and do not hold it behind Phase 6 — see the split above. Mirror the
+   existing `engine` job's shape: `cargo fmt --check`, `cargo clippy --all-targets
+   -- -D warnings`, `cargo test -p glowkey-engine`, `cargo test -p glowkey-input`,
+   `cargo check -p glowkey`. Add `cargo build -p glowkey` once Phase 4 lands.
 2. Add the Linux-target `cargo check` job so Phases 8-10 cannot silently rot.
 3. `build-windows.ps1`: release build, version stamped from `app/Cargo.toml`, the
    commit stamped by the existing `build.rs`.
@@ -80,5 +98,8 @@ posture being true and checkable — local-only, no network, open source. Say it
 the README.
 
 **CI on `windows-latest` may pass while the app is unusable**, since it cannot type
-into applications. *Signal:* green CI, broken app. *Response:* CI's job is
-regression detection after Phase 6, never a substitute for it.
+into applications. *Signal:* green CI, broken app. *Response:* CI's job is regression
+detection, never a substitute for Phase 6. Landing the job early makes this risk
+easier to fall into, not harder — a green Windows badge is exactly the thing that
+tempts someone to skip the manual tier. The badge means the tests run, and the tests
+do not type.

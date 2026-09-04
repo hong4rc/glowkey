@@ -6,6 +6,9 @@ use glowkey_engine::{
     BoundaryBackspace, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
 };
 
+mod common;
+use common::{a_terminal_default, an_editor_default};
+
 fn session_with_excluded(bundle_id: &str) -> Session {
     let mut excl = ExclusionList::new();
     excl.add(bundle_id);
@@ -127,8 +130,8 @@ fn switching_into_excluded_app_stops_transformation_immediately() {
     session.set_frontmost_app("com.tinyspeck.slackmacgap");
     assert_eq!(type_through(&mut session, "hoongf "), "hồng ");
 
-    // Focus moves to Terminal (a default exclusion). The very next key is raw.
-    session.set_frontmost_app("com.apple.Terminal");
+    // Focus moves to a shipped default exclusion. The very next key is raw.
+    session.set_frontmost_app(a_terminal_default());
     assert_eq!(type_through(&mut session, "hoongf"), "hoongf");
 }
 
@@ -178,27 +181,27 @@ fn per_app_exclusion_is_independent() {
 #[test]
 fn terminal_hotkey_unexclusion_is_session_only() {
     // Un-excluding a known terminal via the toggle works for the session but is
-    // never persisted, so a restart re-excludes it (the accidental-⌃⇧E-in-Ghostty
-    // protection). A non-terminal default (an editor) still removes permanently.
+    // never persisted, so a restart re-excludes it (the accidental-⌃⇧E-in-a-
+    // terminal protection). A non-terminal default (an editor) still removes
+    // permanently.
+    let terminal = a_terminal_default();
+    let editor = an_editor_default();
     let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
-    session.set_frontmost_app("com.mitchellh.ghostty");
+    session.set_frontmost_app(terminal);
     assert!(!session.is_active());
 
     // Toggle: enabled, but session-only.
     assert_eq!(
-        session.toggle_app_exclusion("com.mitchellh.ghostty"),
+        session.toggle_app_exclusion(terminal),
         ExclusionToggle::EnabledSessionOnly
     );
     assert!(session.is_active(), "session-suspended terminal transforms");
     // The snapshot (what gets persisted) still excludes it.
     let saved = session.snapshot();
-    assert!(saved
-        .exclusions
-        .iter()
-        .any(|id| id == "com.mitchellh.ghostty"));
+    assert!(saved.exclusions.iter().any(|id| id == terminal));
     // And a fresh session from that snapshot excludes it again.
     let mut restarted = Session::from_settings(&saved);
-    restarted.set_frontmost_app("com.mitchellh.ghostty");
+    restarted.set_frontmost_app(terminal);
     assert!(
         !restarted.is_active(),
         "restart must re-exclude the terminal"
@@ -206,40 +209,45 @@ fn terminal_hotkey_unexclusion_is_session_only() {
 
     // Toggling again re-excludes immediately (lifts the suspension).
     assert_eq!(
-        session.toggle_app_exclusion("com.mitchellh.ghostty"),
+        session.toggle_app_exclusion(terminal),
         ExclusionToggle::Excluded
     );
     assert!(!session.is_active());
 
     // An editor default is removed permanently by the same toggle.
     assert_eq!(
-        session.toggle_app_exclusion("com.microsoft.VSCode"),
+        session.toggle_app_exclusion(editor),
         ExclusionToggle::Enabled
     );
     let saved = session.snapshot();
-    assert!(!saved
-        .exclusions
-        .iter()
-        .any(|id| id == "com.microsoft.VSCode"));
+    assert!(!saved.exclusions.iter().any(|id| id == editor));
     assert!(saved
         .removed_default_exclusions
         .iter()
-        .any(|id| id == "com.microsoft.VSCode"));
+        .any(|id| id == editor));
     // ...and the tombstone keeps it removed across a restart.
     let restarted = Session::from_settings(&saved);
-    assert!(!restarted.exclusions().is_excluded("com.microsoft.VSCode"));
+    assert!(!restarted.exclusions().is_excluded(editor));
 }
 
 #[test]
 fn permanent_terminal_removal_via_editor_still_works() {
     // The Excluded Apps window path (exclusions_mut().remove) is a deliberate,
     // permanent removal — even for a terminal — and tombstones it.
+    let terminal = a_terminal_default();
     let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
-    session.exclusions_mut().remove("com.apple.Terminal");
+    // Asserted, not assumed: every assertion below is satisfied by an identity
+    // that was never in the list, so without this the test passes vacuously —
+    // which is exactly what it did on Windows while naming a macOS terminal.
+    assert!(
+        session.exclusions().is_excluded(terminal),
+        "{terminal} must ship excluded for this test to mean anything"
+    );
+    assert!(session.exclusions_mut().remove(terminal));
     let saved = session.snapshot();
-    assert!(!saved.exclusions.iter().any(|id| id == "com.apple.Terminal"));
+    assert!(!saved.exclusions.iter().any(|id| id == terminal));
     let restarted = Session::from_settings(&saved);
-    assert!(!restarted.exclusions().is_excluded("com.apple.Terminal"));
+    assert!(!restarted.exclusions().is_excluded(terminal));
 }
 
 #[test]

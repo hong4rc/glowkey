@@ -290,10 +290,29 @@ mod tests {
         );
         assert_eq!(settings.toggle_hotkey.macos_keycode(), Some(40));
         assert_eq!(settings.toggle_hotkey.windows_vk(), None);
+
+        // The file's exclusions are macOS bundle identifiers, and they must load
+        // verbatim wherever the file is read. Naming them here is right — this is
+        // a claim about the fixture's own content, not about what this platform
+        // ships. The test used to compare the whole value against
+        // `Settings::default()`, which conflated the two and failed on Windows
+        // for the only correct reason: the shipped table there is executables.
+        assert!(
+            settings
+                .exclusions
+                .iter()
+                .any(|id| id == "com.apple.Terminal"),
+            "a macOS settings file must keep its own exclusions on any platform"
+        );
+
         // Nothing else in the file may have shifted on the way through either.
+        // Compared as a whole value so a field added later is covered without
+        // anyone remembering to add it here; only the two fields this test has
+        // already checked are excused.
         assert_eq!(
             Settings {
                 toggle_hotkey: HotkeyPreset::default(),
+                exclusions: default_exclusions(),
                 ..settings.clone()
             },
             Settings::default()
@@ -328,17 +347,39 @@ mod tests {
 
     #[test]
     fn exclusion_list_merges_defaults_and_respects_tombstones() {
-        // An old file: Ghostty missing from exclusions (it wasn't a default yet),
-        // VSCode deliberately removed. Loading must add Ghostty, not VSCode.
-        let s = Settings::from_json(
-            r#"{
-                "exclusions": ["com.apple.Terminal"],
-                "removed_default_exclusions": ["com.microsoft.VSCode"]
-            }"#,
+        // An old file: one default missing from `exclusions` (it wasn't a default
+        // when the file was written), another deliberately removed. Loading must
+        // add the first back and leave the second out — `saved ∪ (defaults −
+        // tombstones)`.
+        //
+        // Drawn from the shipped table rather than named, because the rule under
+        // test is the merge and the merge does not care what an application is
+        // called. Spelling macOS identities here is what broke this on Windows.
+        let defaults = crate::exclusion::DEFAULT_EXCLUSIONS;
+        let kept = defaults[0];
+        let missing = defaults[1];
+        let tombstoned = defaults[defaults.len() - 1];
+        assert_ne!(
+            missing, tombstoned,
+            "the table is too small for this test to distinguish its two cases"
         );
+
+        let s = Settings::from_json(&format!(
+            r#"{{
+                "exclusions": ["{kept}"],
+                "removed_default_exclusions": ["{tombstoned}"]
+            }}"#
+        ));
         let list = s.exclusion_list();
-        assert!(list.is_excluded("com.mitchellh.ghostty"));
-        assert!(!list.is_excluded("com.microsoft.VSCode"));
+        assert!(list.is_excluded(kept), "the user's own entry survives");
+        assert!(
+            list.is_excluded(missing),
+            "a default absent from the file is merged in"
+        );
+        assert!(
+            !list.is_excluded(tombstoned),
+            "a deliberately removed default is not resurrected"
+        );
     }
 
     #[test]
@@ -360,7 +401,24 @@ mod tests {
     fn defaults_match_shipped_behavior() {
         let s = Settings::default();
         assert!(s.auto_fix);
-        assert!(s.exclusions.iter().any(|id| id == "com.apple.Terminal"));
+        // The shipped table, not a spelling of it: the identities are per-target
+        // (bundle identifiers on macOS, executable names on Windows) and naming
+        // one here is what made this a macOS-only test.
+        //
+        // What is worth defending is the property, and it is that a fresh install
+        // protects terminals — the failure the ignore list exists to prevent is
+        // synthesized backspaces mangling a shell's line editing.
+        assert_eq!(s.exclusions, default_exclusions());
+        assert!(
+            !crate::exclusion::TERMINAL_EXCLUSIONS.is_empty(),
+            "this platform ships no terminals to protect"
+        );
+        for terminal in crate::exclusion::TERMINAL_EXCLUSIONS {
+            assert!(
+                s.exclusions.iter().any(|id| id == terminal),
+                "{terminal} is a known terminal but is not excluded on a fresh install"
+            );
+        }
     }
 
     #[test]

@@ -9,6 +9,9 @@ dependencies: [5]
 
 # Phase 6: Windows verification on real hardware
 
+Tracked by [issue #1](https://github.com/hong4rc/glowkey/issues/1), whose Tier 1 list
+is this phase's Tier 1 and whose gate is this phase's gate.
+
 ## Overview
 
 The phase that decides whether any of this works. Everything before it is a
@@ -49,7 +52,8 @@ shape of the existing macOS checklist.
 - [ ] **VS Code** — Electron; the macOS race showed up in exactly this class
 - [ ] **An Electron app** (Slack, Discord) — multiprocess renderer path
 - [ ] **Word / a native Win32 editor**
-- [ ] **An elevated window** (Task Manager) — must fail *visibly*, not silently
+- [ ] **An elevated window** (Task Manager) — must fail *visibly*, not silently, and
+      the tray menu must name the reason rather than showing a bare `⚠`
 
 ### Tier 3 — the blind model's edges
 
@@ -61,6 +65,12 @@ shape of the existing macOS checklist.
 - [ ] Excluded apps type plain keys
 - [ ] Timing: log the equivalent of `EMIT took=`; a maximum in the tens of
       milliseconds means something blocking got into the callback
+- [ ] A keyboard layout with **dead keys** (US-International, or a German layout):
+      typing `` ` `` then `e` still produces `è`. `ToUnicodeEx` corrupts dead-key state
+      when called naively, and this is the only place that shows up
+- [ ] **Idle cost with the settings window closed** — CPU and working set, recorded as
+      numbers. This is the check on Phase 5's `winit`+`egui` decision, and taking it
+      with the window open measures nothing
 
 ## Related Code Files
 
@@ -88,6 +98,11 @@ shape of the existing macOS checklist.
 - [ ] `plans/reports/windows-verification-<date>.md` exists with real observations
 - [ ] A written limitations list, including the elevated-window case
 - [ ] The Chrome address-bar question answered with evidence either way
+- [ ] The `egui` idle cost recorded, and the Phase 5 decision either confirmed or
+      reversed on that number — not left unmeasured
+- [ ] Every default Windows exclusion typed into and confirmed to be the right call.
+      This is the first point where anyone can judge the shipped table, and a wrongly
+      excluded application looks to a user exactly like GlowKey being broken
 
 ## Risk Assessment
 

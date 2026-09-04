@@ -4,6 +4,9 @@
 
 use glowkey_engine::{Macro, MacroConflict};
 
+mod common;
+use common::a_terminal_default;
+
 fn m(shortcut: &str, expansion: &str) -> Macro {
     Macro {
         shortcut: shortcut.into(),
@@ -212,10 +215,10 @@ fn always_macro_stays_out_of_excluded_apps() {
     s.add_macro("vn", "Việt Nam");
     s.set_always_macro(true);
     s.toggle_mode();
-    s.set_frontmost_app("com.apple.Terminal");
+    s.set_frontmost_app(a_terminal_default());
     assert!(
         !s.macros_active(),
-        "Terminal is a shipped default exclusion"
+        "a shipped terminal default must not expand macros"
     );
     // The same session in an ordinary app does expand.
     s.set_frontmost_app("com.apple.TextEdit");

@@ -236,6 +236,40 @@ window server supplied by the System Settings sheet itself.
       but the maximum 22.4 ms. Record the numbers — §7 of the handoff carries
       them as the baseline.
 
+## 9c. The UI pass of 2026-09-04
+
+All of this is AppKit that no test can reach, and several items are new structure
+(a main menu, scroll views, layout constraints) rather than new text — so this
+section is where a regression would show up first.
+
+- [ ] **Paste works.** Open Settings → Apps & macros → Macros…, copy `Việt Nam`
+      from anywhere, and press ⌘V in the expansion field. Also ⌘C, ⌘X, ⌘A and ⌘Z.
+      None of these worked before the main menu existed; this is the check that
+      matters most.
+- [ ] ⌘W closes the focused GlowKey window; ⌘, opens Settings while a GlowKey
+      window is focused; ⌘Q quits.
+- [ ] **Nothing is cut off.** Excluded Apps with the shipped defaults: every row
+      reachable by scrolling, and the window resizes. Same for Macros after
+      importing a large table, and for Personal Words.
+- [ ] **The excluded list reads like apps.** Real icons, names as Finder shows
+      them ("Visual Studio Code", not "VSCode"), sorted by name. Exclude an app,
+      delete it from /Applications, reopen: it stays, greyed, marked "(not
+      installed)".
+- [ ] **The glyph has three states.** `VI` in TextEdit; **dimmed** `VI` in a
+      terminal (excluded); `EN` after ⌃⇧Space. Confirm the excluded and English
+      states are visibly different — they were identical before.
+- [ ] **The shortcut shown is the one that works.** Settings → General, change the
+      toggle hotkey; the menu-bar menu's "Vietnamese input (…)" row and the menu's
+      Quick Guide… must both name the new combo, not ⌃⇧Space.
+- [ ] **Macros ask before overwriting.** Add `vn` twice with different expansions:
+      the second offers Replace / Cancel. Import a file containing a shortcut you
+      already have: it offers Keep Existing / Replace / Cancel once for the file,
+      and the counts afterwards match what you chose.
+- [ ] **About names the build.** Version reads `0.1.0 (<commit>)`, with a trailing
+      `+` if you built from a dirty tree, and the line can be selected and copied.
+- [ ] Switch the interface language to Vietnamese with Personal Words open: it
+      must come back in Vietnamese. It was the one window the rebuild forgot.
+
 ## 10. Permission gate, on a fresh grant
 
 - [ ] Copy the app to a new location (or rebuild after a code change if you have
@@ -252,6 +286,6 @@ window server supplied by the System Settings sheet itself.
 ## Recording results
 
 Note the date, the commit, and anything that failed, directly in the pull request
-or commit message that prompted the run. Sections 7 step 4, 8, 9 and 9b produce
+or commit message that prompted the run. Sections 7 step 4, 8, 9, 9b and 9c produce
 **numbers and facts that belong in `docs/handoff.md`** — they are the open items
 that no headless test can ever close.

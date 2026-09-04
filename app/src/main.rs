@@ -21,6 +21,8 @@ mod hud;
 mod log;
 #[cfg(target_os = "macos")]
 mod login_item;
+/// The invisible application menu that makes ⌘X/⌘C/⌘V and ⌘W work.
+mod main_menu;
 #[cfg(target_os = "macos")]
 mod menu_bar;
 #[cfg(target_os = "macos")]

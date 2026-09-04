@@ -2,7 +2,7 @@
 //! in Unikey or EVKey can be imported as-is, with a JSON fallback for tables the
 //! line format cannot carry.
 
-use glowkey_engine::Macro;
+use glowkey_engine::{Macro, MacroConflict};
 
 fn m(shortcut: &str, expansion: &str) -> Macro {
     Macro {
@@ -93,11 +93,14 @@ fn import_never_overwrites_an_existing_shortcut() {
     // on its return value silently destroyed the user's own macros and reported
     // them as added.
     let mut s = session_with_two();
-    let (added, skipped) = s.import_macros(&[
-        m("vn", "SOMETHING ELSE"),
-        m("zz", "new one"),
-        m("HN", "case-insensitive collision"),
-    ]);
+    let (added, skipped) = s.import_macros(
+        &[
+            m("vn", "SOMETHING ELSE"),
+            m("zz", "new one"),
+            m("HN", "case-insensitive collision"),
+        ],
+        MacroConflict::Skip,
+    );
     assert_eq!((added, skipped), (1, 2));
     let kept: Vec<_> = s
         .macros()
@@ -113,7 +116,10 @@ fn import_never_overwrites_an_existing_shortcut() {
 #[test]
 fn import_counts_a_duplicate_inside_the_file_as_skipped() {
     let mut s = session_with_two();
-    assert_eq!(s.import_macros(&[m("aa", "first"), m("aa", "second")]), (1, 1));
+    assert_eq!(
+        s.import_macros(&[m("aa", "first"), m("aa", "second")], MacroConflict::Skip),
+        (1, 1)
+    );
     assert_eq!(
         s.macros().iter().find(|x| x.shortcut == "aa").unwrap().expansion,
         "first"
@@ -123,7 +129,7 @@ fn import_counts_a_duplicate_inside_the_file_as_skipped() {
 #[test]
 fn importing_nothing_changes_nothing() {
     let mut s = session_with_two();
-    assert_eq!(s.import_macros(&[]), (0, 0));
+    assert_eq!(s.import_macros(&[], MacroConflict::Skip), (0, 0));
     assert_eq!(s.macros().len(), 2);
 }
 
@@ -212,4 +218,84 @@ fn always_macro_does_nothing_without_macros() {
     s.toggle_mode();
     s.set_frontmost_app("com.apple.TextEdit");
     assert!(!s.macros_active(), "no macros means the path stays off");
+}
+
+/// Importing with `Replace` overwrites, which is the other half of asking the
+/// user: the question is only honest if both answers are available.
+#[test]
+fn import_can_replace_when_the_user_asks_for_it() {
+    let mut s = session_with_two();
+    let (added, skipped) = s.import_macros(
+        &[
+            m("vn", "SOMETHING ELSE"),
+            m("zz", "new one"),
+            m("HN", "case-insensitive collision"),
+        ],
+        MacroConflict::Replace,
+    );
+    assert_eq!((added, skipped), (3, 0), "every row lands");
+    let kept: Vec<_> = s
+        .macros()
+        .iter()
+        .map(|x| (x.shortcut.as_str(), x.expansion.as_str()))
+        .collect();
+    assert!(kept.contains(&("vn", "SOMETHING ELSE")), "replaced");
+    assert!(
+        kept.contains(&("HN", "case-insensitive collision")),
+        "replaced across a case difference"
+    );
+    assert!(kept.contains(&("zz", "new one")));
+    assert_eq!(kept.len(), 3, "replacing must not also duplicate");
+}
+
+/// A repeat *inside the file* is still one macro, whichever answer was given.
+/// Otherwise "Replace" would let a malformed file inflate the added count.
+#[test]
+fn replacing_still_collapses_a_duplicate_inside_the_file() {
+    let mut s = session_with_two();
+    assert_eq!(
+        s.import_macros(
+            &[m("aa", "first"), m("aa", "second")],
+            MacroConflict::Replace
+        ),
+        (1, 1)
+    );
+    assert_eq!(
+        s.macros()
+            .iter()
+            .find(|x| x.shortcut == "aa")
+            .unwrap()
+            .expansion,
+        "first"
+    );
+}
+
+/// The count the window shows before it asks. Counted without writing anything,
+/// so the question can be put once for the whole file.
+#[test]
+fn conflicts_are_counted_before_anything_is_written() {
+    let s = session_with_two();
+    let imported = [
+        m("vn", "collides"),
+        m("HN", "collides, case-insensitively"),
+        m("zz", "new"),
+        m("zz", "repeated inside the file"),
+        m("vn", "the same collision, listed twice"),
+        m("  ", "blank shortcuts are rejected, not conflicting"),
+    ];
+    // Two: `vn` and `hn`. A repeat inside the file is not a conflict — it
+    // collapses whatever the user answers — and `vn` listed twice is still one
+    // decision, because a person reads this number.
+    assert_eq!(s.macro_conflicts(&imported), 2);
+    assert_eq!(s.macros().len(), 2, "counting must not modify the table");
+}
+
+/// What the Add button asks before it overwrites.
+#[test]
+fn an_existing_shortcut_is_reported_case_insensitively() {
+    let s = session_with_two();
+    assert!(s.has_macro("vn"));
+    assert!(s.has_macro("VN"), "matching is case-insensitive");
+    assert!(s.has_macro("  vn  "), "the field's whitespace is not a shortcut");
+    assert!(!s.has_macro("zz"));
 }

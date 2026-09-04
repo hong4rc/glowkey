@@ -8,8 +8,8 @@
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSColor, NSFont, NSStackView, NSTextAlignment, NSTextField, NSUserInterfaceLayoutOrientation,
-    NSView,
+    NSColor, NSFont, NSScrollView, NSStackView, NSTextAlignment, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSString};
 
@@ -20,7 +20,12 @@ use super::PrefsController;
 pub(super) const LABEL_COLUMN_WIDTH: f64 = 92.0;
 
 /// A human-readable rendering of a toggle-hotkey preset ("⌃⇧Space", "⌃⌥K").
-pub(super) fn hotkey_display(preset: HotkeyPreset) -> String {
+///
+/// Crate-visible because the menu bar and the Quick Guide name this shortcut too,
+/// and both used to spell it out as a literal `⌃⇧Space` — which stopped being
+/// true the moment the hotkey became configurable. One renderer means the three
+/// places that show it cannot disagree.
+pub(crate) fn hotkey_display(preset: HotkeyPreset) -> String {
     match preset {
         HotkeyPreset::CtrlShiftSpace => "⌃⇧Space".to_string(),
         HotkeyPreset::CtrlSpace => "⌃Space".to_string(),
@@ -51,18 +56,6 @@ pub(super) fn hotkey_display(preset: HotkeyPreset) -> String {
             out
         }
     }
-}
-
-/// A readable name for a bundle id: the last dotted component, title-cased, since
-/// GlowKey does not persist display names — only bundle ids — in settings.
-pub(super) fn display_name(bundle_id: &str) -> String {
-    let leaf = bundle_id.rsplit('.').next().unwrap_or(bundle_id);
-    if leaf.is_empty() {
-        return bundle_id.to_string();
-    }
-    let mut chars = leaf.chars();
-    let first = chars.next().unwrap();
-    format!("{}{}", first.to_uppercase(), chars.as_str())
 }
 
 impl PrefsController {
@@ -120,5 +113,53 @@ impl PrefsController {
         row.addArrangedSubview(&label);
         row.addArrangedSubview(control);
         row
+    }
+
+    /// Puts a growing list inside a scroll view, so content past the bottom of the
+    /// window can still be reached.
+    ///
+    /// The three list windows — excluded apps, macros, personal words — each put a
+    /// bare `NSStackView` straight into a fixed-size window. Rows past the bottom
+    /// edge were simply not reachable: the fourteen shipped exclusions overflow a
+    /// 380pt window on a clean install, so the app's headline feature was cut off
+    /// out of the box, and an import that reported "214 macros" showed about
+    /// thirteen.
+    ///
+    /// The document view is pinned to the clip view's **width** and left free in
+    /// height — that pairing is what makes a stack view scroll vertically instead
+    /// of collapsing to nothing or scrolling in both directions.
+    pub(super) fn scrollable(
+        &self,
+        list: &NSStackView,
+        min_height: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSScrollView> {
+        let scroll = NSScrollView::new(mtm);
+        scroll.setHasVerticalScroller(true);
+        scroll.setHasHorizontalScroller(false);
+        // The window's own background shows through, so the list does not read as
+        // a sunken well the way a table would. These are lists of rows, not data
+        // to be edited in place.
+        scroll.setDrawsBackground(false);
+        scroll.setDocumentView(Some(list));
+        list.setTranslatesAutoresizingMaskIntoConstraints(false);
+
+        let clip = scroll.contentView();
+        list.leadingAnchor()
+            .constraintEqualToAnchor(&clip.leadingAnchor())
+            .setActive(true);
+        list.trailingAnchor()
+            .constraintEqualToAnchor(&clip.trailingAnchor())
+            .setActive(true);
+        list.topAnchor()
+            .constraintEqualToAnchor(&clip.topAnchor())
+            .setActive(true);
+        // Height deliberately unconstrained: the stack grows with its rows and the
+        // scroll view pages through whatever exceeds the window.
+        scroll
+            .heightAnchor()
+            .constraintGreaterThanOrEqualToConstant(min_height)
+            .setActive(true);
+        scroll
     }
 }

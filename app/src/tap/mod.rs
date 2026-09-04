@@ -173,6 +173,21 @@ impl TapState {
             .map(|s| s.is_active())
             .unwrap_or(false)
     }
+
+    /// Whether Vietnamese is switched on *as a mode*, regardless of whether the
+    /// app in front is excluded.
+    ///
+    /// [`is_active`](Self::is_active) collapses the two, which is right for
+    /// deciding whether to transform a key and wrong for the indicator: the glyph
+    /// said `EN` both when the user had turned Vietnamese off and when the app in
+    /// front was on the ignore list. Those are the two things a user most needs to
+    /// tell apart, and the ignore list is the feature this app exists for.
+    pub fn mode_is_vietnamese(&self) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.mode() == glowkey_engine::InputMode::Vietnamese)
+            .unwrap_or(false)
+    }
     /// Flushes the in-progress word — the engine's edits assume the composing word
     /// is still the document tail, so this must run when the caret may have moved
     /// (a mouse click). A click also cancels an armed hotkey recording: the user
@@ -420,12 +435,18 @@ pub fn run() {
     if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
         let state_ptr: *const TapState = unsafe { &(*ctx).state };
         let (item, controller) = crate::menu_bar::install(unsafe { &*state_ptr }, mtm);
+        // The main menu is never drawn — GlowKey is an agent — but Cocoa routes
+        // every ⌘-key equivalent through it before the responder chain, so
+        // without one there is no Copy or Paste in any of GlowKey's own text
+        // fields. Installed after the status item because its App submenu targets
+        // that controller.
+        crate::main_menu::install(&controller, mtm);
         std::mem::forget(item);
         std::mem::forget(controller);
         // After the menu bar exists, so the glyph the welcome talks about is
         // already on screen for the user to look at while reading about it.
         if show_welcome {
-            crate::welcome::show(mtm);
+            crate::welcome::show(unsafe { (*ctx).state.toggle_hotkey() }, mtm);
             if let Ok(mut session) = unsafe { (*ctx).state.session.try_borrow_mut() } {
                 session.set_welcome_shown(true);
             }

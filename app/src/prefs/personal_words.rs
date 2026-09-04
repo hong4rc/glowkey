@@ -36,7 +36,11 @@ impl PrefsController {
         let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 400.0));
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
-            | NSWindowStyleMask::Miniaturizable;
+            | NSWindowStyleMask::Miniaturizable
+            // Resizable because these windows hold lists of unknown length.
+            // Every one of them was fixed-size, which turned "too many rows"
+            // into "rows you cannot see".
+            | NSWindowStyleMask::Resizable;
         let window: Retained<NSWindow> = unsafe {
             let alloc = NSWindow::alloc(mtm);
             msg_send![
@@ -112,7 +116,10 @@ impl PrefsController {
         unsafe {
             let _: () = msg_send![&list, setAlignment: 5isize];
         }
-        root.addArrangedSubview(&list);
+        // Scrolled, not placed bare: the list grows by one every time ⌃⇧W is pressed,
+        // and rows past the window's bottom edge were unreachable.
+        let scroll = self.scrollable(&list, 200.0, mtm);
+        root.addArrangedSubview(&scroll);
         *self.ivars().words_list.borrow_mut() = Some(list);
 
         window.setContentView(Some(&root));

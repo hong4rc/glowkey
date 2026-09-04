@@ -145,7 +145,7 @@ define_class!(
             // it is what makes dismissing the welcome a safe action rather than a
             // one-way door.
             let mtm = MainThreadMarker::from(self);
-            crate::welcome::show(mtm);
+            crate::welcome::show(self.state().toggle_hotkey(), mtm);
         }
 
         #[unsafe(method(aboutGlowKey:))]
@@ -198,9 +198,18 @@ impl MenuController {
         // Accessibility permission was revoked, which made the one indicator the
         // app has assert that Vietnamese was on while no keystroke was reaching
         // the engine at all.
-        let title = if crate::tap::tap_is_dead() {
+        //
+        // Three states, not two. `EN` used to mean both "you turned Vietnamese
+        // off" and "this app is on the ignore list", which collapses the one
+        // question the indicator exists to answer — and the ignore list is the
+        // feature the app is for. `ui-design.md` specified a dimmed glyph for the
+        // excluded case from the start; it was never built.
+        let dead = crate::tap::tap_is_dead();
+        let vietnamese = self.state().mode_is_vietnamese();
+        let suspended = vietnamese && !self.state().is_active();
+        let title = if dead {
             "⚠"
-        } else if self.state().is_active() {
+        } else if vietnamese {
             "VI"
         } else {
             "EN"
@@ -209,6 +218,10 @@ impl MenuController {
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             if let Some(button) = item.button(mtm) {
                 button.setTitle(&NSString::from_str(title));
+                // Dimmed means "Vietnamese is your mode, but not in this app".
+                // Alpha rather than a colour so it stays legible against whatever
+                // the menu bar is sitting on, light, dark or a wallpaper.
+                button.setAlphaValue(if suspended { 0.45 } else { 1.0 });
             }
         }
     }
@@ -264,18 +277,18 @@ impl MenuController {
 
         self.add_separator(menu, mtm);
 
-        // VN/EN mode toggle. The ⌃⇧Space shortcut is handled by the tap, not the
-        // menu (GlowKey is a background agent), so it is shown as title text for
+        // VN/EN mode toggle. The shortcut is handled by the tap, not the menu
+        // (GlowKey is a background agent), so it is shown as title text for
         // discoverability rather than a real menu key equivalent.
+        //
+        // Read from the session rather than written out: the hotkey is
+        // configurable — four presets plus a recorded custom combo — and this line
+        // used to say `⌃⇧Space` whatever the user had chosen. The menu rebuilds on
+        // every open, so it was a fresh lie each time.
         let mode_on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
-        self.add_item(
-            menu,
-            t("Vietnamese input (⌃⇧Space)", "Gõ tiếng Việt (⌃⇧Space)"),
-            sel!(toggleMode:),
-            mode_on,
-            "",
-            mtm,
-        );
+        let shortcut = crate::prefs::hotkey_display(self.state().toggle_hotkey());
+        let mode_label = t("Vietnamese input ({})", "Gõ tiếng Việt ({})").replace("{}", &shortcut);
+        self.add_item(menu, &mode_label, sel!(toggleMode:), mode_on, "", mtm);
 
         // Auto-fix toggle.
         self.add_item(

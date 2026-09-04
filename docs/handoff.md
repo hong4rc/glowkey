@@ -77,8 +77,14 @@ Cargo workspace:
   because a single column had grown past 800 points — each tab builds its own
   stack via `tab_stack`, and the tab title carries the grouping that section
   headers used to.
-- `about_window.rs`, `welcome.rs` (the one-time guide, §6.7), `hud.rs` (toggle
-  flash), `login_item.rs` (SMAppService),
+- `main_menu.rs` — the application main menu. Never drawn (GlowKey is
+  `LSUIElement`), installed because Cocoa routes every ⌘-key equivalent through
+  `NSApp.mainMenu` before the responder chain: without it there is no Copy/Paste
+  in GlowKey's own text fields and ⌘W closes nothing. See `ui-design.md` §1b.
+- `about_window.rs` (name, version **and commit** — `build.rs` stamps
+  `GLOWKEY_COMMIT`, with a trailing `+` for a dirty tree; the line is selectable so
+  it can be pasted into a bug report), `welcome.rs` (the one-time guide, §6.7),
+  `hud.rs` (toggle flash), `login_item.rs` (SMAppService),
   `app_info.rs` (frontmost app — queried **once** at the first keystroke and then
   only from the idle timer; every switch after that arrives as
   `NSWorkspaceDidActivateApplicationNotification`, which `menu_bar` observes),
@@ -462,7 +468,15 @@ Cargo workspace:
 
 ## 7. Diagnosing from the log (do this first for any reported typing bug)
 
-`~/Library/Logs/GlowKey/glowkey.log` records every handled key:
+`~/Library/Logs/GlowKey/glowkey.log` records every handled key. It **rotates** at
+5 MB, keeping one previous generation as `glowkey.log.1`, so the pair is bounded at
+10 MB however long the agent runs. The size is counted in memory rather than
+`stat`ed, because the write happens on the tap callback and that thread may not
+make a call that can wait (§5). Before 2026-09-04 the cap was checked once, when
+the process opened the file, so a single long run grew without bound — which for a
+background agent that runs for days was most runs.
+
+The format:
 ```
 #42 +3.4s KEY Some('o') code=41 app=com.mitchellh.ghostty mode=Vietnamese active=true | Emit bs=1 ins="ô" | raw="hoo" rendered="hô"
 #43 +3.4s EMIT took=180µs
@@ -509,7 +523,7 @@ reading it needs a granted build and someone typing in Chrome.
 ## 8. Build / test / run
 
 ```bash
-cargo test --workspace         # 187 tests, all green; the headless proof
+cargo test --workspace         # 194 tests, all green; the headless proof
 cargo clippy --workspace --all-targets   # must be 0 warnings
 cargo bench -p glowkey-engine  # keystroke latency numbers (criterion)
 bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch

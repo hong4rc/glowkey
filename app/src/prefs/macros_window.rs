@@ -25,7 +25,11 @@ impl PrefsController {
         let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 400.0));
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
-            | NSWindowStyleMask::Miniaturizable;
+            | NSWindowStyleMask::Miniaturizable
+            // Resizable because these windows hold lists of unknown length.
+            // Every one of them was fixed-size, which turned "too many rows"
+            // into "rows you cannot see".
+            | NSWindowStyleMask::Resizable;
         let window: Retained<NSWindow> = unsafe {
             let alloc = NSWindow::alloc(mtm);
             msg_send![
@@ -112,7 +116,10 @@ impl PrefsController {
         unsafe {
             let _: () = msg_send![&list, setAlignment: 5isize];
         }
-        root.addArrangedSubview(&list);
+        // Scrolled, not placed bare: an imported UniKey table is hundreds of rows,
+        // and rows past the window's bottom edge were unreachable.
+        let scroll = self.scrollable(&list, 200.0, mtm);
+        root.addArrangedSubview(&scroll);
         *self.ivars().macros_list.borrow_mut() = Some(list);
 
         window.setContentView(Some(&root));
@@ -257,7 +264,42 @@ pub(super) fn import_macros(controller: &PrefsController) {
         );
         return;
     }
-    let Some((added, skipped)) = controller.state().import_macros_and_save(&imported) else {
+    // Ask once for the whole file rather than row by row, and only when there is
+    // something to ask about. Import used to skip every conflict silently and
+    // report a count afterwards, which told the user their file had been partly
+    // ignored only once it was too late to choose otherwise.
+    let conflicts = controller.state().macro_conflicts(&imported);
+    let on_conflict = if conflicts == 0 {
+        glowkey_engine::MacroConflict::Skip
+    } else {
+        let choice = controller.ask(
+            &t(
+                "{} of these shortcuts already exist.",
+                "{} chữ viết tắt trong số này đã có.",
+            )
+            .replace("{}", &conflicts.to_string()),
+            t(
+                "Replace them with the imported versions, or keep what you have?",
+                "Thay thế bằng bản vừa nhập, hay giữ nguyên bản hiện có?",
+            ),
+            &[
+                t("Keep Existing", "Giữ bản hiện có"),
+                t("Replace", "Thay thế"),
+                t("Cancel", "Huỷ"),
+            ],
+            mtm,
+        );
+        match choice {
+            0 => glowkey_engine::MacroConflict::Skip,
+            1 => glowkey_engine::MacroConflict::Replace,
+            _ => return,
+        }
+    };
+
+    let Some((added, skipped)) = controller
+        .state()
+        .import_macros_and_save(&imported, on_conflict)
+    else {
         controller.notify(
             t("Could not import right now.", "Chưa nhập được lúc này."),
             t("Try again in a moment.", "Thử lại sau một lát."),
@@ -269,11 +311,7 @@ pub(super) fn import_macros(controller: &PrefsController) {
     let detail = if skipped == 0 {
         String::new()
     } else {
-        t(
-            "{} skipped — those shortcuts already exist.",
-            "Bỏ qua {} — các chữ viết tắt đó đã có.",
-        )
-        .replace("{}", &skipped.to_string())
+        t("{} kept as they were.", "Giữ nguyên {} mục.").replace("{}", &skipped.to_string())
     };
     controller.notify(
         &t("Imported {} macros.", "Đã nhập {} gõ tắt.").replace("{}", &added.to_string()),

@@ -16,6 +16,8 @@
 use objc2_app_kit::{NSAlert, NSApplication};
 use objc2_foundation::{MainThreadMarker, NSString};
 
+use glowkey_engine::HotkeyPreset;
+
 use crate::strings::t;
 
 /// Shows the welcome alert, modally, and returns when the user dismisses it.
@@ -43,7 +45,7 @@ use crate::strings::t;
 ///
 /// Calling `finishLaunching` twice is harmless — AppKit ignores the second — so
 /// the gate's own call does not make this one redundant.
-pub fn show(mtm: MainThreadMarker) {
+pub fn show(toggle_hotkey: HotkeyPreset, mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     app.finishLaunching();
     app.activate();
@@ -53,22 +55,34 @@ pub fn show(mtm: MainThreadMarker) {
         "GlowKey is running",
         "GlowKey đang chạy",
     )));
-    alert.setInformativeText(&NSString::from_str(t(
-        "Type Vietnamese anywhere — hoongf becomes hồng, and the tone key can go \
-         anywhere in the word.\n\n\
-         ⌃⇧Space  turn Vietnamese on and off\n\
-         ⌃⇧E      turn it off for just the app you are in\n\n\
-         Terminals and code editors are excluded already, on purpose: synthetic \
-         backspaces mangle text in a terminal. The menu-bar glyph shows VI or EN \
-         for the app in front, and everything else lives in its menu.",
-        "Gõ tiếng Việt ở mọi nơi — hoongf thành hồng, và dấu có thể đặt ở bất kỳ \
-         đâu trong từ.\n\n\
-         ⌃⇧Space  bật/tắt tiếng Việt\n\
-         ⌃⇧E      tắt riêng cho ứng dụng đang dùng\n\n\
-         Terminal và trình soạn thảo mã đã được loại trừ sẵn, có chủ đích: phím \
-         xoá giả lập làm hỏng văn bản trong terminal. Biểu tượng trên thanh menu \
-         hiện VI hoặc EN cho ứng dụng đang ở trước, phần còn lại nằm trong menu đó.",
-    )));
+    // The toggle shortcut is substituted, not written out: it is configurable, and
+    // the Quick Guide reopens from the menu long after the user has changed it.
+    // The per-app shortcut ⌃⇧E is fixed, so it stays a literal.
+    //
+    // Separated by an em dash rather than padded into columns. The old text lined
+    // the two up with runs of spaces, which never aligned — an NSAlert draws in a
+    // proportional font — and a substituted shortcut of a different width would
+    // have made the attempt visibly worse.
+    let shortcut = crate::prefs::hotkey_display(toggle_hotkey);
+    alert.setInformativeText(&NSString::from_str(
+        &t(
+            "Type Vietnamese anywhere — hoongf becomes hồng, and the tone key can go \
+             anywhere in the word.\n\n\
+             {} — turn Vietnamese on and off\n\
+             ⌃⇧E — turn it off for just the app you are in\n\n\
+             Terminals and code editors are excluded already, on purpose: synthetic \
+             backspaces mangle text in a terminal. The menu-bar glyph shows VI or EN \
+             for the app in front, and everything else lives in its menu.",
+            "Gõ tiếng Việt ở mọi nơi — hoongf thành hồng, và dấu có thể đặt ở bất kỳ \
+             đâu trong từ.\n\n\
+             {} — bật/tắt tiếng Việt\n\
+             ⌃⇧E — tắt riêng cho ứng dụng đang dùng\n\n\
+             Terminal và trình soạn thảo mã đã được loại trừ sẵn, có chủ đích: phím \
+             xoá giả lập làm hỏng văn bản trong terminal. Biểu tượng trên thanh menu \
+             hiện VI hoặc EN cho ứng dụng đang ở trước, phần còn lại nằm trong menu đó.",
+        )
+        .replace("{}", &shortcut),
+    ));
     alert.addButtonWithTitle(&NSString::from_str(t("Got it", "Đã hiểu")));
     alert.runModal();
 }

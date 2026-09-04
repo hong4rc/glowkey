@@ -278,10 +278,32 @@ impl TapState {
     pub fn import_macros_and_save(
         &self,
         imported: &[glowkey_engine::Macro],
+        on_conflict: glowkey_engine::MacroConflict,
     ) -> Option<(usize, usize)> {
-        let counts = self.session.try_borrow_mut().ok()?.import_macros(imported);
+        let counts = self
+            .session
+            .try_borrow_mut()
+            .ok()?
+            .import_macros(imported, on_conflict);
         self.save_settings();
         Some(counts)
+    }
+
+    /// Whether a macro shortcut is already taken, so the window can ask before
+    /// overwriting it.
+    pub fn has_macro(&self, shortcut: &str) -> bool {
+        self.session
+            .try_borrow()
+            .map(|s| s.has_macro(shortcut))
+            .unwrap_or(false)
+    }
+
+    /// How many rows of an import would overwrite an existing shortcut.
+    pub fn macro_conflicts(&self, imported: &[glowkey_engine::Macro]) -> usize {
+        self.session
+            .try_borrow()
+            .map(|s| s.macro_conflicts(imported))
+            .unwrap_or(0)
     }
 
     /// The text-expansion macros, cloned for the Settings list.

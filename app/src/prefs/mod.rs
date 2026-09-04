@@ -68,7 +68,7 @@ mod personal_words;
 mod tabs;
 mod widgets;
 
-use widgets::hotkey_display;
+pub(crate) use widgets::hotkey_display;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -386,6 +386,25 @@ define_class!(
                 .as_ref()
                 .map(|f| f.stringValue().to_string())
                 .unwrap_or_default();
+            // Ask before overwriting. `add_macro` replaces silently, and the
+            // Import in this same window refused to overwrite and reported what it
+            // skipped — one window, two opposite rules, and the destructive one
+            // was the silent one.
+            if self.state().has_macro(&shortcut) {
+                let mtm = MainThreadMarker::from(self);
+                let replace = self.ask(
+                    &t("Replace “{}”?", "Thay thế “{}”?").replace("{}", shortcut.trim()),
+                    t(
+                        "That shortcut already has an expansion.",
+                        "Chữ viết tắt đó đã có nội dung thay thế.",
+                    ),
+                    &[t("Replace", "Thay thế"), t("Cancel", "Huỷ")],
+                    mtm,
+                );
+                if replace != 0 {
+                    return;
+                }
+            }
             if self.state().add_macro_and_save(&shortcut, &expansion) {
                 let empty = NSString::from_str("");
                 if let Some(f) = self.ivars().macro_shortcut.borrow().as_ref() {
@@ -450,6 +469,42 @@ impl PrefsController {
         alert.runModal();
     }
 
+    /// A modal question with up to three answers, returning which was chosen as
+    /// its index in `buttons`.
+    ///
+    /// The first button is the default (Return) and, when there are three, the
+    /// last is Cancel (Escape) — AppKit's own ordering, so the keyboard behaves
+    /// the way it does everywhere else.
+    pub(super) fn ask(
+        &self,
+        message: &str,
+        detail: &str,
+        buttons: &[&str],
+        mtm: MainThreadMarker,
+    ) -> usize {
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(message));
+        if !detail.is_empty() {
+            alert.setInformativeText(&NSString::from_str(detail));
+        }
+        let mut last = None;
+        for title in buttons {
+            last = Some(alert.addButtonWithTitle(&NSString::from_str(title)));
+        }
+        // Escape cancels. AppKit does this by itself only for a button whose title
+        // is the literal string "Cancel", so in Vietnamese ("Huỷ") the key did
+        // nothing — the caller passes Cancel last, and this makes that true in
+        // both languages.
+        if buttons.len() > 1 {
+            if let Some(button) = last {
+                button.setKeyEquivalent(&NSString::from_str("\u{1b}"));
+            }
+        }
+        // NSAlertFirstButtonReturn == 1000, and the rest count up from there.
+        let response = alert.runModal();
+        (response - 1000).clamp(0, buttons.len() as isize - 1) as usize
+    }
+
     /// Drops every built window so the next open rebuilds it in the current
     /// language, then reopens Settings. Labels are baked in at build time — the
     /// alternative, holding a reference to each one to re-set its title, would be
@@ -465,18 +520,26 @@ impl PrefsController {
         // transfer) that could borrow them again and panic, in frames with no
         // unwind guard. Every other borrow in this file is fallible for the same
         // reason.
+        // Personal Words is in here too. It was the one window this function
+        // forgot, so after a language change it kept its English labels for the
+        // rest of the run while every other window had switched — the sort of
+        // half-translated interface that reads as a broken app rather than a
+        // missed case.
         let windows = [
             self.ivars().window.borrow_mut().take(),
             self.ivars().excluded_window.borrow_mut().take(),
             self.ivars().macros_window.borrow_mut().take(),
+            self.ivars().words_window.borrow_mut().take(),
         ];
 
         // Reopen whatever the user had open, rather than only Settings.
         let reopen_excluded = windows[1].as_ref().is_some_and(|w| w.isVisible());
         let reopen_macros = windows[2].as_ref().is_some_and(|w| w.isVisible());
+        let reopen_words = windows[3].as_ref().is_some_and(|w| w.isVisible());
 
         // Controls from the discarded windows must not be reachable any more.
         self.ivars().list_stack.replace(None);
+        self.ivars().words_list.replace(None);
         self.ivars().macros_list.replace(None);
         self.ivars().macro_shortcut.replace(None);
         self.ivars().macro_expansion.replace(None);
@@ -505,6 +568,9 @@ impl PrefsController {
         }
         if reopen_macros {
             self.manage_macros(sel!(manageMacros:), None);
+        }
+        if reopen_words {
+            self.manage_personal_words(sel!(managePersonalWords:), None);
         }
         // The About window is built once and cached elsewhere; it would otherwise
         // keep whichever language it was first opened in.

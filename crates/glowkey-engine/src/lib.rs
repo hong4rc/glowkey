@@ -264,6 +264,15 @@ struct CorrectableWord {
     boundary: Option<char>,
 }
 
+/// What an import should do when a shortcut it carries already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacroConflict {
+    /// Leave the existing expansion alone and count the row as skipped.
+    Skip,
+    /// Overwrite the existing expansion.
+    Replace,
+}
+
 /// Which reading of one set of typed keys the user wants.
 ///
 /// The English/Telex ambiguity is not resolvable by rule — the same keystrokes
@@ -1534,16 +1543,31 @@ impl Session {
     /// The existing shortcuts are indexed once: a curated table can hold
     /// thousands of entries, and rescanning the list per entry would be quadratic
     /// on the shell's main thread, where it stalls the event tap.
-    pub fn import_macros(&mut self, imported: &[Macro]) -> (usize, usize) {
-        let mut taken: std::collections::HashSet<String> = self
+    pub fn import_macros(
+        &mut self,
+        imported: &[Macro],
+        on_conflict: MacroConflict,
+    ) -> (usize, usize) {
+        // Two different questions, so two sets. What the *table* already held is
+        // what the user was asked about; what the *file* has already used is not a
+        // choice at all — a shortcut listed twice is still one macro, and the
+        // first spelling of it wins whichever answer was given. Conflating the two
+        // made `Replace` count a repeated row as a second macro and let the later
+        // line quietly beat the earlier one.
+        let existing: std::collections::HashSet<String> = self
             .macros
             .iter()
             .map(|m| m.shortcut.to_lowercase())
             .collect();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let (mut added, mut skipped) = (0, 0);
         for entry in imported {
             let key = entry.shortcut.trim().to_lowercase();
-            if key.is_empty() || !taken.insert(key) {
+            if key.is_empty() || !seen.insert(key.clone()) {
+                skipped += 1;
+                continue;
+            }
+            if existing.contains(&key) && on_conflict == MacroConflict::Skip {
                 skipped += 1;
                 continue;
             }
@@ -1554,6 +1578,47 @@ impl Session {
             }
         }
         (added, skipped)
+    }
+
+    /// Whether a shortcut is already taken, so the caller can ask before
+    /// overwriting it.
+    ///
+    /// [`add_macro`](Self::add_macro) replaces silently, which is the right
+    /// primitive and the wrong interaction: the window that calls it also has an
+    /// Import that refused to overwrite and reported what it skipped, so one
+    /// window enforced two opposite rules. The engine keeps both behaviours
+    /// available and the shell decides, having asked.
+    #[must_use]
+    pub fn has_macro(&self, shortcut: &str) -> bool {
+        let shortcut = shortcut.trim();
+        self.macros
+            .iter()
+            .any(|m| m.shortcut.eq_ignore_ascii_case(shortcut))
+    }
+
+    /// How many of `imported` would land on a shortcut that already exists.
+    ///
+    /// Counted before anything is written so the question can be asked once for
+    /// the whole file rather than once per row.
+    #[must_use]
+    pub fn macro_conflicts(&self, imported: &[Macro]) -> usize {
+        let existing: std::collections::HashSet<String> = self
+            .macros
+            .iter()
+            .map(|m| m.shortcut.to_lowercase())
+            .collect();
+        // Counts shortcuts, not rows: a file listing the same colliding shortcut
+        // twice is one thing to decide about, and the number here is read by a
+        // person deciding it. A repeat *within* the file is not a conflict — it
+        // collapses either way and there is nothing to choose.
+        let mut counted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        imported
+            .iter()
+            .filter(|entry| {
+                let key = entry.shortcut.trim().to_lowercase();
+                !key.is_empty() && existing.contains(&key) && counted.insert(key)
+            })
+            .count()
     }
 
     /// Removes the macro at `index` (as listed by [`macros`](Self::macros)).

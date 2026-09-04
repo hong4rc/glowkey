@@ -1,7 +1,7 @@
 ---
 phase: 5
 title: "Windows application shell"
-status: pending
+status: complete
 priority: P2
 effort: "5d"
 dependencies: [4]

@@ -78,6 +78,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Memory",
     # GetUserPreferredUILanguages, for the Vietnamese interface default.
     "Win32_System_SystemInformation",
+    # GetModuleHandleW, for the hook module handle.
+    "Win32_System_LibraryLoader",
 ] }
 
 # The settings window, and only the settings window. The tray is raw Win32 and

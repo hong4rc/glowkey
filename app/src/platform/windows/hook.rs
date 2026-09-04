@@ -92,10 +92,24 @@ impl HookState {
 /// no message pump the callback is never invoked and the hook is removed as
 /// unresponsive.
 pub fn install() -> bool {
-    // SAFETY: the callback matches HOOKPROC and lives for the program. A
-    // low-level hook takes a null module handle and a zero thread id.
-    let hook =
-        unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), std::ptr::null_mut(), 0) };
+    // Our own module handle, not null.
+    //
+    // A low-level hook lives in the installing process rather than a DLL, so the
+    // documentation reads as though `hmod` may be null — and `SetWindowsHookExW`
+    // accepts null and returns a valid handle either way. It just never calls the
+    // callback. That is the worst possible failure shape for this: installation
+    // reports success, the indicator says the hook is live, the WinEvent hook on
+    // the same thread and the same message pump keeps working, and nothing
+    // anywhere says a keystroke was missed.
+    //
+    // Found by a smoke test that typed into Notepad and got no KEY line at all —
+    // which is exactly why `HOOK first callback received` exists below.
+    // SAFETY: a handle to our own image, which is valid for the process lifetime.
+    let module =
+        unsafe { windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()) };
+    // SAFETY: the callback matches HOOKPROC and lives for the program; a zero
+    // thread id makes it global, which is what an input method needs.
+    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_callback), module, 0) };
     if hook.is_null() {
         crate::log::log("HOOK FAILED to install WH_KEYBOARD_LL");
         return false;
@@ -191,6 +205,22 @@ pub fn run_message_loop() {
 /// frames; on panic the key passes through unchanged, which is the same
 /// conservative answer the macOS tap gives.
 unsafe extern "system" fn hook_callback(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // The first callback of the run, recorded once, before every filter.
+    //
+    // This is the difference between "GlowKey decided not to transform" and
+    // "GlowKey never saw the key", which are indistinguishable in a log that
+    // simply has no KEY lines in it. A hook that installs but is never called is
+    // a real and specific failure — a missing message pump, the wrong thread, the
+    // system having removed it — and it looks exactly like a working hook on a
+    // user who is not typing. Placed above the HC_ACTION check on purpose: a
+    // callback arriving with an unexpected code is also worth being able to see.
+    static FIRST_CALL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !FIRST_CALL.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        hook_log::log(format!(
+            "HOOK first callback received (code={code}) — the hook is live"
+        ));
+    }
+
     let handled = std::panic::catch_unwind(AssertUnwindSafe(|| dispatch(code, wparam, lparam)))
         .unwrap_or(false);
     if handled {

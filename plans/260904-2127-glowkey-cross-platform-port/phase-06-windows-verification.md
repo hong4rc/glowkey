@@ -1,7 +1,7 @@
 ---
 phase: 6
 title: "Windows verification on real hardware"
-status: pending
+status: in-progress
 priority: P1
 effort: "2d"
 dependencies: [5]

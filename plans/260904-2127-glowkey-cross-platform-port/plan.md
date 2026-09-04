@@ -94,9 +94,9 @@ mechanically prevents platform code from creeping back in.
 | 3 | [Re-seat macOS on the neutral layer](./phase-03-reseat-macos.md) | Complete | 1, 2 |
 | 0 | [The engine's own tests pass on Windows](./phase-00-engine-tests-on-windows.md) | Complete | — |
 | 4 | [Windows input core](./phase-04-windows-input-core.md) | Complete | 0, 3 |
-| 5 | [Windows application shell](./phase-05-windows-shell.md) | Pending | 4 |
-| 6 | [Windows verification on real hardware](./phase-06-windows-verification.md) | Pending | 5 |
-| 7 | [Windows packaging and CI](./phase-07-windows-packaging.md) | Pending | 0 (CI job), 6 (packaging) |
+| 5 | [Windows application shell](./phase-05-windows-shell.md) | Complete | 4 |
+| 6 | [Windows verification on real hardware](./phase-06-windows-verification.md) | Tier 1 done | 5 |
+| 7 | [Windows packaging and CI](./phase-07-windows-packaging.md) | CI job done | 0 (CI job), 6 (packaging) |
 | 8 | [Linux: choose the input stack](./phase-08-linux-input-stack-decision.md) | Pending | 6 |
 | 9 | [Linux input backend](./phase-09-linux-input-backend.md) | Pending | 8 |
 | 10 | [Linux shell and packaging](./phase-10-linux-shell-packaging.md) | Pending | 9 |
@@ -164,15 +164,17 @@ dependency.
 - [x] `cargo check --workspace` green on Windows
 - [x] `cargo test -p glowkey-engine` green **on Windows** — 164/164 (Phase 0)
 - [x] A Windows build links and its own tests run — 19/19 (Phase 4)
-- [ ] A Windows build types `hoongf` → `hồng` in Notepad, Chrome, Windows Terminal
-      and VS Code, verified by a human (Phase 6)
+- [x] A Windows build types `hoongf` → `hồng` **in Notepad**, verified against
+      code points (2026-09-05). Chrome, Windows Terminal and VS Code are Tier 2
+      and remain unverified.
 - [x] Synthesized input is provably not reprocessed — the `dwExtraInfo` tag is
       checked in the callback's first statement and a test proves the guard.
       *Proven as a pure function; proven as a behaviour only in Phase 6.*
-- [ ] Elevated-window failure is *detected and reported*, not silent
+- [x] Elevated-window failure is *detected and reported*, not silent — implemented
+      in `elevation.rs` and the tray; **not yet exercised against a real elevated window**
 - [x] Existing macOS settings files keep working; no silent reinterpretation of
       `HotkeyPreset::Custom`
-- [ ] A written list of Windows limitations ships with the phase
+- [x] A written list of Windows limitations ships with the phase
 - [ ] Linux design records the Wayland decision with evidence, before any Linux code
 
 ## Decisions taken

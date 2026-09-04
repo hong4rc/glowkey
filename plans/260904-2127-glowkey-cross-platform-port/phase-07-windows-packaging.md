@@ -1,7 +1,7 @@
 ---
 phase: 7
 title: "Windows packaging and CI"
-status: pending
+status: in-progress
 priority: P2
 effort: "2d"
 dependencies: [0]

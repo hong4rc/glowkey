@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Windows input core"
-status: in-progress
+status: complete
 priority: P1
 effort: "4d"
 dependencies: [0, 3]

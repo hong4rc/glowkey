@@ -33,6 +33,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
 };
 
+use crate::strings::t;
+
 use super::indicator::{Breakage, Indicator};
 
 /// The message the notify-icon sends us for mouse activity.
@@ -530,7 +532,7 @@ fn show_menu(hwnd: HWND) {
                     menu,
                     MF_STRING,
                     cmd::REINSTALL_HOOK,
-                    "Reinstall the keyboard hook",
+                    t("Reinstall the keyboard hook", "Cài lại bộ bắt phím"),
                 );
             }
             separator(menu);
@@ -544,7 +546,7 @@ fn show_menu(hwnd: HWND) {
                 MF_STRING
             },
             cmd::TOGGLE_MODE,
-            "Vietnamese input",
+            t("Vietnamese input", "Gõ tiếng Việt"),
         );
         item(
             menu,
@@ -555,8 +557,8 @@ fn show_menu(hwnd: HWND) {
             },
             cmd::TOGGLE_APP,
             &match snapshot.app.as_deref() {
-                Some(app) => format!("Vietnamese in {app}"),
-                None => "Vietnamese in this app".to_string(),
+                Some(app) => t("Vietnamese in {}", "Gõ tiếng Việt trong {}").replace("{}", app),
+                None => t("Vietnamese in this app", "Gõ tiếng Việt trong ứng dụng này").to_string(),
             },
         );
         item(
@@ -567,7 +569,7 @@ fn show_menu(hwnd: HWND) {
                 MF_STRING
             },
             cmd::AUTO_FIX,
-            "Auto-fix English words",
+            t("Auto-fix English words", "Tự động sửa từ tiếng Anh"),
         );
         separator(menu);
         item(
@@ -578,31 +580,41 @@ fn show_menu(hwnd: HWND) {
                 MF_STRING
             },
             cmd::START_AT_LOGIN,
-            "Start at login",
+            t("Start at login", "Khởi động cùng máy"),
         );
         separator(menu);
         item(
             menu,
             MF_STRING,
             cmd::CLIPBOARD_REMOVE_TONES,
-            "Clipboard: remove tones",
+            t("Clipboard: remove tones", "Clipboard: bỏ dấu"),
         );
         item(
             menu,
             MF_STRING,
             cmd::CLIPBOARD_UPPER,
-            "Clipboard: UPPERCASE",
+            t("Clipboard: UPPERCASE", "Clipboard: CHỮ HOA"),
         );
         item(
             menu,
             MF_STRING,
             cmd::CLIPBOARD_LOWER,
-            "Clipboard: lowercase",
+            t("Clipboard: lowercase", "Clipboard: chữ thường"),
         );
         separator(menu);
-        item(menu, MF_STRING, cmd::REVEAL_LOG, "Show log folder");
-        item(menu, MF_STRING, cmd::SETTINGS, "Settings…");
-        item(menu, MF_STRING, cmd::QUIT, "Quit GlowKey");
+        item(
+            menu,
+            MF_STRING,
+            cmd::REVEAL_LOG,
+            t("Show log folder", "Mở thư mục nhật ký"),
+        );
+        item(menu, MF_STRING, cmd::SETTINGS, t("Settings…", "Cài đặt…"));
+        item(
+            menu,
+            MF_STRING,
+            cmd::QUIT,
+            t("Quit GlowKey", "Thoát GlowKey"),
+        );
 
         let mut point = POINT { x: 0, y: 0 };
         GetCursorPos(&mut point);

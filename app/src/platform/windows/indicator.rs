@@ -20,6 +20,8 @@
 
 use glowkey_engine::InputMode;
 
+use crate::strings::t;
+
 use super::elevation::Reach;
 
 /// What the tray shows.
@@ -116,29 +118,46 @@ impl Indicator {
     #[must_use]
     pub fn describe(self, app: Option<&str>) -> String {
         match self {
-            Indicator::Vietnamese => "GlowKey — Vietnamese".to_string(),
+            Indicator::Vietnamese => t("GlowKey — Vietnamese", "GlowKey — tiếng Việt").to_string(),
             Indicator::ExcludedApp => match app {
-                Some(app) => format!("GlowKey — off in {app} (ignore list)"),
-                None => "GlowKey — off in this app (ignore list)".to_string(),
+                Some(app) => t(
+                    "GlowKey — off in {} (ignore list)",
+                    "GlowKey — tắt trong {} (danh sách bỏ qua)",
+                )
+                .replace("{}", app),
+                None => t(
+                    "GlowKey — off in this app (ignore list)",
+                    "GlowKey — tắt trong ứng dụng này (danh sách bỏ qua)",
+                )
+                .to_string(),
             },
-            Indicator::English => "GlowKey — English".to_string(),
+            Indicator::English => t("GlowKey — English", "GlowKey — tiếng Anh").to_string(),
             Indicator::Broken(Breakage::HookGone) => {
                 // Named as a fault of ours, because it is one. Windows removes a
                 // hook whose callback is too slow without saying anything, so the
                 // user's only signal is this line.
-                "GlowKey — NOT RUNNING: the keyboard hook is gone. \
-                 Click to reinstall it."
-                    .to_string()
+                t(
+                    "GlowKey — NOT RUNNING: the keyboard hook is gone. Click to reinstall it.",
+                    "GlowKey — KHÔNG CHẠY: bộ bắt phím đã mất. Bấm để cài lại.",
+                )
+                .to_string()
             }
             Indicator::Broken(Breakage::ElevatedWindow) => match app {
                 // Named as a limitation, because it is one, and stated without
                 // apology: an input method that asked for administrator rights to
                 // fix this would be a worse thing than the limitation.
-                Some(app) => format!(
-                    "GlowKey — cannot type into {app}: it runs elevated, and Windows \
-                     blocks input from ordinary programs into elevated windows."
-                ),
-                None => "GlowKey — cannot type into this window: it runs elevated.".to_string(),
+                Some(app) => t(
+                    "GlowKey — cannot type into {}: it runs elevated, and Windows blocks \
+                     input from ordinary programs into elevated windows.",
+                    "GlowKey — không gõ được vào {}: ứng dụng chạy với quyền quản trị, và \
+                     Windows chặn nhập liệu từ chương trình thường vào cửa sổ đó.",
+                )
+                .replace("{}", app),
+                None => t(
+                    "GlowKey — cannot type into this window: it runs elevated.",
+                    "GlowKey — không gõ được vào cửa sổ này: nó chạy với quyền quản trị.",
+                )
+                .to_string(),
             },
         }
     }

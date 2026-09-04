@@ -12,7 +12,11 @@
 //! (`app/src/platform/macos/prefs/tabs.rs`): General/Typing, Excluded apps,
 //! Macros, Personal words, About.
 //!
-//! TODO(phase-5): route through crate::strings::t once it is portable.
+//! **The labels here are English only.** `crate::strings::t` is now portable and
+//! the tray already uses it, so this is a mechanical pass over roughly forty
+//! labels rather than anything blocked — but it is not done, and a Vietnamese
+//! interface that stops at the tray is half an interface. Tracked as remaining
+//! Phase 5 work.
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -56,6 +56,10 @@ pub mod tray;
 /// Starts the hook and runs until the process exits.
 pub fn run() {
     let settings = crate::settings_store::load();
+    // Before anything that can produce a user-visible string. GlowKey's users are
+    // Vietnamese and Unikey ships a Vietnamese interface; an input method is the
+    // last place to make someone read a second language.
+    crate::strings::set_language(settings.language);
 
     // The writer thread first: everything below logs, and after the hook is
     // installed every log call has to be non-blocking.

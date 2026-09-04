@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120">
+  <defs>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <text x="10" y="80" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="72" letter-spacing="-0.02em">
+    <tspan font-weight="600" fill="#1c1c1e">G</tspan>
+    <tspan font-weight="300" fill="#8e8e93">lowKey</tspan>
+  </text>
+  <circle cx="178" cy="40" r="5" fill="#ff9f0a" filter="url(#glow)"/>
+  <circle cx="178" cy="40" r="2.5" fill="#ffd60a"/>
+</svg>

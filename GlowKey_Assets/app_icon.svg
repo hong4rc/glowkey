@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3a3a3c"/>
+      <stop offset="100%" stop-color="#1c1c1e"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="25" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="drop-shadow">
+      <feDropShadow dx="0" dy="20" stdDeviation="20" flood-opacity="0.5"/>
+    </filter>
+    <clipPath id="squircle">
+      <path d="M512,0 C880.6,0 1024,143.4 1024,512 C1024,880.6 880.6,1024 512,1024 C143.4,1024 0,880.6 0,512 C0,143.4 143.4,0 512,0 Z" />
+    </clipPath>
+  </defs>
+  <!-- Apple's macOS icon grid: the body occupies 824 of the 1024pt canvas, leaving
+       100pt of transparent margin on every side. Without it the icon renders
+       visibly larger than every neighbour in Finder and the Dock. The artwork
+       below is still authored against a 1024 box; this group places it on the
+       grid, and scales the filter radii with it. -->
+  <g transform="translate(100,100) scale(0.8046875)">
+    <rect width="1024" height="1024" fill="url(#bg)" clip-path="url(#squircle)"/>
+    <rect x="212" y="250" width="600" height="600" rx="140" fill="#2c2c2e" stroke="#48484a" stroke-width="8" filter="url(#drop-shadow)"/>
+    <!-- 9.16:1 against the #2c2c2e card. The previous #636366 measured 2.33:1 and
+         dissolved into the card below roughly 32px. Kept off pure white so the
+         dot stays the brightest thing in the mark. -->
+    <text x="480" y="680" font-family="-apple-system, sans-serif" font-size="420" font-weight="600" fill="#d1d1d6" text-anchor="middle">G</text>
+    <circle cx="680" cy="380" r="45" fill="#ff9f0a" filter="url(#glow)"/>
+    <circle cx="680" cy="380" r="20" fill="#ffd60a"/>
+  </g>
+</svg>

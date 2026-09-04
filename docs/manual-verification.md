@@ -67,6 +67,19 @@ Accessibility grant.
 - [ ] **Mid-word spell check** on: `exit` is repaired at the `x`, not at the
       space. `nguowif` still reaches `người` — the check judges the render, not
       the raw keys.
+- [ ] **Deleting a mistake undoes the escape** (reported from live use): type
+      `hoongf` → `hồng`, then `a` → `hoongfa`, then ⌫ → **`hồng`**, and typing
+      `s` after it gives `hống` — the word is still live, not dead literal text.
+      One character is removed on screen per press, never two: the Backspace is
+      suppressed and the repair replaces the whole word in one edit.
+- [ ] Same sequence in Chrome's address bar — the repair emits backspaces, so it
+      goes through the omnibox guard.
+- [ ] Keep deleting: `hồng` → `hồn` → `hồ`, still transforming, never re-escaping.
+- [ ] With the spell check **off**, `hoongfa` ⌫ gives `hồng` as it always did —
+      the ordinary path must be untouched.
+- [ ] Type `aal` (shows `aal`), press ⌫ once: you get **`â`**, the state before
+      the `l`. Deliberate, and the one judgement call in this fix — say if it
+      feels wrong.
 - [ ] **Restore common English words** on: `was`␣ → `was`. Off (default):
       `was`␣ → `ứa`.
 - [ ] **Auto-capitalize** on: first letter of a sentence capitalises, including

@@ -580,3 +580,57 @@ fn ctrl_shift_w_with_nothing_to_correct_is_consumed() {
         Decision::Consume
     ));
 }
+
+/// A Backspace that undoes a spell-check escape is **suppressed** and replaced by
+/// one edit, not passed through.
+///
+/// Reported from live use: `hoongf` `a` ⌫ left `hoongf` on screen instead of
+/// restoring `hồng`. The repair cannot be a passthrough plus a posted edit —
+/// that mixes a native keystroke with a synthesized one, which is the race the
+/// full-suppression model exists to remove — so the tap must own the whole thing.
+#[test]
+fn backspace_that_unescapes_a_word_emits_instead_of_passing_through() {
+    let state = active_state();
+    state.session.borrow_mut().set_strict_spell_check(true);
+
+    for ch in "hoongf".chars() {
+        let event = key_event(&state.source, ch);
+        state.decide(NonNull::from(&*event));
+    }
+    // The mistake escapes the word to its raw keys.
+    let mistake = key_event(&state.source, 'a');
+    state.decide(NonNull::from(&*mistake));
+    assert_eq!(state.session.borrow().current_word(), "hoongfa");
+
+    let delete = nav_event(&state.source, super::keys::KEY_CODE_DELETE as u16);
+    match state.decide(NonNull::from(&*delete)) {
+        Decision::Emit(edit) => {
+            assert_eq!(
+                edit.backspaces,
+                "hoongfa".encode_utf16().count(),
+                "the edit replaces the whole on-screen word, including the character \
+                 the user asked to delete — the key is suppressed, so nothing else \
+                 removes it"
+            );
+            assert_eq!(edit.insert, "hồng");
+        }
+        other => panic!("expected the repair to be emitted, got {other:?}"),
+    }
+}
+
+/// An ordinary mid-word Backspace on a word that was never escaped still passes
+/// through, so the common path is untouched for everyone with the option off.
+#[test]
+fn an_ordinary_mid_word_backspace_still_passes_through() {
+    let state = active_state();
+    for ch in "hoongf".chars() {
+        let event = key_event(&state.source, ch);
+        state.decide(NonNull::from(&*event));
+    }
+    let delete = nav_event(&state.source, super::keys::KEY_CODE_DELETE as u16);
+    assert!(matches!(
+        state.decide(NonNull::from(&*delete)),
+        Decision::Passthrough
+    ));
+    assert_eq!(state.session.borrow().current_word(), "hồn");
+}

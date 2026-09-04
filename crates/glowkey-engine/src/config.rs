@@ -200,7 +200,10 @@ mod tests {
         }"#;
         let settings = Settings::from_json(json);
         assert!(
-            settings.exclusions.iter().any(|e| e == "com.mycompany.SecretApp"),
+            settings
+                .exclusions
+                .iter()
+                .any(|e| e == "com.mycompany.SecretApp"),
             "a bad override entry must not cost the user their exclusions"
         );
         assert!(settings.restore_english_words);
@@ -217,7 +220,10 @@ mod tests {
         ]}"#;
         let settings = Settings::from_json(json);
         assert_eq!(settings.word_overrides.len(), 3);
-        assert_eq!(settings.word_overrides[1].prefer, crate::WordPreference::Vietnamese);
+        assert_eq!(
+            settings.word_overrides[1].prefer,
+            crate::WordPreference::Vietnamese
+        );
     }
 
     /// An existing settings file predates `word_overrides` too, so it must load

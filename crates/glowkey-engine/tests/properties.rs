@@ -17,7 +17,8 @@
 //! takes would prove nothing.
 
 use glowkey_engine::{
-    ExclusionList, InputMethod, KeyResponse, PlacementStyle, Session, WordPreference,
+    BackspaceOutcome, ExclusionList, InputMethod, KeyResponse, PlacementStyle, Session,
+    WordPreference,
 };
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
@@ -228,9 +229,34 @@ fn step(session: &mut Session, screen: &mut Screen, ch: char) -> Result<(), Stri
 /// against characters that are not on screen.
 fn backspace_step(session: &mut Session, screen: &mut Screen) -> Result<(), String> {
     let recomposed = session.recompose_after_boundary_backspace();
-    let shrank = !recomposed && session.backspace_visible_char();
-    if !recomposed && !shrank {
-        session.flush();
+    // The mid-word Backspace has three answers, and one of them means the host
+    // does **not** delete: the escape lifted and the engine handed back an edit
+    // that replaces the whole on-screen word. Modelling that as if the host still
+    // deleted would put the model one character out and hide exactly the class of
+    // bug this file exists to catch.
+    let mut repair = None;
+    let mut shrank = false;
+    if !recomposed {
+        match session.backspace_visible_char() {
+            BackspaceOutcome::Repair(edit) => repair = Some(edit),
+            BackspaceOutcome::InStep => shrank = true,
+            BackspaceOutcome::Flush => session.flush(),
+        }
+    }
+    if let Some(edit) = repair {
+        // The keystroke is suppressed; this edit replaces the on-screen word
+        // outright, so it applies to the tail rather than the host deleting.
+        screen
+            .apply(&edit)
+            .map_err(|why| format!("un-escape repair: {why}"))?;
+        if screen.tail != session.current_word() {
+            return Err(format!(
+                "after un-escaping: screen {:?} != engine {:?}",
+                screen.tail,
+                session.current_word()
+            ));
+        }
+        return Ok(());
     }
 
     if recomposed {
@@ -576,16 +602,29 @@ proptest! {
         let before = session.current_word().to_string();
         let mut expected = before.clone();
         expected.pop();
-        if session.backspace_visible_char() {
-            prop_assert_eq!(
+        match session.backspace_visible_char() {
+            // In step: the host deletes, so the engine must be sitting on exactly
+            // the render minus its last character.
+            BackspaceOutcome::InStep => prop_assert_eq!(
                 session.current_word(),
                 expected.as_str(),
-                "{:?}: backspace_visible_char returned true from {:?} but landed on {:?},                  not {:?}",
+                "{:?}: reported InStep from {:?} but landed on {:?}, not {:?}",
                 options,
                 before,
                 session.current_word(),
                 expected
-            );
+            ),
+            // A repair replaces the whole word instead, so the render-minus-one
+            // rule does not apply — what must hold is that the edit and the
+            // engine agree, which `backspace_step` checks on the modelled path.
+            BackspaceOutcome::Repair(edit) => prop_assert_eq!(
+                edit.insert.as_str(),
+                session.current_word(),
+                "{:?}: repaired {:?} but inserted something else",
+                options,
+                before
+            ),
+            BackspaceOutcome::Flush => {}
         }
     }
 }

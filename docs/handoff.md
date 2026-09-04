@@ -107,6 +107,26 @@ Cargo workspace:
   ⌃⇧E and unlike the VN/EN toggle, and the recorder refuses both.
   `tests/word_overrides.rs`, and the correction is modelled in
   `tests/properties.rs`.
+- **Deleting the mistake undoes a spell-check escape** (2026-09-04): when the
+  mid-word spell check has refused a word and is rendering it verbatim, a
+  Backspace that leaves something spellable brings the transformation back —
+  `hoongf` gives `hồng`, a mistyped `a` escapes it to `hoongfa`, and ⌫ restores
+  `hồng` still composing. The escape used to be a one-way latch, cleared only
+  when the word emptied or hit a boundary, so the word stayed literal for the
+  rest of its life. The exit asks the same question the entry did
+  (`Engine::can_unescape`), so the two rules cannot drift apart. **The repair is
+  emitted, not passed through**: the tap suppresses the Backspace and sends one
+  edit covering the whole on-screen word, because letting the host delete and
+  then posting a repair mixes a native keystroke with a synthesized one — the
+  race §5 exists to remove. `BackspaceOutcome` is the three-way answer that makes
+  the caller decide explicitly; a `bool` could not.
+
+  **Deletes after a repair stay visible-character deletes**, questioned in live
+  use and reaffirmed 2026-09-04. `hoongf` `a` ⌫ ⌫ `z` gives `hôn`, not `hông`:
+  the second ⌫ removes the visible `g`, not the tone key `f`. The two diverge
+  only at a tone key — `hồng` is four characters and six keystrokes — and
+  keystroke-undo would have meant a second Backspace mode that exists only after
+  a repair, or reversing the contract above for every word.
 - **Mid-word backspace stays composed**: `hoongf`⌫`z` → `hôn`. The host does the
   delete, so the engine has to land on exactly what the screen shows — the render
   minus its last character (`hồn`), which means dropping the raw `g` and keeping

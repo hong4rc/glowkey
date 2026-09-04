@@ -6,22 +6,60 @@
 //! word the user typed correctly. The corpus below is the guard, and it was run
 //! before the feature was built to prove the rule was viable at all.
 
-use glowkey_engine::{Engine, PlacementStyle};
+use glowkey_engine::{BackspaceOutcome, Engine, PlacementStyle};
 
 const CORPUS: &[(&str, &str)] = &[
-    ("chaof","chào"),("vieejt","việt"),("nam","nam"),("hoongf","hồng"),
-    ("nguyeenx","nguyễn"),("ddaij","đại"),("hocj","học"),("sinh","sinh"),
-    ("truowngf","trường"),("nguowif","người"),("ddaats","đất"),("nuowcs","nước"),
-    ("ngayf","ngày"),("thangs","tháng"),("nawm","năm"),("tuooir","tuổi"),
-    ("ddepj","đẹp"),("gioir","giỏi"),("khoer","khoẻ"),("camr","cảm"),
-    ("own","ơn"),("looix","lỗi"),("bawts","bắt"),("ddaauf","đầu"),
-    ("quyeets","quyết"),("nghieepj","nghiệp"),("thuowngr","thưởng"),
-    ("cuoocj","cuộc"),("soongs","sống"),("tieengs","tiếng"),("nois","nói"),
-    ("bieets","biết"),("muoons","muốn"),("nhuwng","nhưng"),("dduowcj","được"),
-    ("khoong","không"),("nhieeuf","nhiều"),("theer","thể"),("nhuw","như"),
-    ("cuar","của"),("nhuwngx","những"),("veef","về"),("laf","là"),
-    ("mootj","một"),("cows","cớ"),("ddi","đi"),("laamf","lầm"),
-    ("xuoongs","xuống"),("truowcs","trước"),("giuwax","giữa"),("ngoaif","ngoài"),
+    ("chaof", "chào"),
+    ("vieejt", "việt"),
+    ("nam", "nam"),
+    ("hoongf", "hồng"),
+    ("nguyeenx", "nguyễn"),
+    ("ddaij", "đại"),
+    ("hocj", "học"),
+    ("sinh", "sinh"),
+    ("truowngf", "trường"),
+    ("nguowif", "người"),
+    ("ddaats", "đất"),
+    ("nuowcs", "nước"),
+    ("ngayf", "ngày"),
+    ("thangs", "tháng"),
+    ("nawm", "năm"),
+    ("tuooir", "tuổi"),
+    ("ddepj", "đẹp"),
+    ("gioir", "giỏi"),
+    ("khoer", "khoẻ"),
+    ("camr", "cảm"),
+    ("own", "ơn"),
+    ("looix", "lỗi"),
+    ("bawts", "bắt"),
+    ("ddaauf", "đầu"),
+    ("quyeets", "quyết"),
+    ("nghieepj", "nghiệp"),
+    ("thuowngr", "thưởng"),
+    ("cuoocj", "cuộc"),
+    ("soongs", "sống"),
+    ("tieengs", "tiếng"),
+    ("nois", "nói"),
+    ("bieets", "biết"),
+    ("muoons", "muốn"),
+    ("nhuwng", "nhưng"),
+    ("dduowcj", "được"),
+    ("khoong", "không"),
+    ("nhieeuf", "nhiều"),
+    ("theer", "thể"),
+    ("nhuw", "như"),
+    ("cuar", "của"),
+    ("nhuwngx", "những"),
+    ("veef", "về"),
+    ("laf", "là"),
+    ("mootj", "một"),
+    ("cows", "cớ"),
+    ("ddi", "đi"),
+    ("laamf", "lầm"),
+    ("xuoongs", "xuống"),
+    ("truowcs", "trước"),
+    ("giuwax", "giữa"),
+    ("ngoaif", "ngoài"),
 ];
 
 fn typed(input: &str, strict: bool) -> String {
@@ -38,7 +76,11 @@ fn no_false_rejection_across_real_vietnamese() {
     // Every word must type identically with the option on and off. A difference
     // means the check refused a legitimate keystroke.
     for (keys, expected) in CORPUS {
-        assert_eq!(typed(keys, false), *expected, "corpus entry {keys} is wrong");
+        assert_eq!(
+            typed(keys, false),
+            *expected,
+            "corpus entry {keys} is wrong"
+        );
         assert_eq!(
             typed(keys, true),
             *expected,
@@ -100,7 +142,9 @@ fn never_touches_the_document_before_the_word() {
     // while the screen still held neither — so the backspace count overshot and
     // ate one character to the LEFT of the word. It hit about a quarter of
     // English words; `aal` swallowed the preceding space.
-    for keys in ["aal", "vieejtw", "nguowifw", "afire", "academic", "aardvark"] {
+    for keys in [
+        "aal", "vieejtw", "nguowifw", "afire", "academic", "aardvark",
+    ] {
         let out = screen_after("Xin chao ", keys, true);
         assert!(
             out.starts_with("Xin chao "),
@@ -119,8 +163,15 @@ fn the_escape_does_not_outlive_the_word() {
     for ch in "aal".chars() {
         engine.process_key(ch);
     }
+    // Model the shell's three-case ladder rather than ignoring the answer. The
+    // engine can decline to stay in step — deleting the only character of a word
+    // that exists solely through a transformation (`â`⌫) is the ordinary case —
+    // and the caller is then obliged to flush. A test that drops the return value
+    // asserts against a state no shell would ever be in.
     for _ in 0..3 {
-        engine.backspace_visible_char();
+        if engine.backspace_visible_char() == BackspaceOutcome::Flush {
+            engine.reset();
+        }
     }
     for ch in "hoongf".chars() {
         engine.process_key(ch);
@@ -135,4 +186,109 @@ fn keeps_the_leading_d_bar_carve_out() {
     for (keys, expected) in [("ddc", "đc"), ("ddt", "đt"), ("ddk", "đk")] {
         assert_eq!(typed(keys, true), expected, "{keys} under strict check");
     }
+}
+
+/// Deleting the key that caused the escape undoes the escape.
+///
+/// Reported from live use: `hoongf` gives `hồng`, a mistyped `a` escapes the word
+/// to `hoongfa`, and Backspace left `hoongf` — the raw keys, stuck verbatim for
+/// the rest of the word's life, because the escape was a one-way latch. The way
+/// out was missing: the check that refuses a word never re-ran when the word got
+/// shorter.
+#[test]
+fn deleting_the_offending_key_restores_the_transformation() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_strict_spell_check(true);
+    for ch in "hoongf".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.current_word(), "hồng");
+
+    // The mistake: the word can no longer be spelled, so it shows its raw keys.
+    engine.process_key('a');
+    assert_eq!(engine.current_word(), "hoongfa");
+
+    // Backspace repairs it in one edit. The count covers the *whole* on-screen
+    // word, because the shell suppresses the keystroke rather than letting the
+    // host delete — mixing a native delete with a synthesized edit is the race
+    // the full-suppression model exists to remove.
+    match engine.backspace_visible_char() {
+        BackspaceOutcome::Repair(edit) => {
+            assert_eq!(edit.backspaces, "hoongfa".encode_utf16().count());
+            assert_eq!(edit.insert, "hồng");
+        }
+        other => panic!("expected a repair, got {other:?}"),
+    }
+    assert_eq!(engine.current_word(), "hồng");
+    assert!(engine.is_composing(), "and it is still being composed");
+
+    // Still a live Vietnamese word: the next tone key applies rather than landing
+    // as a literal, which is the whole point of getting the escape lifted.
+    let r = engine.process_key('z');
+    assert_eq!(
+        engine.current_word(),
+        "hông",
+        "z removes the tone, so the huyền goes"
+    );
+    assert!(r.handled);
+}
+
+/// Keeping on deleting keeps transforming, rather than re-escaping.
+#[test]
+fn deleting_further_keeps_the_word_transformed() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_strict_spell_check(true);
+    for ch in "hoongfa".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.current_word(), "hoongfa");
+
+    // The first delete repairs the word; after that the escape is gone and the
+    // ordinary mid-word rule applies again — the render minus its last visible
+    // character, which is the contract `docs/handoff.md` §4 records.
+    for expected in ["hồng", "hồn", "hồ"] {
+        match engine.backspace_visible_char() {
+            BackspaceOutcome::Repair(edit) => assert_eq!(edit.insert, expected),
+            BackspaceOutcome::InStep => {}
+            BackspaceOutcome::Flush => panic!("unexpected flush before {expected:?}"),
+        }
+        assert_eq!(
+            engine.current_word(),
+            expected,
+            "still transforming, never re-escaped"
+        );
+    }
+}
+
+/// A word that is *still* unspellable after the delete stays escaped — the exit
+/// asks the same question the entry did, so it cannot let through something the
+/// check would refuse.
+#[test]
+fn a_still_unspellable_word_stays_escaped() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_strict_spell_check(true);
+    // `nguyeenxk` escapes, and dropping one key does not make it spellable.
+    for ch in "nguyeenxkk".chars() {
+        engine.process_key(ch);
+    }
+    let before = engine.current_word().to_string();
+    assert_eq!(before, "nguyeenxkk", "escaped to its raw keys");
+    match engine.backspace_visible_char() {
+        BackspaceOutcome::InStep => assert_eq!(engine.current_word(), "nguyeenxk"),
+        other => panic!("still-unspellable word must stay escaped, got {other:?}"),
+    }
+}
+
+/// With the option off, none of this happens: the same sequence behaves exactly
+/// as it always has, and the repair path is unreachable.
+#[test]
+fn with_the_spell_check_off_nothing_changes() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    for ch in "hoongfa".chars() {
+        engine.process_key(ch);
+    }
+    // Never escaped, so the render is the ordinary transformation.
+    assert_eq!(engine.current_word(), "hồnga");
+    assert_eq!(engine.backspace_visible_char(), BackspaceOutcome::InStep);
+    assert_eq!(engine.current_word(), "hồng");
 }

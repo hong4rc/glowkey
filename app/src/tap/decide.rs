@@ -281,10 +281,27 @@ impl TapState {
             //     stay composed, so the next key is still a Telex key rather than a
             //     literal (hoongf⌫z → hôn, not hồnz);
             //   - if the engine cannot stay in step, flush and stop composing.
-            if !session.recompose_after_boundary_backspace() && !session.backspace_visible_char() {
-                session.flush();
+            if session.recompose_after_boundary_backspace() {
+                return Decision::Passthrough;
             }
-            return Decision::Passthrough;
+            // Exhaustive on purpose — no catch-all arm. A future outcome falling
+            // through as a plain delete is the failure this path is most exposed
+            // to, and the compiler is the only thing that reliably stops it.
+            return match session.backspace_visible_char() {
+                // The escape lifted: the word transforms again. Suppress the
+                // keystroke and emit the whole repair ourselves — the user's
+                // delete is accounted for inside the edit. Letting the host
+                // delete and posting this afterwards would mix a native
+                // keystroke with a synthesized edit, which is exactly the race
+                // the full-suppression model exists to remove (see the module
+                // docs on `super`).
+                glowkey_engine::BackspaceOutcome::Repair(edit) => Decision::Emit(edit),
+                glowkey_engine::BackspaceOutcome::InStep => Decision::Passthrough,
+                glowkey_engine::BackspaceOutcome::Flush => {
+                    session.flush();
+                    Decision::Passthrough
+                }
+            };
         }
 
         if is_caret_move(keycode) {

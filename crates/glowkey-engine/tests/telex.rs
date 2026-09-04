@@ -2,7 +2,7 @@
 //! headless proof that the core typing behaviour is correct — the parts that do
 //! not need a Mac, a text field, or a human watching the screen.
 
-use glowkey_engine::{Engine, PlacementStyle};
+use glowkey_engine::{BackspaceOutcome, Engine, PlacementStyle};
 
 /// Types a whole string through a fresh engine and returns the final committed
 /// text, reconstructed by applying each [`KeyResponse`] to a running buffer — the
@@ -181,7 +181,11 @@ fn mid_word_backspace_drops_a_visible_char_and_keeps_composing() {
     }
     assert_eq!(engine.current_word(), "hồng");
 
-    assert!(engine.backspace_visible_char());
+    assert_eq!(
+        engine.backspace_visible_char(),
+        BackspaceOutcome::InStep,
+        "an unescaped word stays in step; the host performs the delete"
+    );
     assert_eq!(engine.current_word(), "hồn");
     assert_eq!(engine.raw_string(), "hoonf");
     assert!(engine.is_composing());
@@ -204,7 +208,7 @@ fn mid_word_backspace_reports_failure_when_it_cannot_stay_in_step() {
         engine.process_key(ch);
     }
     assert_eq!(engine.current_word(), "ô");
-    assert!(!engine.backspace_visible_char());
+    assert_eq!(engine.backspace_visible_char(), BackspaceOutcome::Flush);
 }
 
 #[test]

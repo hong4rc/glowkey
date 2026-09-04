@@ -417,6 +417,34 @@ impl Macro {
     }
 }
 
+/// What a mid-word Backspace did to the engine, and what the shell owes the
+/// document as a result.
+///
+/// Three named answers rather than a `bool`, because [`Self::Repair`] must be
+/// treated differently *in kind*: it means the shell has to suppress the
+/// keystroke and emit an edit instead of letting the host delete. A boolean that
+/// sometimes also meant "apply this" is the sort of contract that gets misread
+/// once and eats a character of the user's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackspaceOutcome {
+    /// Nothing composed, or no single key removal reproduces what the screen will
+    /// show. The caller flushes and lets the delete happen normally.
+    Flush,
+    /// The engine is in step with what the host's delete will leave behind. The
+    /// caller passes the keystroke through, as it always has.
+    InStep,
+    /// The word was being rendered verbatim because the mid-word spell check had
+    /// refused it, and deleting this character makes it spellable again — so the
+    /// transformation comes back.
+    ///
+    /// The caller must **suppress** the Backspace and apply this edit: the
+    /// user's delete is accounted for inside it, and the backspace count covers
+    /// the whole on-screen word. Letting the host delete and then posting this
+    /// would mix a native keystroke with a synthesized edit, which is the race
+    /// the full-suppression model exists to remove (`docs/handoff.md` §5).
+    Repair(KeyResponse),
+}
+
 /// The edit the shell must apply to the document for one keystroke.
 ///
 /// `backspaces` counts **UTF-16 code units** to delete from the end of the text
@@ -695,13 +723,27 @@ impl Engine {
     /// the engine's idea of the text no longer matches the screen. So search the
     /// raw log from the end for the one key whose removal re-renders to the target.
     ///
-    /// Returns `false` when no single removal reproduces the target (the caller
-    /// then flushes and stops composing), which also covers deleting the last
-    /// character of a word that only exists through a transformation (`oo`⌫).
-    pub fn backspace_visible_char(&mut self) -> bool {
+    /// Returns [`BackspaceOutcome::Flush`] when no single removal reproduces the
+    /// target (the caller then flushes and stops composing), which also covers
+    /// deleting the last character of a word that only exists through a
+    /// transformation (`oo`⌫).
+    ///
+    /// **Deleting the key that caused an escape undoes the escape.** The mid-word
+    /// spell check renders a refused word verbatim, and that used to be one-way:
+    /// `hoongf` gave `hồng`, a mistyped `a` escaped the word to `hoongfa`, and
+    /// Backspace left `hoongf` stuck as literal keys for the rest of the word's
+    /// life. This function made it worse by working correctly — while escaped the
+    /// render *is* the raw keys, so dropping the `a` reproduced the screen
+    /// exactly and the engine happily stayed escaped. Now the shortened word is
+    /// re-judged by the same question that refused it, and if it is spellable
+    /// again the transformation comes back.
+    pub fn backspace_visible_char(&mut self) -> BackspaceOutcome {
         if self.raw.is_empty() || self.rendered.is_empty() {
-            return false;
+            return BackspaceOutcome::Flush;
         }
+        // What the document shows right now. A repair replaces all of it, so this
+        // has to be read before anything below changes it.
+        let on_screen = self.rendered.clone();
         let mut target = self.rendered.clone();
         target.pop();
 
@@ -712,15 +754,43 @@ impl Engine {
                 self.raw = candidate;
                 self.rendered = target;
                 // Deleting the word away also ends the escape. Without this the
-                // flag latched: the caller sees `true` so it never flushes, and
+                // flag latched: the caller sees "in step" so it never flushes, and
                 // the next word silently refused to transform.
                 if self.raw.is_empty() {
                     self.escaped = false;
+                    return BackspaceOutcome::InStep;
                 }
-                return true;
+                if self.escaped && self.can_unescape() {
+                    self.escaped = false;
+                    self.rendered = self.render_keys(&self.raw);
+                    return BackspaceOutcome::Repair(KeyResponse {
+                        handled: true,
+                        backspaces: on_screen.encode_utf16().count(),
+                        insert: self.rendered.clone(),
+                    });
+                }
+                return BackspaceOutcome::InStep;
             }
         }
-        false
+        BackspaceOutcome::Flush
+    }
+
+    /// Whether the escaped word would be spellable again if the escape were
+    /// lifted right now.
+    ///
+    /// Asks the same question that set the escape rather than a second one of its
+    /// own: an entry rule and an exit rule that have to agree are best written
+    /// once. A render that is pure ASCII was typed verbatim and was never the
+    /// spell check's business, so it un-escapes freely.
+    fn can_unescape(&self) -> bool {
+        let candidate = render(
+            &self.raw,
+            self.style,
+            self.method,
+            self.quick_telex,
+            self.telex_brackets,
+        );
+        !is_invalid_vietnamese(&candidate)
     }
 
     /// Renders a raw key sequence under this engine's settings, honouring an
@@ -1748,8 +1818,11 @@ impl Session {
     /// keys that follow keep editing the same word (`hoongf`⌫`z` → `hôn`, because
     /// `z` still reaches the engine as the tone-removal key). Returns `false` when
     /// the engine cannot stay in step with the host, and the caller must flush.
-    pub fn backspace_visible_char(&mut self) -> bool {
-        self.is_active() && self.engine.backspace_visible_char()
+    pub fn backspace_visible_char(&mut self) -> BackspaceOutcome {
+        if !self.is_active() {
+            return BackspaceOutcome::Flush;
+        }
+        self.engine.backspace_visible_char()
     }
 
     /// The user-interface language preference.

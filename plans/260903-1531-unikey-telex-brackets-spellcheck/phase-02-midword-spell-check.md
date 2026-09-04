@@ -108,3 +108,19 @@ path and turn a deliberate rejection into a double one.
 *Signal:* `cass`, `aaa`, `ddd`, `hoongff` change behaviour with the option on.
 *Response:* exclude the repeat-key case explicitly; it is already tested by
 `repeating_the_diacritic_key_rejects_it`.
+
+## Follow-up defect — 2026-09-04
+
+The escape shipped as a one-way latch. It is set when a keystroke makes the
+render unspellable and cleared only when the word empties or hits a boundary, so
+**deleting the offending key does not undo it**: `hoongf` → `hồng`, mistype `a` →
+`hoongfa`, Backspace → `hoongf`, and the word is stuck verbatim for the rest of
+its life.
+
+`backspace_visible_char` makes it worse by working correctly — while escaped the
+render *is* the raw keys, so dropping `a` reproduces the screen exactly, the
+engine reports success and stays escaped.
+
+The escape itself is right, and so is escaping the whole word rather than one key
+for the reason recorded above. What was missing is the way back out. Planned in
+`plans/260904-0955-glowkey-unescape-on-backspace/`.

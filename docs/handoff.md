@@ -53,7 +53,12 @@ Cargo workspace:
   `keys.rs` (reading an event, recognising the hotkeys), `emit.rs` (everything
   that writes to the document, plus the omnibox guard call site), `settings.rs`
   (the `*_and_save` accessor wall the UI calls), `health.rs` (the tap health
-  monitor, §6.6), `permission.rs` (the startup gate). **Full-suppression model**: GlowKey suppresses
+  monitor, §6.6, which also re-reads the frontmost app on idle ticks — §6.9),
+  `permission.rs` (the startup gate).
+  **Nothing in the keystroke path may block** (§5, `decisions/0008`): the
+  callback sits in the system's synchronous delivery path for every key on the
+  machine, so a window-server round-trip there freezes the Mac.
+  **Full-suppression model**: GlowKey suppresses
   **every** letter it handles and re-emits the diff from a **single tagged
   `CGEventSource`** via `CGEventPost(SessionEventTap)`. This is the crux of
   correctness (see §5). Tags its own events and skips them (feedback-loop guard);
@@ -74,7 +79,10 @@ Cargo workspace:
   headers used to.
 - `about_window.rs`, `welcome.rs` (the one-time guide, §6.7), `hud.rs` (toggle
   flash), `login_item.rs` (SMAppService),
-  `app_info.rs` (frontmost app), `settings_store.rs` (file I/O), `log.rs`.
+  `app_info.rs` (frontmost app — queried **once** at the first keystroke and then
+  only from the idle timer; every switch after that arrives as
+  `NSWorkspaceDidActivateApplicationNotification`, which `menu_bar` observes),
+  `settings_store.rs` (file I/O), `log.rs`.
 
 ## 4. Features implemented (all committed, test-covered where headless-possible)
 
@@ -96,7 +104,31 @@ Cargo workspace:
   abbreviations `đc`, `đt`, `đk` from being handed back as `ddc`, `ddt`, `ddk`.
   Words that merely *contain* the pair still restore (`address`, `odd`, `sudden`),
   since their đ is not leading.
-- **Re-composition**: `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the word).
+- **Re-composition**: `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the
+  word), and since 2026-09-04 it survives typing in between: `hồng`␣`s`⌫⌫`z` also
+  gives `hông`, and so does `hồng,`␣⌫⌫`z`. `Session` keeps a **stack of up to
+  five entries** (`COMMITTED_HISTORY`) rather than one slot, so deleting back
+  through several words re-opens whichever one the caret returns to. An entry is
+  one boundary character plus the word before it if there was one (`Behind::Word`
+  / `Behind::Boundary`), so a second boundary in a row — the `␣` of `hồng, ` — is
+  an entry too. It had nowhere to go before, and the whole stack was thrown away
+  instead, which left the original bug one comma away from still being reachable:
+  `, ` and `. ` are the commonest pairs in prose.
+  The stack order *is* the caret position — the document is
+  `[entry₁][entry₂]…[composing]` and every entry accounts for exactly one boundary
+  character on screen, so what the caret is standing behind is always the top —
+  which is why no offset is stored. Push on commit, pop on a Backspace with
+  nothing composing, and **clear the whole stack** on anything that can move the
+  caret unseen (flush, caret keys, mouse-down, app switch, mode/exclusion toggles,
+  input method, style, the three render options). Two limits are deliberate and
+  pinned by tests: a word auto-fix restored clears the stack rather than merely
+  staying out of it (it occupies screen space, so leaving it out would break the
+  invariant that the entries are an unbroken account of the document behind the
+  caret), and a mid-word Backspace the engine cannot stay in step with flushes —
+  after that it cannot know how much of the word remains, so it cannot find the
+  boundary either. Deleting back past the stack forgets the caret position **in
+  the engine** rather than relying on the caller to flush, so ⌃⇧W cannot post an
+  edit that puts back a boundary character the Backspace just removed.
 - **Personal word list + ⌃⇧W** (2026-09-03): a per-word answer to the
   English/Telex ambiguity, which §6.3 had recorded as unresolvable. A word pinned
   to either reading beats auto-fix, the curated English list and the global
@@ -274,8 +306,18 @@ Cargo workspace:
 - **Blind model.** The engine has no cursor/selection/host-text read-back; its one
   invariant is "rendered == the text tail at the caret." Everything that can move
   the caret (shortcuts, mouse, arrows, app switch) calls `flush()`.
+- **Nothing blocks inside the tap callback** (2026-09-04, `decisions/0008`). Event
+  delivery through a `CGEventTap` is synchronous: while the callback has not
+  returned, **every keystroke on the machine is waiting on GlowKey**. A blocking
+  window-server call there does not slow typing down, it freezes the Mac, and
+  macOS eventually logs `TAP disabled by timeout` and kills the tap. So the
+  keystroke path makes no window-server calls at all — the frontmost app arrives
+  by notification, and the health poll skips itself while keys are arriving,
+  because a keystroke *is* the proof it was asking for. The one deliberate
+  exception is the Chromium omnibox guard (§6.1), capped at 50 ms and confined to
+  transforming keystrokes in Chromium apps.
 
-## 6. KNOWN ISSUES / STATUS (updated 2026-09-02, second session)
+## 6. KNOWN ISSUES / STATUS (updated 2026-09-04)
 
 1. **Chrome/Edge omnibox** — MITIGATION SHIPPED (best-effort, not a proof), needs
    live verification. The guard (`tap.rs::emit_edit` + `ax.rs`): when an edit
@@ -365,6 +407,14 @@ Cargo workspace:
    recovery path unreachable and harmless; that reproduction is step 1 of
    `docs/manual-verification.md` §9.
 
+   **Amended 2026-09-04.** The poll's own `CGEventTapIsEnabled` call turned out to
+   be half the cause of the freeze in §6.9 — it is a window-server round-trip made
+   from a timer on the same run loop as the tap callback. It now skips entirely
+   while keys are arriving (`HEALTH_SKIP_AFTER_KEYSTROKE`, three seconds), because
+   a keystroke reaching the callback is better proof the tap is alive than the API
+   call is. Detection during real idle is unchanged, which is when a silently dead
+   tap actually needs finding.
+
 7. **First-run discoverability** — FIXED, needs an eyeball. A one-time
    `NSAlert` after the first successful grant names ⌃⇧Space, ⌃⇧E and the default
    terminal exclusions; `welcome_shown` in settings keeps it to once, and the
@@ -380,6 +430,35 @@ Cargo workspace:
    `v*` tag into a disk image. Not notarized (no paid Apple account, by choice),
    so a downloaded copy needs `xattr -dr com.apple.quarantine` once. See
    `docs/decisions/0006`.
+
+9. **System-wide input freeze while toggling the permission** (2026-09-04) —
+   FIXED, needs live verification. Reported as "toggling GlowKey off freezes my
+   Mac", and the log named it: five `TAP disabled by timeout` lines in one run,
+   bracketing `FRONTMOST -> com.apple.systempreferences` and
+   `FRONTMOST -> com.apple.loginwindow`.
+
+   **It was never really about Accessibility.** Event delivery through a
+   `CGEventTap` is synchronous, so while the callback has not returned every
+   keystroke on the machine waits on us. Two blocking window-server calls sat on
+   that thread: `refresh_frontmost_at_word_start` asked NSWorkspace which app was
+   in front on every word start *inside the callback* (pre-existing, hot path),
+   and the §6.6 health poll called `CGEventTapIsEnabled` from a timer on the same
+   run loop (new that day, which is why it surfaced then). Neither is slow against
+   an idle window server; both block for as long as it takes against a busy one —
+   and an authentication sheet or the Accessibility pane being toggled is exactly
+   when it is busy. Revocation was the load that exposed the flaw, not the flaw.
+
+   Measured emit latency agreed before the fix: median **58 µs**, maximum
+   **22.4 ms**, against an engine pinned at 2 µs. Three orders of magnitude
+   between median and tail is a call waiting on somebody else, not work.
+
+   **The keystroke path now makes zero window-server calls.** The frontmost app
+   comes from `NSWorkspaceDidActivateApplicationNotification` (already observed by
+   `menu_bar`), with a single bootstrap query on the first keystroke of the run
+   for the app that was already frontmost at launch. The health poll skips while
+   typing. The belt-and-braces frontmost re-check moved to the idle timer, so the
+   per-app ignore list keeps its safety net at no per-key cost. The general rule
+   and what remains exposed are in `docs/decisions/0008`.
 
 ## 7. Diagnosing from the log (do this first for any reported typing bug)
 
@@ -409,16 +488,28 @@ the test profile, pinned by `crates/glowkey-engine/tests/latency.rs` and measure
 per word by `cargo bench -p glowkey-engine`. So a large `EMIT took=` means the AX
 guard or `CGEventPost`, never Vietnamese logic.
 
-**Not yet measured on screen:** the actual `EMIT took=` figures in a live
-Chromium window versus a plain text field. That difference is the AX guard's real
-cost, which §6.1 still describes only as "typ. sub-ms" — an estimate, not a
-measurement. The field is in place; reading it needs a granted build and someone
-typing in Chrome.
+**`TAP disabled by timeout` is the line to grep for first in any freeze report.**
+It does not mean GlowKey was slow, it means the callback did not return and macOS
+killed the tap — and while that was happening every keystroke on the machine was
+blocked behind us (§6.9, `decisions/0008`). Read the `FRONTMOST ->` lines around
+it: `com.apple.loginwindow` or `com.apple.systempreferences` next to a timeout is
+the window server being busy while something in the path asked it a question.
+
+**Measured 2026-09-04**, from a user's log before the §6.9 fix: median `EMIT
+took=` **58 µs**, maximum **22.4 ms**. The tail was the frontmost-app query, not
+the AX guard and not the engine. That figure is now the baseline — a maximum back
+in the tens of milliseconds means something re-entered the hot path.
+
+**Still not measured on screen:** `EMIT took=` in a live Chromium window versus a
+plain text field. That difference is the AX guard's real cost, which §6.1 still
+describes only as "typ. sub-ms" — an estimate, not a measurement. The numbers
+above came from ordinary typing, so they do not answer it. The field is in place;
+reading it needs a granted build and someone typing in Chrome.
 
 ## 8. Build / test / run
 
 ```bash
-cargo test --workspace         # 134 tests, all green; the headless proof
+cargo test --workspace         # 187 tests, all green; the headless proof
 cargo clippy --workspace --all-targets   # must be 0 warnings
 cargo bench -p glowkey-engine  # keystroke latency numbers (criterion)
 bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch
@@ -469,18 +560,34 @@ stop both variants first.
 
 ## 10. Where the records are
 
-- Plans: `plans/260901-1919-...` (UI/ignore/auto-fix), `plans/260902-1230-...`
-  (remaining fixes + deferred omnibox), `plans/260902-1425-...` (Unikey/EVKey copy).
-- Decisions: `docs/decisions/0001`–`0005` (all-Rust objc2; CGEventTap wrap;
-  omnibox AX guard; terminal exclusion hardening; opt-in English restore).
-  UI design: `docs/ui-design.md`. Checkpoint: superseded pointer only.
+- Plans, in `plans/`, newest last: `260901-1919-...` (UI/ignore/auto-fix),
+  `260902-1230-...` (remaining fixes + deferred omnibox), `260902-1425-...`
+  (Unikey/EVKey copy), `260902-1515-fix-known-issues`, `260903-1156-...`
+  (Unikey feature parity), `260903-1531-...` (Telex brackets + spell check),
+  `260903-1637-...` (phonotactics and restore), `260903-1745-...` (hardening and
+  distribution), `260903-2234-...` (personal word list),
+  `260904-0955-...` (unescape on backspace),
+  `260904-1121-glowkey-recomposition-survives-editing` (the committed-word
+  history, and its double-boundary follow-up).
+- Decisions: `docs/decisions/0001`–`0008` — all-Rust objc2; CGEventTap wrap;
+  omnibox AX guard; terminal exclusion hardening; opt-in English restore; stable
+  signing identity; tap health monitor (amended); **nothing blocks the tap
+  callback**. `0008` is the one to read before touching anything in `tap/`.
+- Reports: `plans/reports/`. UI design: `docs/ui-design.md`. Checkpoint:
+  superseded pointer only.
 
 ## 11. Suggested next steps for a new session
 
-1. Re-grant Accessibility (the 2026-09-02 rebuild dropped it — §6.5), then verify
-   by eye: the omnibox guard in Chrome (`hoongf`→`hồng` in the address bar), the
-   "VI ⚠" HUD on ⌃⇧E in Ghostty, the new Settings controls, hotkey recording.
-2. If the omnibox guard proves itself, consider extending it beyond Chromium
+1. **Verify the freeze fix first** (§6.9). Toggle the Accessibility grant off
+   while typing and confirm nothing wedges — that is the user's own reproduction,
+   and it is the only unverified thing here that can hurt the whole machine.
+   `manual-verification.md` §9 carries the steps.
+2. Then the rest of the live pass, which has never been run end to end: the
+   omnibox guard in Chrome (`hoongf`→`hồng` in the address bar), the "VI ⚠" HUD on
+   ⌃⇧E in Ghostty, the Settings controls, hotkey recording, and re-composition
+   after a comma (`hoongf, ` ⌫⌫ `z` → `hông`).
+3. Read `EMIT took=` in a live Chromium window versus a plain field — the one
+   number §7 still calls an estimate.
+4. If the omnibox guard proves itself, consider extending it beyond Chromium
    (Safari's address bar has the same autocomplete pattern) — kept narrow first.
-3. Everything in §6 is otherwise shipped; plan record:
-   `plans/260902-1515-fix-known-issues/plan.md`.
+5. Everything in §6 is otherwise shipped; plan records in §10.

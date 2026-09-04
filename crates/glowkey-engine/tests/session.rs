@@ -2,7 +2,9 @@
 //! the rule that must never regress: an excluded application does not transform,
 //! and nothing (mode toggle included) overrides that.
 
-use glowkey_engine::{ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session};
+use glowkey_engine::{
+    BoundaryBackspace, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
+};
 
 fn session_with_excluded(bundle_id: &str) -> Session {
     let mut excl = ExclusionList::new();
@@ -265,8 +267,148 @@ fn changing_a_typing_option_forgets_the_re_composition_memory() {
     }
     s.commit();
     s.set_telex_brackets(false);
-    assert!(
-        !s.recompose_after_boundary_backspace(),
+    assert_eq!(
+        s.recompose_after_boundary_backspace(),
+        BoundaryBackspace::NotApplicable,
         "the committed word must not re-compose under a changed setting"
+    );
+}
+
+/// The correction hotkey stays one-shot even though the committed history no
+/// longer does.
+///
+/// The two memories used to share a lifetime and a single clearing function.
+/// Splitting them is what lets a committed word survive keystrokes that are
+/// later deleted — and the risk of that split is the other direction: ⌃⇧W
+/// reaching back to a word the user has since typed past.
+#[test]
+fn the_correction_memory_stays_one_shot() {
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    session.set_frontmost_app("com.apple.TextEdit");
+
+    for ch in "hoongf".chars() {
+        session.process_key(ch);
+    }
+    let _ = session.commit();
+    session.note_boundary(' ');
+    // A second word starts. The first is still re-openable...
+    session.process_key('s');
+    // ...but it is no longer correctable: ⌃⇧W is about the word just typed.
+    assert!(
+        session.correct_last_word().is_none(),
+        "the correction memory must not reach back past a new word"
+    );
+}
+
+/// Deleting back to a committed word re-opens it, at the engine level.
+///
+/// The tap-level version of this is in `app/src/tap/tests.rs`; this pins the
+/// engine contract the tap depends on.
+#[test]
+fn deleting_back_to_a_committed_word_reopens_it() {
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    session.set_frontmost_app("com.apple.TextEdit");
+
+    for ch in "hoongf".chars() {
+        session.process_key(ch);
+    }
+    let _ = session.commit();
+    session.note_boundary(' ');
+    assert_eq!(session.current_word(), "", "committed, nothing composing");
+
+    // Type a word and delete it away again.
+    session.process_key('s');
+    assert_eq!(
+        session.recompose_after_boundary_backspace(),
+        BoundaryBackspace::NotApplicable,
+        "mid-word"
+    );
+    session.backspace_visible_char();
+    assert_eq!(session.current_word(), "", "the new word is gone");
+
+    // Now the Backspace that removes the boundary re-opens the committed word.
+    assert_eq!(
+        session.recompose_after_boundary_backspace(),
+        BoundaryBackspace::Reopened,
+        "deleting the boundary must re-open the word behind it"
+    );
+    assert_eq!(session.current_word(), "hồng");
+
+    // And it is live: the tone-removal key applies rather than landing literal.
+    let r = session.process_key('z');
+    assert!(r.handled);
+    assert_eq!(session.current_word(), "hông");
+}
+
+/// A bare boundary is removed without disturbing the words behind it.
+///
+/// Pins the engine contract the tap relies on for `hồng, `⌫⌫`z`: the first
+/// Backspace answers `BoundaryRemoved` — the host deletes the space, nothing
+/// re-opens, and nothing is forgotten — and only the second reaches the word.
+#[test]
+fn a_bare_boundary_is_removed_before_the_word_behind_it() {
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    session.set_frontmost_app("com.apple.TextEdit");
+
+    for ch in "hoongf".chars() {
+        session.process_key(ch);
+    }
+    let _ = session.commit();
+    session.note_boundary(',');
+    // The space after the comma commits nothing — this is the case that used to
+    // throw the history away.
+    let _ = session.commit();
+    session.note_boundary(' ');
+
+    assert_eq!(
+        session.recompose_after_boundary_backspace(),
+        BoundaryBackspace::BoundaryRemoved,
+        "the space came off; the word is one more Backspace away"
+    );
+    assert_eq!(session.current_word(), "", "nothing re-opened yet");
+    assert_eq!(
+        session.recompose_after_boundary_backspace(),
+        BoundaryBackspace::Reopened,
+        "the comma came off, which re-opens the word"
+    );
+    assert_eq!(session.current_word(), "hồng");
+}
+
+/// Deleting back past what the engine remembers forgets the caret position in
+/// the engine rather than trusting the caller to flush.
+///
+/// `work ` is restored to its raw keys by auto-fix, which clears the
+/// re-composition stack while deliberately leaving the word correctable. The
+/// Backspace that follows deletes the boundary character — so the correction
+/// edit, which reaches back over that character and puts it back, would now
+/// over-delete by one and strand text. The engine has to end the correction
+/// window itself: the caller reaching this point calls `flush`, but that is the
+/// caller's contract, and this is the engine's.
+#[test]
+fn deleting_back_past_the_history_ends_the_correction_window() {
+    let mut session = Session::new(PlacementStyle::New, ExclusionList::new());
+    session.set_frontmost_app("com.apple.TextEdit");
+
+    for ch in "work".chars() {
+        session.process_key(ch);
+    }
+    assert!(
+        session.commit().is_some(),
+        "auto-fix must restore `ưork` to `work` for this test to be about anything"
+    );
+    session.note_boundary(' ');
+    assert!(
+        session.correctable_word().is_some(),
+        "a restored word stays correctable"
+    );
+
+    assert_eq!(
+        session.recompose_after_boundary_backspace(),
+        BoundaryBackspace::NotApplicable,
+        "a restored word left nothing to re-open"
+    );
+    assert!(
+        session.correct_last_word().is_none(),
+        "the Backspace deleted the boundary the correction would put back"
     );
 }

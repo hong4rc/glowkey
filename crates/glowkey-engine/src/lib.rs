@@ -16,7 +16,7 @@
 //! shell simply never calls [`Engine::process_key`].
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use vi::methods::{Action, IncrementalBuffer};
 use vi::processor::AccentStyle;
 use vi::processor::{LetterModification, ToneMark};
@@ -201,9 +201,43 @@ pub struct Macro {
     pub expansion: String,
 }
 
-/// The word just committed, remembered so one keystroke can correct it.
+/// How many entries of the document behind the caret to remember. Deleting back
+/// further than this leaves the engine unable to vouch for where the caret is,
+/// so it flushes instead of guessing.
+const COMMITTED_HISTORY: usize = 5;
+
+/// A word that was committed and is still sitting behind the caret, kept so
+/// that deleting back to it re-opens it for editing.
+#[derive(Debug, Clone)]
+struct CommittedWord {
+    /// The raw keystrokes, so the word can be re-opened for editing.
+    raw: Vec<char>,
+    /// What it renders to — the text that must be at the caret when it reopens.
+    rendered: String,
+}
+
+/// One step of the document behind the caret: a boundary character, and the word
+/// that came before it if there was one.
 ///
-/// A separate memory from [`Session::last_committed`], which exists for
+/// The stack these live in *is* the caret position: the engine's picture of the
+/// document is `[entry₁][entry₂]…[composing]` with the caret at the end, so the
+/// entry immediately behind the caret is always the top of the stack, and every
+/// entry accounts for exactly one boundary character on screen. Storing an
+/// offset per entry would be a second source of truth able to disagree with the
+/// first, and there is nothing for it to add.
+#[derive(Debug, Clone)]
+enum Behind {
+    /// A word and the boundary character that committed it — `hồng` then `␣`.
+    Word(CommittedWord),
+    /// A boundary character with no word before it, which is what a second
+    /// boundary in a row is: the `␣` of `hồng, `. Without an entry of its own it
+    /// had nowhere to be recorded, and the whole history was thrown away
+    /// instead — so `hoongf, ⌫⌫z` gave `hồngz` where `hoongf ⌫z` gave `hông`.
+    /// `, ` and `. ` are the two commonest pairs in prose.
+    Boundary,
+}
+
+/// A separate memory from [`Session::committed`], which exists for
 /// re-composition and is deliberately **not** set when auto-fix restored the
 /// word. The correction hotkey needs the opposite: a word that auto-fix already
 /// rewrote is exactly the one the user most often wants to argue with.
@@ -443,6 +477,27 @@ pub enum BackspaceOutcome {
     /// would mix a native keystroke with a synthesized edit, which is the race
     /// the full-suppression model exists to remove (`docs/handoff.md` §5).
     Repair(KeyResponse),
+}
+
+/// What a Backspace landing on a word boundary did.
+///
+/// [`Self::Reopened`] and [`Self::BoundaryRemoved`] are both "the host performs
+/// the delete and the engine is still in step", but they are not the same event
+/// and collapsing them into a `bool` is what hid the double-boundary bug: the
+/// second one used to be indistinguishable from "nothing remembered", which the
+/// caller answers by flushing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoundaryBackspace {
+    /// The word behind the caret is open for editing again. The caller passes
+    /// the keystroke through so the host deletes the boundary character.
+    Reopened,
+    /// A boundary character with no word in front of it came off — the `␣` of
+    /// `hồng, `. Nothing re-opened, but the entries behind it are still an
+    /// accurate account of the document, so the caller must **not** flush.
+    BoundaryRemoved,
+    /// Not this path's business: mid-word, or deleted back past what the engine
+    /// remembers. The caller carries on with the mid-word handling.
+    NotApplicable,
 }
 
 /// The edit the shell must apply to the document for one keystroke.
@@ -1064,11 +1119,15 @@ pub struct Session {
     /// Bundle identifier of the frontmost application, set by the shell on focus
     /// change. `None` before the first application is known.
     current_bundle_id: Option<String>,
-    /// The word most recently committed at a boundary, as `(raw keys, on-screen
-    /// text)`. Set only for a valid committed word, and consumed by the very next
-    /// event: a backspace deleting the trailing boundary re-composes it; anything
-    /// else clears it. Enables `hồng`␣⌫`z` → `hông`.
-    last_committed: Option<(Vec<char>, String)>,
+    /// The document behind the caret, most recent last: an unbroken run of
+    /// boundary characters and the words that preceded them. Deleting back to a
+    /// committed word re-opens it, which is what makes `hồng`␣⌫`z` → `hông` work
+    /// however many keystrokes ago the word was committed.
+    ///
+    /// Capped at [`COMMITTED_HISTORY`]: five is well past what anyone deletes
+    /// back through, and the cap is really about bounding how far a wrong
+    /// assumption about the caret could reach.
+    committed: VecDeque<Behind>,
     /// Persisted preference: open the Settings window on launch.
     open_settings_at_launch: bool,
     /// Capitalize the first letter of each sentence.
@@ -1112,7 +1171,7 @@ impl Session {
             style,
             auto_fix: true,
             current_bundle_id: None,
-            last_committed: None,
+            committed: VecDeque::new(),
             open_settings_at_launch: true,
             auto_capitalize: false,
             pending_capital: true,
@@ -1197,7 +1256,7 @@ impl Session {
     /// Sets the input method (Telex/VNI). Flushes the in-progress word.
     pub fn set_input_method(&mut self, method: InputMethod) {
         self.engine.set_method(method);
-        self.forget_last_word();
+        self.forget_position();
     }
 
     /// Whether to open the Settings window on launch.
@@ -1247,8 +1306,11 @@ impl Session {
     /// mid-word transition to inactive (e.g. the user excludes the current app)
     /// cannot leave a stale diff baseline that later corrupts the document.
     pub fn process_key(&mut self, ch: char) -> KeyResponse {
-        // Any typed key ends the re-composition window opened by the last commit.
-        self.forget_last_word();
+        // A new word starts in *front* of the committed ones; it does not move
+        // them, so the history stays and only the one-shot correction memory
+        // ends. This used to clear both, which is why deleting a mistyped word
+        // away left no way back into the word before it.
+        self.start_new_word();
         if self.is_active() {
             let ch = self.maybe_capitalize(ch);
             self.engine.process_key(ch)
@@ -1290,18 +1352,41 @@ impl Session {
         self.always_macro = on;
     }
 
-    /// Forgets the word just committed, for both purposes that remember it:
+    /// Forgets where the caret is, for both memories that depend on it:
     /// re-composition (`hồng`␣⌫`z`) and the correction hotkey.
     ///
-    /// Every caller that used to clear `last_committed` clears both, and there
-    /// are no exceptions — all nine sites are the same situation, namely that
-    /// the caret may no longer be just after that word, or that the word would
-    /// now render differently. Two fields cleared through one function cannot
-    /// drift apart, which is the point: a `correctable` left behind after a caret
-    /// move would let one keystroke rewrite text somewhere else entirely.
-    fn forget_last_word(&mut self) {
-        self.last_committed = None;
+    /// Every caller that clears one clears both, with no exceptions — each site
+    /// is the same situation, namely that the caret may no longer be where the
+    /// engine thinks, or that the words behind it would now render differently.
+    /// Two fields cleared through one function cannot drift apart, which is the
+    /// point: a `correctable` left behind after a caret move would let one
+    /// keystroke rewrite text somewhere else entirely.
+    fn forget_position(&mut self) {
+        self.committed.clear();
         self.correctable = None;
+    }
+
+    /// A new word has started. The words *behind* the caret have not moved, so
+    /// the history stays; only the one-shot correction memory ends.
+    ///
+    /// This is the whole fix for "typing past a word and deleting back should
+    /// restore it". The two memories used to share one lifetime, and the
+    /// committed word was destroyed by the first keystroke after the boundary —
+    /// so re-composition only ever worked if the Backspace was *immediate*.
+    fn start_new_word(&mut self) {
+        self.correctable = None;
+    }
+
+    /// Records one more step of the document behind the caret, dropping the
+    /// oldest once the cap is reached. Dropping from the *front* is what makes
+    /// the cap safe: the entries that remain are still an unbroken run ending at
+    /// the caret, so deleting back past the cap runs the stack empty and the
+    /// engine stops vouching rather than re-opening the wrong word.
+    fn push_behind(&mut self, entry: Behind) {
+        self.committed.push_back(entry);
+        while self.committed.len() > COMMITTED_HISTORY {
+            self.committed.pop_front();
+        }
     }
 
     /// Every recorded word decision, sorted by keys so the settings file has a
@@ -1400,7 +1485,7 @@ impl Session {
         // them, and the conservative reading of the blind model (§5) is the right
         // one: if the caret may have moved, there is nothing to correct.
         if ch.is_control() {
-            self.forget_last_word();
+            self.forget_position();
         } else if let Some(word) = self.correctable.as_mut() {
             word.boundary = Some(ch);
         }
@@ -1514,10 +1599,10 @@ impl Session {
     /// cannot leak across a focus change.
     pub fn set_frontmost_app(&mut self, bundle_id: impl Into<String>) {
         // A change of app, mode or exclusion means the caret is somewhere else or
-        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // the word is no longer ours to edit. `forget_position`'s own comment
         // claimed this happened; it did not, and an app that activates itself (a
         // call popup, a finished build) changes focus with no event to flush on.
-        self.forget_last_word();
+        self.forget_position();
         self.current_bundle_id = Some(bundle_id.into());
         self.engine.reset();
     }
@@ -1540,10 +1625,10 @@ impl Session {
     /// ([`exclusions_mut`](Self::exclusions_mut) → `remove`).
     pub fn toggle_app_exclusion(&mut self, bundle_id: &str) -> ExclusionToggle {
         // A change of app, mode or exclusion means the caret is somewhere else or
-        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // the word is no longer ours to edit. `forget_position`'s own comment
         // claimed this happened; it did not, and an app that activates itself (a
         // call popup, a finished build) changes focus with no event to flush on.
-        self.forget_last_word();
+        self.forget_position();
         self.current_bundle_id = Some(bundle_id.to_string());
         self.engine.reset();
         if self.exclusions.is_excluded(bundle_id) {
@@ -1566,10 +1651,10 @@ impl Session {
     /// excluded application transforms — exclusion still wins.
     pub fn toggle_mode(&mut self) -> InputMode {
         // A change of app, mode or exclusion means the caret is somewhere else or
-        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // the word is no longer ours to edit. `forget_position`'s own comment
         // claimed this happened; it did not, and an app that activates itself (a
         // call popup, a finished build) changes focus with no event to flush on.
-        self.forget_last_word();
+        self.forget_position();
         self.mode = match self.mode {
             InputMode::Vietnamese => InputMode::English,
             InputMode::English => InputMode::Vietnamese,
@@ -1599,7 +1684,7 @@ impl Session {
     pub fn set_style(&mut self, style: PlacementStyle) {
         self.style = style;
         self.engine.set_style(style);
-        self.forget_last_word();
+        self.forget_position();
     }
 
     /// The current placement style.
@@ -1661,7 +1746,7 @@ impl Session {
             {
                 let on_screen_len = self.engine.current_word().encode_utf16().count();
                 self.engine.reset();
-                self.forget_last_word(); // an expansion has no second reading
+                self.forget_position(); // an expansion has no second reading
                 return Some(KeyResponse {
                     handled: true,
                     backspaces: on_screen_len,
@@ -1703,16 +1788,30 @@ impl Session {
         } else {
             None
         };
-        // Remember a *valid* committed word (not one that was auto-fixed back to raw)
-        // so that deleting the boundary that follows re-composes it.
-        self.last_committed = if restore.is_none() && self.engine.is_composing() {
-            Some((
-                self.engine.raw_vec(),
-                self.engine.current_word().to_string(),
-            ))
+        // Record what this boundary adds to the document behind the caret.
+        //
+        // A word that auto-fix restored to its raw keys **clears the whole
+        // history** rather than simply not being pushed. It still occupies space
+        // on screen, so leaving it out would break the one invariant the stack
+        // rests on — that its entries are an unbroken account of the document
+        // immediately behind the caret. Without this, `hồng`␣`work`␣ (where
+        // auto-fix restored `work`) would leave `hồng` on top of the stack while
+        // `work ` sat between it and the caret, and deleting back would re-open a
+        // word five characters from where the engine thought it was.
+        if !self.engine.is_composing() {
+            // A boundary straight after another boundary — the `␣` of `hồng, `.
+            // It gets an entry of its own for exactly the reason above: it is on
+            // screen, so the account has to include it. Discarding the history
+            // here instead is what put the original bug one comma away.
+            self.push_behind(Behind::Boundary);
+        } else if restore.is_none() {
+            self.push_behind(Behind::Word(CommittedWord {
+                raw: self.engine.raw_vec(),
+                rendered: self.engine.current_word().to_string(),
+            }));
         } else {
-            None
-        };
+            self.committed.clear();
+        }
         // Remember it for the correction hotkey too, and unlike the line above,
         // remember it **whether or not** it was restored: a word auto-fix already
         // rewrote is the one the user most often wants to argue with. The boundary
@@ -1755,11 +1854,11 @@ impl Session {
         let word = self.correctable.take()?;
         // The word just changed identity on screen, so nothing about it is
         // re-composable any more. Clearing only `correctable` and leaving
-        // `last_committed` behind is a guaranteed corruption: the following
+        // the committed history behind is a guaranteed corruption: the following
         // Backspace re-composes the *old* rendering, and the next letter is then
         // diffed against a baseline that no longer matches the screen —
         // `was `⌃⇧W⌫`f` produced `wừa`. Three ordinary keystrokes.
-        self.forget_last_word();
+        self.forget_position();
         if self.engine.is_composing() {
             // Mid-word: the caret is not just after that boundary any more.
             return None;
@@ -1803,23 +1902,39 @@ impl Session {
         Some((word.on_screen.clone(), becomes))
     }
 
-    /// On a Backspace that deletes the boundary immediately after a just-committed
-    /// word, restores that word into the composing buffer so the following keys keep
-    /// editing it — Telex re-composition, e.g. `hồng`␣⌫`z` → `hông`. Returns whether
-    /// it restored (the caller still passes the Backspace through so the host deletes
-    /// the boundary character). A no-op while composing or with nothing remembered.
-    pub fn recompose_after_boundary_backspace(&mut self) -> bool {
+    /// On a Backspace that deletes a boundary character, restores the word in
+    /// front of it into the composing buffer so the following keys keep editing
+    /// it — Telex re-composition, e.g. `hồng`␣⌫`z` → `hông`. The caller passes
+    /// the Backspace through either way, so the host deletes the boundary
+    /// character; the answer says whether the engine is still in step.
+    ///
+    /// A no-op while composing or once the caller has deleted back past what the
+    /// engine remembers.
+    pub fn recompose_after_boundary_backspace(&mut self) -> BoundaryBackspace {
         if self.engine.is_composing() {
-            // Mid-word backspace: a normal delete, not a boundary re-composition.
-            self.forget_last_word();
-            return false;
+            // Mid-word backspace: a normal delete, not a boundary re-opening.
+            // The words behind this one are untouched, so the history stays.
+            self.start_new_word();
+            return BoundaryBackspace::NotApplicable;
         }
-        match self.last_committed.take() {
-            Some((raw, rendered)) => {
-                self.engine.restore(raw, rendered);
-                true
+        match self.committed.pop_back() {
+            Some(Behind::Word(word)) => {
+                self.engine.restore(word.raw, word.rendered);
+                BoundaryBackspace::Reopened
             }
-            None => false,
+            // A bare boundary came off — `hồng, `⌫ leaves `hồng,` — and the word
+            // is one more Backspace away. The stack behind it still describes the
+            // document, so this is emphatically not a flush.
+            Some(Behind::Boundary) => BoundaryBackspace::BoundaryRemoved,
+            // Nothing remembered, or we have deleted back past the cap: the
+            // engine cannot vouch for the caret. Forget the position here rather
+            // than trusting the caller to flush — a `correctable` surviving this
+            // Backspace would let ⌃⇧W post an edit that over-deletes by the
+            // boundary character this keystroke just removed.
+            None => {
+                self.forget_position();
+                BoundaryBackspace::NotApplicable
+            }
         }
     }
 
@@ -1858,10 +1973,10 @@ impl Session {
     /// Turns Quick Telex on or off.
     pub fn set_quick_telex(&mut self, on: bool) {
         self.engine.set_quick_telex(on);
-        // The engine reset does not reach `last_committed`, and a word remembered
-        // under the old setting would re-compose under the new one — rewriting
-        // text already on screen.
-        self.forget_last_word();
+        // The engine reset does not reach the committed history, and a word
+        // remembered under the old setting would re-compose under the new one —
+        // rewriting text already on screen.
+        self.forget_position();
     }
 
     /// Whether the Telex bracket shortcuts are on.
@@ -1873,10 +1988,10 @@ impl Session {
     /// Turns the Telex bracket shortcuts on or off.
     pub fn set_telex_brackets(&mut self, on: bool) {
         self.engine.set_telex_brackets(on);
-        // The engine reset does not reach `last_committed`, and a word remembered
-        // under the old setting would re-compose under the new one — rewriting
-        // text already on screen.
-        self.forget_last_word();
+        // The engine reset does not reach the committed history, and a word
+        // remembered under the old setting would re-compose under the new one —
+        // rewriting text already on screen.
+        self.forget_position();
     }
 
     /// Whether the mid-word spell check is on.
@@ -1888,10 +2003,10 @@ impl Session {
     /// Turns the mid-word spell check on or off.
     pub fn set_strict_spell_check(&mut self, on: bool) {
         self.engine.set_strict_spell_check(on);
-        // The engine reset does not reach `last_committed`, and a word remembered
-        // under the old setting would re-compose under the new one — rewriting
-        // text already on screen.
-        self.forget_last_word();
+        // The engine reset does not reach the committed history, and a word
+        // remembered under the old setting would re-compose under the new one —
+        // rewriting text already on screen.
+        self.forget_position();
     }
 
     /// Flushes any in-progress word without changing mode or focus.
@@ -1904,7 +2019,7 @@ impl Session {
     /// delete text the engine never wrote.
     pub fn flush(&mut self) {
         self.engine.reset();
-        self.forget_last_word();
+        self.forget_position();
         // A caret move / click lands us in unknown context; don't guess a sentence
         // start, so the next letter is not wrongly capitalized.
         self.pending_capital = false;

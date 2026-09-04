@@ -276,17 +276,29 @@ impl TapState {
             // Usually the host performs the delete and we only re-sync the engine
             // to whatever the screen will then show — but not always: undoing a
             // spell-check escape suppresses the key and rewrites the word
-            // instead. Four cases, in order:
+            // instead. Five cases, in order:
             //   - deleting the boundary right after a committed word re-composes it
             //     so the next keys keep editing it (hồng␣⌫z → hông);
+            //   - deleting a boundary with no word in front of it (the ␣ of
+            //     `hồng, `) removes nothing the engine composed, and the word is
+            //     one more Backspace away;
             //   - mid-word, shrink the composition by one visible character and
             //     stay composed, so the next key is still a Telex key rather than a
             //     literal (hoongf⌫z → hôn, not hồnz);
             //   - undoing a spell-check escape rewrites the word in one edit and
             //     swallows the keystroke (`hoongfa`⌫ → `hồng`);
             //   - if the engine cannot stay in step, flush and stop composing.
-            if session.recompose_after_boundary_backspace() {
-                return Decision::Passthrough;
+            //
+            // Exhaustive here for the same reason as the match below: the two
+            // in-step answers differ from "nothing remembered" only in that the
+            // caller must not flush, and a `bool` that hid that difference is
+            // what made `hoongf, ⌫⌫z` produce `hồngz`.
+            match session.recompose_after_boundary_backspace() {
+                glowkey_engine::BoundaryBackspace::Reopened
+                | glowkey_engine::BoundaryBackspace::BoundaryRemoved => {
+                    return Decision::Passthrough;
+                }
+                glowkey_engine::BoundaryBackspace::NotApplicable => {}
             }
             // Exhaustive on purpose — no catch-all arm. A future outcome falling
             // through as a plain delete is the failure this path is most exposed

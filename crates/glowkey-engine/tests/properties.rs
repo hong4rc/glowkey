@@ -17,8 +17,8 @@
 //! takes would prove nothing.
 
 use glowkey_engine::{
-    BackspaceOutcome, ExclusionList, InputMethod, KeyResponse, PlacementStyle, Session,
-    WordPreference,
+    BackspaceOutcome, BoundaryBackspace, ExclusionList, InputMethod, KeyResponse, PlacementStyle,
+    Session, WordPreference,
 };
 use proptest::prelude::*;
 use proptest::test_runner::FileFailurePersistence;
@@ -221,14 +221,31 @@ fn step(session: &mut Session, screen: &mut Screen, ch: char) -> Result<(), Stri
 
 /// The Backspace path, mirroring `tap.rs::decide`'s `KEY_CODE_DELETE` branch: the
 /// **host** always performs the delete, and the engine only re-syncs to whatever
-/// the screen will then show. Three cases in the same order the tap tries them.
+/// the screen will then show. Four cases in the same order the tap tries them.
 ///
 /// This is the most delicate path in the project. Both re-composition and the
 /// mid-word shrink make a promise about text the engine cannot see, and a wrong
 /// answer desynchronises the diff baseline silently — the engine keeps composing
 /// against characters that are not on screen.
 fn backspace_step(session: &mut Session, screen: &mut Screen) -> Result<(), String> {
-    let recomposed = session.recompose_after_boundary_backspace();
+    let at_boundary = session.recompose_after_boundary_backspace();
+    // A boundary character with no word in front of it — the second ␣ of
+    // `hồng, ` — is deleted by the host like any other, and the entries behind it
+    // still describe the document. Falling through to the mid-word path here
+    // would flush and throw those entries away, which is the whole bug.
+    if at_boundary == BoundaryBackspace::BoundaryRemoved {
+        if !screen.tail.is_empty() {
+            return Err(format!(
+                "removed a bare boundary while still composing {:?}",
+                screen.tail
+            ));
+        }
+        if screen.committed.pop().is_none() {
+            return Err("removed a bare boundary with nothing on screen".to_string());
+        }
+        return Ok(());
+    }
+    let recomposed = at_boundary == BoundaryBackspace::Reopened;
     // The mid-word Backspace has three answers, and one of them means the host
     // does **not** delete: the escape lifted and the engine handed back an edit
     // that replaces the whole on-screen word. Modelling that as if the host still

@@ -50,6 +50,11 @@ Accessibility grant.
 - [ ] `left`␣ → `left`, `soft`␣ → `soft`, `gift`␣ → `gift` (the stop-coda tone
       rule; before it these came out `lèt`, `sòt`, `gìt`).
 - [ ] `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the word).
+- [ ] `hoongf`␣`s`⌫⌫`z` → `hông` — it survives a word typed and deleted in
+      between. The reported bug; the memory used to die on the next keystroke.
+- [ ] `hoongf,`␣⌫⌫`z` → `hông`, and the same with `.` in place of the comma. A
+      second boundary in a row used to throw the whole history away, which left
+      the bug above reachable one comma later.
 - [ ] `hoongf`⌫`z` → `hôn` (mid-word backspace stays composed).
 - [ ] Type `hoo`, press ←, type `f`: the `f` is literal, not a tone on the word
       you left. Same for Home/End/Page.
@@ -206,7 +211,30 @@ inherits the terminal's grant, so there is nothing to revoke.
       was rebuilt, the glyph returns to VI/EN, and Vietnamese types again
       **without a relaunch**.
 - [ ] Idle CPU in Activity Monitor is indistinguishable from before (the health
-      check is one call every two seconds).
+      check is one call every two seconds, and it skips while you are typing).
+
+## 9b. The freeze — do this one first (handoff §6.9, `decisions/0008`)
+
+The most important check here, because the failure it looks for hurts the whole
+machine rather than GlowKey. Toggling the permission used to stall every keystroke
+on the Mac: a blocking window-server call inside the tap callback, with the busy
+window server supplied by the System Settings sheet itself.
+
+- [ ] **Keep typing in TextEdit while you flip the Accessibility switch off**, and
+      again while you flip it back on. Nothing anywhere should hitch — not
+      GlowKey, not System Settings, not the Dock, not the menu bar clock.
+- [ ] `grep 'TAP disabled by timeout' ~/Library/Logs/GlowKey/glowkey.log` — expect
+      **no lines**. Any line here means something in the keystroke path blocked
+      and the whole rule of `decisions/0008` has been broken again.
+- [ ] Switch apps a few times (to a terminal and back) and confirm Vietnamese
+      still turns off in the terminal. Frontmost now arrives by notification
+      rather than a per-keystroke query, so a regression shows up here as
+      Vietnamese firing in a terminal — the ignore list is the thing this fix
+      could plausibly have broken.
+- [ ] Type a long paragraph and read the `EMIT took=` figures: the maximum should
+      stay in the hundreds of microseconds. Before the fix the median was 58 µs
+      but the maximum 22.4 ms. Record the numbers — §7 of the handoff carries
+      them as the baseline.
 
 ## 10. Permission gate, on a fresh grant
 
@@ -224,6 +252,6 @@ inherits the terminal's grant, so there is nothing to revoke.
 ## Recording results
 
 Note the date, the commit, and anything that failed, directly in the pull request
-or commit message that prompted the run. Sections 7 step 4, 8 and 9 produce
+or commit message that prompted the run. Sections 7 step 4, 8, 9 and 9b produce
 **numbers and facts that belong in `docs/handoff.md`** — they are the open items
 that no headless test can ever close.

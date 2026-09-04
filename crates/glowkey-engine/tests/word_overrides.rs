@@ -9,7 +9,7 @@
 //! These tests pin the pairs that *could not both work* under that switch. That
 //! is the whole point of the feature, so it is what the tests are about.
 
-use glowkey_engine::{ExclusionList, PlacementStyle, Session, WordPreference};
+use glowkey_engine::{BoundaryBackspace, ExclusionList, PlacementStyle, Session, WordPreference};
 
 /// An app that is not excluded, so the session transforms. `is_active` fails
 /// closed on an unknown app, so this is not optional.
@@ -279,7 +279,10 @@ fn anything_that_moves_the_caret_makes_the_correction_inert() {
     // Deleting the boundary to re-compose.
     let mut s = session();
     type_word_and_boundary(&mut s, "hoongf", ' ');
-    assert!(s.recompose_after_boundary_backspace());
+    assert_eq!(
+        s.recompose_after_boundary_backspace(),
+        BoundaryBackspace::Reopened
+    );
     assert!(s.correct_last_word().is_none());
 
     // Changing a setting that would re-render the word differently.
@@ -432,8 +435,9 @@ fn a_corrected_word_is_no_longer_recomposable() {
     assert_eq!(screen, "was ");
 
     // The host deletes the boundary. The engine must NOT reopen the old word.
-    assert!(
-        !s.recompose_after_boundary_backspace(),
+    assert_eq!(
+        s.recompose_after_boundary_backspace(),
+        BoundaryBackspace::NotApplicable,
         "a corrected word must not re-compose — its identity on screen has changed"
     );
     screen.pop();

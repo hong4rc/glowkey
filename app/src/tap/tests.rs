@@ -634,3 +634,265 @@ fn an_ordinary_mid_word_backspace_still_passes_through() {
     ));
     assert_eq!(state.session.borrow().current_word(), "hồn");
 }
+
+/// Types a sequence through the real `decide()` path, where `⌫` in the input
+/// stands for the Delete key, and returns what the document would show.
+///
+/// The character-only [`type_via_tap`] cannot express a Backspace, which is why
+/// every field report involving one has been checked against a hand-written
+/// model in a scratch binary instead of against the tap. A model that shares the
+/// author's assumptions cannot contradict them; this drives the same code the
+/// app runs.
+fn type_with_deletes(state: &TapState, input: &str) -> String {
+    let mut screen = String::new();
+    let apply = |screen: &mut String, r: &KeyResponse| {
+        let units: Vec<u16> = screen.encode_utf16().collect();
+        let keep = units.len().saturating_sub(r.backspaces);
+        *screen = String::from_utf16(&units[..keep]).unwrap();
+        screen.push_str(&r.insert);
+    };
+    for ch in input.chars() {
+        let is_delete = ch == '⌫';
+        let event = if is_delete {
+            backspace_event(&state.source)
+        } else {
+            key_event(&state.source, ch)
+        };
+        match state.decide(NonNull::from(&*event)) {
+            // For Delete, a passthrough means the *host* performs the deletion.
+            Decision::Passthrough => {
+                if is_delete {
+                    screen.pop();
+                } else {
+                    screen.push(ch);
+                }
+            }
+            Decision::Consume | Decision::ToggleApp => {}
+            Decision::Emit(r) => apply(&mut screen, &r),
+            Decision::EmitThenReplayKey(r) => {
+                apply(&mut screen, &r);
+                screen.push(ch);
+            }
+        }
+    }
+    screen
+}
+
+/// The sequences reported from live use, driven through the real tap.
+///
+/// Reported as producing `hồngz` — the tone key landing as a literal after a
+/// word the engine had stopped composing. Pinned here so the claim is checked
+/// against the code the app runs rather than against a model of it.
+#[test]
+fn reported_delete_sequences_land_where_they_should() {
+    // Mistyped vowel: the word escapes to its raw keys, and deleting the
+    // offending key brings the transformation back.
+    let state = active_state();
+    state.session.borrow_mut().set_strict_spell_check(true);
+    assert_eq!(type_with_deletes(&state, "hoongfa⌫"), "hồng");
+
+    // Mistyped tone key. `hống` is spellable, so nothing escapes; the deletes
+    // are ordinary visible-character deletes and `z` removes the tone.
+    let state = active_state();
+    state.session.borrow_mut().set_strict_spell_check(true);
+    assert_eq!(type_with_deletes(&state, "hoongfs⌫⌫z"), "hô");
+
+    // The same with the spell check off — the default — must be identical here,
+    // because nothing escapes either way.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongfs⌫⌫z"), "hô");
+
+    // And the plain case the contract is written around.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf⌫z"), "hôn");
+}
+
+/// Deleting back to a word re-opens it, however you got there.
+///
+/// Reported three times in one morning, each time as a different-looking bug.
+/// Read off `~/Library/Logs/GlowKey/glowkey.log`, the sequence has a **space**
+/// in it — the shorthand `hoongf s(del)(del)z` is seven keystrokes, not six:
+///
+/// ```text
+/// 'f'  Emit bs=3 ins="ồng"   raw="hoongf" rendered="hồng"
+/// ' '  Passthrough           raw=""       rendered=""      <- commits the word
+/// 's'  Emit bs=0 ins="s"     raw="s"      rendered="s"     <- a new word starts
+/// ⌫    Passthrough                                          <- deletes the s
+/// ⌫    Passthrough                                          <- deletes the space
+/// 'z'  Emit bs=0 ins="z"     raw="z"      rendered="z"     <- z was its own word
+/// ```
+///
+/// The committed word was destroyed by the first keystroke after the boundary,
+/// so re-opening only ever worked if the Backspace was *immediate*. Now the
+/// history survives keys that are later deleted.
+#[test]
+fn deleting_back_to_a_word_reopens_it() {
+    // The reported sequence.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf s⌫⌫z"), "hông");
+
+    // The immediate case, which must not regress.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf ⌫z"), "hông");
+
+    // A longer intervening word: four deletes to clear `abc` and the space.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf abc⌫⌫⌫⌫z"), "hông");
+}
+
+/// Two words back. The history is a stack, so each word empties in turn and the
+/// next Backspace re-opens the one before it — no special case for depth.
+#[test]
+fn deleting_back_through_two_words_reopens_the_right_one() {
+    let state = active_state();
+    // `hoongf ` commits hồng, `man ` commits man, then `s` starts a third.
+    // Six deletes to get back to just after hồng: s(1), space(2, re-opening
+    // man), man(3-5), space(6, re-opening hồng).
+    let typed = type_with_deletes(&state, "hoongf man s⌫⌫⌫⌫⌫⌫z");
+    assert_eq!(
+        typed, "hông",
+        "the first word re-opened after two words were deleted away, and z removed its tone"
+    );
+}
+
+/// The chain breaks where the engine loses track mid-word, and that is correct.
+///
+/// Deleting `viêt` back to `vi` has no single raw-key removal that produces it —
+/// `viee` minus an `e` renders `viê`, not `vi` — so the engine cannot stay in
+/// step and flushes. After that it no longer knows how many characters of that
+/// word remain on screen, so it cannot tell when the caret reaches the boundary,
+/// and the history must go with it. Re-opening a word on a guess is the failure
+/// this whole feature is built to avoid.
+///
+/// Pinned so the limitation is a known one rather than a surprise: a word with a
+/// transformation in the middle can end the chain when you delete through it.
+#[test]
+fn losing_track_mid_word_ends_the_chain() {
+    let state = active_state();
+    let typed = type_with_deletes(&state, "hoongf vieet s⌫⌫⌫⌫⌫⌫⌫z");
+    assert_eq!(
+        typed, "hồngz",
+        "the flush inside viêt cleared the history, so z starts a fresh word"
+    );
+}
+
+/// The cap is exactly five, and both sides of it are pinned.
+///
+/// The earlier version of this test deleted the whole document away and asserted
+/// the screen was empty, which is true for any cap of two or more — it tested
+/// nothing. A cap test has to put a re-composable word on the far side of the
+/// boundary and check whether it comes back.
+///
+/// Each intervening word costs two deletes: one removes the boundary and re-opens
+/// the word before it, the next empties that word.
+#[test]
+fn the_history_cap_is_five_entries() {
+    // Five entries — `hồng` and four `a`s — so the oldest is still there and
+    // nine deletes re-open it.
+    let state = active_state();
+    assert_eq!(
+        type_with_deletes(&state, "hoongf a a a a ⌫⌫⌫⌫⌫⌫⌫⌫⌫z"),
+        "hông",
+        "within the cap the first word must still re-open"
+    );
+
+    // Six entries: `hồng` falls off the front. Deleting back to it finds an empty
+    // stack, so the engine stops vouching for the caret and `z` starts a new word.
+    let state = active_state();
+    assert_eq!(
+        type_with_deletes(&state, "hoongf a a a a a ⌫⌫⌫⌫⌫⌫⌫⌫⌫⌫⌫z"),
+        "hồngz",
+        "past the cap nothing re-opens"
+    );
+}
+
+/// A second boundary in a row does not break the chain — the original bug was one
+/// comma away from still being reachable.
+///
+/// `hồng`␣⌫`z` worked, but `hồng``,`␣⌫⌫`z` gave `hồngz`: the space after the
+/// comma committed nothing, and a commit with nothing composing used to throw the
+/// whole history away. `, ` and `. ` are the two commonest pairs in prose, so the
+/// fix is not an edge case. A bare boundary now gets a stack entry of its own,
+/// which is what keeps the entries an unbroken account of the document.
+#[test]
+fn a_second_boundary_in_a_row_keeps_the_chain() {
+    // The case that worked, as the control.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf ⌫z"), "hông");
+
+    // Comma then space: two deletes to reach the word.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf, ⌫⌫z"), "hông");
+
+    // Full stop then space, the other common pair.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf. ⌫⌫z"), "hông");
+
+    // A run of them: each boundary is one entry and one delete.
+    let state = active_state();
+    assert_eq!(type_with_deletes(&state, "hoongf,,, ⌫⌫⌫⌫z"), "hông");
+}
+
+/// Bare boundaries sit *between* words in the stack, and deleting through them
+/// still lands on the right word.
+///
+/// This is the case a single trailing-boundary count could not represent: after
+/// `hồng, man ` the two boundaries behind `hồng` are no longer the trailing ones,
+/// so a count kept only for the tail would have forgotten them and re-opened
+/// `hồng` while `,` still sat at the caret. Giving each boundary its own entry
+/// makes depth ordinary rather than special.
+#[test]
+fn deleting_back_through_a_bare_boundary_reopens_the_word_before_it() {
+    let state = active_state();
+    // `hồng, man ` — six deletes: the space (re-opening `man`), `man` itself,
+    // the space after the comma, then the comma (re-opening `hồng`).
+    assert_eq!(type_with_deletes(&state, "hoongf, man ⌫⌫⌫⌫⌫⌫z"), "hông");
+}
+
+/// Anything that moves the caret where the engine cannot see it clears the whole
+/// history. Re-opening a word on a guess is how a blind editor corrupts a
+/// document, so this is the property the feature rests on.
+#[test]
+fn a_caret_move_clears_the_whole_history() {
+    // A flush stands for every one of them: mouse-down, arrow keys, ⌘ shortcuts.
+    let state = active_state();
+    for ch in "hoongf ".chars() {
+        let event = key_event(&state.source, ch);
+        state.decide(NonNull::from(&*event));
+    }
+    state.session.borrow_mut().flush();
+    let delete = backspace_event(&state.source);
+    state.decide(NonNull::from(&*delete));
+    let z = key_event(&state.source, 'z');
+    match state.decide(NonNull::from(&*z)) {
+        Decision::Emit(edit) => assert_eq!(
+            edit.insert, "z",
+            "z must start a fresh word, not edit a word the engine lost track of"
+        ),
+        other => panic!("expected a fresh word, got {other:?}"),
+    }
+
+    // An app switch is the case with no event to flush on — a call popup, a
+    // finished build — so it must clear the history by itself.
+    let state = active_state();
+    for ch in "hoongf ".chars() {
+        let event = key_event(&state.source, ch);
+        state.decide(NonNull::from(&*event));
+    }
+    state
+        .session
+        .borrow_mut()
+        .set_frontmost_app("com.tinyspeck.slackmacgap");
+    assert_eq!(type_with_deletes(&state, "⌫z"), "z");
+}
+
+/// A word auto-fix restored is not re-composable, and it clears the history
+/// rather than merely staying out of it: it still occupies space on screen, so
+/// leaving it out would break the invariant that the stack is an unbroken run of
+/// words immediately behind the caret.
+#[test]
+fn a_restored_word_breaks_the_chain() {
+    let state = active_state();
+    // `work ` is restored by auto-fix, so nothing behind it stays re-openable.
+    assert_eq!(type_with_deletes(&state, "hoongf work ⌫z"), "hồng workz");
+}

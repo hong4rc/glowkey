@@ -307,17 +307,76 @@ fn a_macro_expansion_is_not_correctable() {
     assert!(s.correct_last_word().is_none());
 }
 
-/// The boundary is put back exactly as typed, including sentence punctuation —
-/// which also has to keep priming the next capital.
+/// The boundary is put back exactly as typed, for every boundary the host
+/// actually inserts — including sentence punctuation, which also has to keep
+/// priming the next capital.
 #[test]
-fn the_boundary_character_is_preserved_whatever_it_was() {
-    for boundary in ['.', ',', '!', '\t'] {
+fn an_inserted_boundary_character_is_preserved_whatever_it_was() {
+    for boundary in ['.', ',', '!', ' ', ';', ')'] {
         let mut s = session();
         let mut screen = type_word_and_boundary(&mut s, "was", boundary);
         let edit = s.correct_last_word().expect("correctable");
         apply(&mut screen, &edit);
         assert_eq!(screen, format!("was{boundary}"));
     }
+}
+
+/// A boundary key that inserts **nothing** at the caret must leave nothing to
+/// correct.
+///
+/// This test previously asserted the opposite for `\t`, which encoded a bug as
+/// the specification. Several keys reach the boundary path while putting no text
+/// at the caret — Escape, the function keys, keypad Enter, Help and
+/// forward-delete all arrive as control characters — and charging a backspace
+/// for one of them ate the space belonging to the *previous* word and typed a
+/// control code into the document:
+///
+/// ```text
+/// "xin chào ứa"  + Escape + ⌃⇧W  →  "xin chàowas\u{1b}"
+/// ```
+///
+/// Tab and Return are control characters too, and worse: they move the caret
+/// entirely, so a correction after Tab posted its edit into the next field, and
+/// after Return in a send-on-enter application into a message already sent.
+#[test]
+fn a_boundary_key_that_inserts_nothing_leaves_nothing_to_correct() {
+    for boundary in [
+        '\u{1b}', // Escape
+        '\u{10}', // a function key
+        '\u{3}',  // keypad Enter
+        '\u{5}',  // Help
+        '\u{7f}', // forward delete
+        '\t',     // Tab — moves focus
+        '\r',     // Return — may send, and moves the caret
+        '\n',
+    ] {
+        let mut s = session();
+        type_word_and_boundary(&mut s, "was", boundary);
+        assert!(
+            s.correct_last_word().is_none(),
+            "{boundary:?} inserts nothing at the caret, so there is nothing to correct"
+        );
+    }
+}
+
+/// Belt and braces for the worst of that class: the edit must never reach back
+/// into the previous word. Before the fix this produced `"xin chàowas\u{1b}"`.
+#[test]
+fn escape_after_a_word_cannot_eat_the_preceding_space() {
+    let mut s = session();
+    let mut screen = String::from("xin chào ");
+    for ch in "was".chars() {
+        let r = s.process_key(ch);
+        if r.handled {
+            apply(&mut screen, &r);
+        }
+    }
+    if let Some(r) = s.commit() {
+        apply(&mut screen, &r);
+    }
+    s.note_boundary('\u{1b}'); // Escape: dismisses a popover, inserts nothing
+    assert_eq!(screen, "xin chào ứa");
+    assert!(s.correct_last_word().is_none());
 }
 
 /// The edit must delete exactly what is on screen and no more. An over-delete
@@ -348,4 +407,69 @@ fn the_correction_never_deletes_more_than_the_word_and_its_boundary() {
     );
     apply(&mut screen, &edit);
     assert_eq!(screen, "xin chào was ", "the preceding text is untouched");
+}
+
+/// After a correction the word is **not** re-composable, and forgetting that
+/// corrupted the document in three ordinary keystrokes.
+///
+/// The correction used to clear only its own memory, leaving `last_committed`
+/// describing a word that was no longer on screen. The following Backspace then
+/// re-composed the *old* rendering, and the next letter was diffed against a
+/// baseline that no longer matched:
+///
+/// ```text
+/// was␣      → "ứa "
+/// ⌃⇧W       → "was "
+/// ⌫         → "was"   but the engine re-composed "ứa"
+/// f         → emits bs=2 ins="ừa"  →  "wừa"
+/// ```
+#[test]
+fn a_corrected_word_is_no_longer_recomposable() {
+    let mut s = session();
+    let mut screen = type_word_and_boundary(&mut s, "was", ' ');
+    let edit = s.correct_last_word().expect("correctable");
+    apply(&mut screen, &edit);
+    assert_eq!(screen, "was ");
+
+    // The host deletes the boundary. The engine must NOT reopen the old word.
+    assert!(
+        !s.recompose_after_boundary_backspace(),
+        "a corrected word must not re-compose — its identity on screen has changed"
+    );
+    screen.pop();
+    assert_eq!(screen, "was");
+
+    // And the next keystroke starts a fresh word rather than editing a ghost.
+    let r = s.process_key('f');
+    assert_eq!(
+        r.backspaces, 0,
+        "nothing on screen belongs to the engine yet"
+    );
+    apply(&mut screen, &r);
+    assert_eq!(screen, "wasf");
+}
+
+/// Switching application must forget the word: an app that activates itself — a
+/// call popup, a finished build, `open -a` — changes focus with no event GlowKey
+/// can flush on, and the correction would then post its edit into the new app.
+#[test]
+fn switching_app_forgets_the_correctable_word() {
+    let mut s = session();
+    type_word_and_boundary(&mut s, "was", ' ');
+    s.set_frontmost_app("com.tinyspeck.slackmacgap");
+    assert!(s.correct_last_word().is_none());
+}
+
+/// Same for the mode toggle and the per-app toggle, which also reset the engine.
+#[test]
+fn toggling_mode_or_exclusion_forgets_the_correctable_word() {
+    let mut s = session();
+    type_word_and_boundary(&mut s, "was", ' ');
+    s.toggle_mode();
+    assert!(s.correct_last_word().is_none());
+
+    let mut s = session();
+    type_word_and_boundary(&mut s, "was", ' ');
+    s.toggle_app_exclusion(TEST_APP);
+    assert!(s.correct_last_word().is_none());
 }

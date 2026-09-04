@@ -48,6 +48,14 @@ impl TapState {
         if was_recording && !*self.recording_hotkey.borrow() {
             self.save_settings();
         }
+        // Anything else `decide` changed that has to survive a quit — today, a
+        // word decision the correction hotkey recorded. Saved here rather than in
+        // `decide` so that function stays free of disk side effects, which is
+        // what lets the tests drive it against the user's real settings file
+        // without writing to it.
+        if self.pending_save.replace(false) {
+            self.save_settings();
+        }
         // Logged before the decision is carried out, deliberately. The lines the
         // arms write themselves (TOGGLE, OMNIBOX, RUNAWAY) must come *after* the
         // KEY line that caused them or the log reads backwards, and the KEY line
@@ -220,17 +228,26 @@ impl TapState {
             let described = session.correctable_word();
             return match session.correct_last_word() {
                 Some(edit) => {
-                    if let Some((word, was)) = described {
+                    // The decision is now in memory only; `handle_key_down` writes
+                    // it to disk. Saving here would put a file write in a function
+                    // the tests drive directly.
+                    self.pending_save.set(true);
+                    crate::prefs::personal_words_changed();
+                    if let Some((was, becomes)) = described {
                         crate::log::log(&format!(
-                            "CORRECT {word:?} was {was:?} — swapped and remembered"
+                            "CORRECT {was:?} -> {becomes:?} — swapped and remembered"
                         ));
-                        crate::hud::flash(&word);
+                        crate::hud::flash(&format!("{was} → {becomes}"));
                     }
                     Decision::Emit(edit)
                 }
                 // Nothing to correct: no word remembered, or the caret has moved
-                // since. Consume it either way — a stray `W` in the document
-                // would be worse than a keystroke that did nothing.
+                // since. Consumed either way, which is a real trade-off rather
+                // than a free choice: a Control-modified key inserts no text in
+                // Cocoa, so passing it through would not put a stray `W` in the
+                // document — it would hand ⌃⇧W to the focused app. Swallowing it
+                // everywhere GlowKey is active is the price of the hotkey being
+                // fixed rather than configurable.
                 None => Decision::Consume,
             };
         }

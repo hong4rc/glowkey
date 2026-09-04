@@ -184,6 +184,42 @@ mod tests {
         assert_eq!(settings, restored);
     }
 
+    /// One mistyped verdict in a hand-edited list must not take the whole
+    /// settings file with it.
+    ///
+    /// `from_json` falls back to defaults on any parse error, so before the
+    /// field-level defaults a single bad entry silently discarded the user's
+    /// exclusions, macros and every toggle — and the next UI change wrote the
+    /// defaults back over them.
+    #[test]
+    fn a_malformed_word_override_does_not_discard_the_rest_of_the_file() {
+        let json = r#"{
+            "exclusions": ["com.mycompany.SecretApp"],
+            "restore_english_words": true,
+            "word_overrides": [{"keys": "was", "prefer": "nonsense"}]
+        }"#;
+        let settings = Settings::from_json(json);
+        assert!(
+            settings.exclusions.iter().any(|e| e == "com.mycompany.SecretApp"),
+            "a bad override entry must not cost the user their exclusions"
+        );
+        assert!(settings.restore_english_words);
+    }
+
+    /// The list is meant to be hand-edited, so the spellings a person actually
+    /// writes have to parse.
+    #[test]
+    fn hand_written_verdicts_parse() {
+        let json = r#"{"word_overrides":[
+            {"keys":"was","prefer":"raw"},
+            {"keys":"cats","prefer":"vietnamese"},
+            {"keys":"exit","prefer":"Vietnamese"}
+        ]}"#;
+        let settings = Settings::from_json(json);
+        assert_eq!(settings.word_overrides.len(), 3);
+        assert_eq!(settings.word_overrides[1].prefer, crate::WordPreference::Vietnamese);
+    }
+
     /// An existing settings file predates `word_overrides` too, so it must load
     /// with an empty list rather than failing — the same tolerance every other
     /// added key relies on.

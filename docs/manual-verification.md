@@ -138,6 +138,42 @@ inline-autocomplete trailing selection Chromium's omnibox does?
 - [ ] If it is already correct, record that and change no code. Two of the three
       possible outcomes here ship nothing.
 
+## 8b. Personal words and the correction hotkey
+
+The engine half is covered by 27 headless tests; what needs eyes is the window,
+the HUD flash, and — most of all — that the correction lands where it should,
+since it is the only edit in GlowKey that reaches back over a boundary character
+into text that is already committed.
+
+- [ ] Type `was`␣ in TextEdit. It becomes `ứa` (the shipped default).
+- [ ] Press **⌃⇧W**. It becomes `was ` — the space survives — and the HUD flashes
+      `ứa → was` legibly, without clipping.
+- [ ] Type `was`␣ again: `was` straight away, no keystroke needed.
+- [ ] **Quit GlowKey, relaunch, type `was`␣.** Still `was`. If it reverts, the
+      decision was never written to disk and the feature has not learned
+      anything.
+- [ ] Settings → Corrections → **Personal Words…** lists `was — as typed`.
+      **Flip** it, type `was`␣: now `ứa`. **Remove** it: back to `ứa` by rule.
+- [ ] With the window open, correct a different word with ⌃⇧W — the list updates
+      without reopening.
+- [ ] Close the window and reopen it twice.
+- [ ] Add a word by hand with both buttons; add a blank one (nothing happens).
+- [ ] In Tiếng Việt, every string in the window and the caption is Vietnamese.
+
+**The three that shipped broken — check each explicitly:**
+
+- [ ] Type `was`␣, press ⌃⇧W, press **⌫**, then type `f`. Expect `wasf`. If you
+      get `wừa`, the corrected word is re-composing and the diff baseline is
+      lying.
+- [ ] Type `xin chào was`, press **Escape** (or any function key), then ⌃⇧W.
+      Expect **nothing to happen**. If the space before `ứa` disappears or a
+      control character appears, a non-inserting key is being charged as a
+      boundary.
+- [ ] Type `was` then **Tab** (into another field), then ⌃⇧W. Expect nothing. Then
+      the same with **Return** in Slack or Messages — the message is already
+      sent, and an edit landing there would reopen or resend it.
+- [ ] Type `was`␣, switch to another app, press ⌃⇧W. Expect nothing.
+
 ## 9. Accessibility revocation and recovery
 
 Needs the installed app (`release-install.sh`), not `dev-run.sh` — the dev loop

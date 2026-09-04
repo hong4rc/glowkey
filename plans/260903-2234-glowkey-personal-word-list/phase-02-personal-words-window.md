@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "The Personal Words window"
-status: pending
+status: completed
 priority: P1
 effort: "0.5d"
 dependencies: [1]
@@ -79,12 +79,12 @@ per-word answer.
 
 ## Success Criteria
 
-- [ ] Overrides are listed with their verdicts, and the list survives a restart
-- [ ] Add, remove and flip all work and all persist
-- [ ] Every string exists in English and Vietnamese
-- [ ] The window reopens after being closed twice
-- [ ] `docs/manual-verification.md` covers it
-- [ ] Clippy silent, `cargo test --workspace` green
+- [x] Overrides are listed with their verdicts, and the list survives a restart
+- [x] Add, remove and flip all work and all persist
+- [x] Every string exists in English and Vietnamese
+- [x] The window reopens after being closed twice
+- [x] `docs/manual-verification.md` covers it
+- [x] Clippy silent, `cargo test --workspace` green
 
 ## Risk Assessment
 

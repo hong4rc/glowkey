@@ -303,8 +303,7 @@ define_class!(
             self.refresh_list();
         }
 
-        /// Opens the separate Macros window (built on first use).
-        /// Opens the Personal Words window.
+        /// Opens the Personal Words window (built on first use).
         #[unsafe(method(managePersonalWords:))]
         fn manage_personal_words(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -355,6 +354,7 @@ define_class!(
             self.refresh_words();
         }
 
+        /// Opens the separate Macros window (built on first use).
         #[unsafe(method(manageMacros:))]
         fn manage_macros(&self, _sender: Option<&AnyObject>) {
             let mtm = MainThreadMarker::from(self);
@@ -589,6 +589,19 @@ pub fn show(state: *const TapState, mtm: MainThreadMarker) {
 /// Called by the tap when a hotkey recording ends (captured or cancelled), so the
 /// Settings controls reflect the new combo. A no-op before the window exists
 /// (including under tests, where no controller is installed).
+/// Refreshes the Personal Words list if that window is open.
+///
+/// Called by the tap after the correction hotkey records a decision. Without it
+/// the one window whose whole job is showing what the hotkey wrote does not show
+/// it until reopened.
+pub fn personal_words_changed() {
+    CONTROLLER.with(|slot| {
+        if let Some(controller) = slot.borrow().as_ref() {
+            controller.refresh_words();
+        }
+    });
+}
+
 pub fn hotkey_recording_done() {
     CONTROLLER.with(|slot| {
         // try_borrow: this can be reached re-entrantly if AppKit pumps the run

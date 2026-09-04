@@ -1,7 +1,7 @@
 ---
 title: "GlowKey — a personal word list that learns"
 description: "Replace the all-or-nothing English-restore toggle with a per-word decision the user can make in one keystroke and then forget: an explicit override list, a window to inspect it, and a correction hotkey that fixes the word just typed and remembers the choice."
-status: pending
+status: completed
 priority: P1
 effort: "2 days"
 tags: [glowkey, engine, ambiguity, ux]
@@ -56,9 +56,9 @@ has to say it again, forever, every time they type it.
 
 | # | Phase | Status | Depends on |
 |---|-------|--------|------------|
-| 1 | [Phase 1: The override list](./phase-01-override-list.md) | Pending | — |
-| 2 | [Phase 2: The Personal Words window](./phase-02-personal-words-window.md) | Pending | 1 |
-| 3 | [Phase 3: The correction hotkey](./phase-03-correction-hotkey.md) | Pending | 1, 2 |
+| 1 | [Phase 1: The override list](./phase-01-override-list.md) | Done — reviewed clean | — |
+| 2 | [Phase 2: The Personal Words window](./phase-02-personal-words-window.md) | Done — reviewed clean | 1 |
+| 3 | [Phase 3: The correction hotkey](./phase-03-correction-hotkey.md) | Done — three corruptions found in review, all fixed | 1, 2 |
 
 **The order is deliberate and the UI comes before the learning.** Phase 3 writes
 to the list automatically; Phase 2 is how the user sees what it wrote and takes
@@ -85,20 +85,28 @@ will collide textually.
 
 ## Success Criteria
 
-- [ ] `was`␣ gives `was` and `cát`␣ gives `cát`, with the global English-restore
+- [x] `was`␣ gives `was` and `cát`␣ gives `cát`, with the global English-restore
       toggle **off**, because the list decides each one
-- [ ] An override wins over auto-fix, over the English list, and over the global
+- [x] An override wins over auto-fix, over the English list, and over the global
       toggle — in both directions — and loses only to a macro
-- [ ] The list is visible, editable and removable in the UI, and survives a restart
-- [ ] One keystroke after a word swaps it and records the preference; typing the
+- [x] The list is visible, editable and removable in the UI, and survives a restart
+- [x] One keystroke after a word swaps it and records the preference; typing the
       same word again needs no keystroke
-- [ ] Nothing writes to the list except an explicit user action
-- [ ] `cargo test --workspace` green, `cargo clippy --workspace --all-targets`
+- [x] Nothing writes to the list except an explicit user action
+- [x] `cargo test --workspace` green, `cargo clippy --workspace --all-targets`
       silent, and the property suite in `crates/glowkey-engine/tests/properties.rs`
       still holds (it now checks the restore edit exactly, so a wrong override
       edit fails it)
-- [ ] `docs/handoff.md` §6.3 rewritten: the limitation is no longer "mitigated by
+- [x] `docs/handoff.md` §6.3 rewritten: the limitation is no longer "mitigated by
       a global toggle with a wide trade-off"
+
+## What is left
+
+Only live verification, and it needs a person at a keyboard:
+`docs/manual-verification.md` §8b, whose last four items are the three corruption
+paths the review found plus the app-switch case. The persistence check there
+(quit, relaunch, type the word again) is the one that proves the feature learns
+at all — it did not, until the review said so.
 
 ## Open questions
 

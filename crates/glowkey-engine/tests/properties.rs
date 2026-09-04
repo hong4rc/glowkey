@@ -31,6 +31,18 @@ const TEST_APP: &str = "com.example.PropertyTest";
 /// character lookup — so it is safe to borrow it as a marker here.
 const BACKSPACE: char = '\u{8}';
 
+/// Stands in for the correction hotkey (⌃⇧W in the shell). Like [`BACKSPACE`] it
+/// is a marker, not a character the engine ever receives — the tap routes the
+/// hotkey by key code, before any character lookup.
+///
+/// Modelling it here is not optional bookkeeping. The correction is the only edit
+/// in GlowKey that reaches back **over a boundary character** into text already
+/// committed, and it shipped with three separate ways to delete text it did not
+/// own. Every one of them was a backspace-count-or-position defect — exactly what
+/// `Screen::apply` exists to catch — and none was caught, because the suite that
+/// had been mutation-tested covered the restore edit and not this one.
+const CORRECT: char = '\u{17}';
+
 /// The host document, split where the engine's knowledge ends.
 ///
 /// `tail` is the word being composed — the "text tail at the caret" the whole
@@ -86,6 +98,9 @@ fn is_word_char(session: &Session, ch: char) -> bool {
 fn step(session: &mut Session, screen: &mut Screen, ch: char) -> Result<(), String> {
     if ch == BACKSPACE {
         return backspace_step(session, screen);
+    }
+    if ch == CORRECT {
+        return correction_step(session, screen);
     }
     if is_word_char(session, ch) {
         let before = screen.tail.clone();
@@ -172,23 +187,32 @@ fn step(session: &mut Session, screen: &mut Screen, ch: char) -> Result<(), Stri
                 session.current_word()
             ));
         }
-        if let Some(again) = session.commit() {
-            return Err(format!(
-                "boundary {ch:?}: committing twice emitted a second edit \
-                 (bs={} ins={:?})",
-                again.backspaces, again.insert
-            ));
-        }
+        // NOTE: committing twice is checked in its own test, not here. Calling
+        // `commit` a second time clears the correction memory as a side effect,
+        // and doing it inside the shared model silently disabled every correction
+        // check downstream — the model reported "nothing to correct" for the rest
+        // of the sequence and passed. A probe that destroys the state it is
+        // probing is worse than no probe, because it looks like coverage.
         // The tap primes sentence capitalization from the boundary character
         // straight after the commit (`tap.rs`: `commit()` then `note_boundary`).
         // Without this the `auto_capitalize` option below is nearly inert — the
         // pending-capital flag would only ever come from the session's initial
         // state, so the sentence-restart path after `.`/`!`/`?` would never run.
         session.note_boundary(ch);
-        // The word is finished and the boundary character is inserted after it;
-        // the next word starts from an empty tail.
+        // The word is finished. Whether the boundary key puts anything on screen
+        // is the crux: a space does, and Escape, a function key, keypad Enter,
+        // Help, forward-delete, Tab and Return do not — they arrive at this same
+        // branch as control characters while inserting nothing at the caret (and
+        // Tab and Return move it outright).
+        //
+        // Modelling them as if they were inserted is what made this suite blind
+        // to a real corruption: the engine charged a backspace for a character
+        // that was never there, ate the space belonging to the previous word, and
+        // the model agreed with it because it had made the same assumption.
         screen.committed.push_str(&screen.tail);
-        screen.committed.push(ch);
+        if !ch.is_control() {
+            screen.committed.push(ch);
+        }
         screen.tail.clear();
         Ok(())
     }
@@ -286,6 +310,64 @@ fn backspace_step(session: &mut Session, screen: &mut Screen) -> Result<(), Stri
     Ok(())
 }
 
+/// The correction hotkey: swap the word just committed to its other reading and
+/// record the choice.
+///
+/// The engine owns whether there is anything to correct; this checks that when it
+/// says yes, the edit it hands back deletes exactly what is on screen and no
+/// more. An over-delete here reaches into the user's existing document.
+fn correction_step(session: &mut Session, screen: &mut Screen) -> Result<(), String> {
+    // What the engine believes is correctable, before it acts.
+    let described = session.correctable_word();
+    let Some(edit) = session.correct_last_word() else {
+        // Inert: nothing to correct. The screen must be untouched, which it is by
+        // construction here, and the engine must not be composing something new.
+        return Ok(());
+    };
+    let Some((on_screen, becomes)) = described else {
+        return Err("emitted a correction while reporting nothing to correct".to_string());
+    };
+    // The word being corrected sits in `committed` — it was finished at a
+    // boundary — so the edit is applied there, and an over-delete is a hole in
+    // the user's own text rather than in a word we own.
+    let before = screen.committed.clone();
+    let units: Vec<u16> = before.encode_utf16().collect();
+    if edit.backspaces > units.len() {
+        return Err(format!(
+            "correction deletes {} UTF-16 units from a {}-unit document",
+            edit.backspaces,
+            units.len()
+        ));
+    }
+    let keep = units.len() - edit.backspaces;
+    let mut after = String::from_utf16(&units[..keep])
+        .map_err(|_| "correction split a surrogate pair".to_string())?;
+    // The text it deleted must be exactly the word it claimed, plus one boundary.
+    let deleted = String::from_utf16(&units[keep..]).unwrap_or_default();
+    if !deleted.starts_with(&on_screen) {
+        return Err(format!(
+            "correction deleted {deleted:?}, which does not start with the word it \
+             named ({on_screen:?}) — it is eating text it does not own"
+        ));
+    }
+    if deleted.chars().count() != on_screen.chars().count() + 1 {
+        return Err(format!(
+            "correction deleted {deleted:?} — expected {on_screen:?} plus exactly one \
+             boundary character"
+        ));
+    }
+    after.push_str(&edit.insert);
+    if !after.contains(&becomes) {
+        return Err(format!(
+            "correction inserted {:?}, which does not contain the replacement it \
+             named ({becomes:?})",
+            edit.insert
+        ));
+    }
+    screen.committed = after;
+    Ok(())
+}
+
 /// Keys weighted toward the ones that actually transform, so the search spends
 /// its budget in the interesting part of the space rather than on `q` and `y`.
 /// Telex tone keys (`f s r x j`), the diacritic doublers (`a e o d w`), the VNI
@@ -298,7 +380,16 @@ fn key() -> impl Strategy<Value = char> {
         4 => prop::sample::select(vec!['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']),
         3 => prop::sample::select(vec!['[', ']', '{', '}']),
         3 => prop::sample::select(vec![' ', '.', ',', '!', '-', '\'']),
+        // Boundary keys that insert **nothing** at the caret, or move it. These
+        // reach the same branch of the tap as a space — Escape, the function
+        // keys, keypad Enter, Help, forward-delete, Tab and Return all arrive
+        // here — and treating them as ordinary boundaries is how the correction
+        // came to delete the space belonging to the previous word and to post its
+        // edit into the next field. Excluding them from the generator is what let
+        // that ship.
+        3 => prop::sample::select(vec!['\u{1b}', '\u{10}', '\u{3}', '\u{7f}', '\t', '\r']),
         6 => Just(BACKSPACE),
+        5 => Just(CORRECT),
         2 => prop::sample::select(vec!['A', 'E', 'O', 'D', 'H', 'N', 'W', 'F']),
     ]
 }
@@ -565,4 +656,96 @@ fn every_render_option_combination_holds_for_real_words() {
         }
     }
     assert_eq!(checked, 3 * 16 * WORDS.len() * 3, "matrix coverage changed");
+}
+
+/// The correction after every kind of boundary, deterministically.
+///
+/// The generated suite reaches this only when it happens to produce a
+/// transforming word, then a boundary, then the hotkey, with nothing in between
+/// — rare enough that relying on it is hoping rather than testing. These are the
+/// three orderings that actually shipped broken, so they are pinned by name.
+#[test]
+fn the_correction_never_reaches_past_the_word_it_owns() {
+    // Boundaries the host really inserts, and boundaries it does not. The second
+    // group is the one that ate a character of the previous word.
+    const INSERTING: &[char] = &[' ', '.', ',', '!'];
+    const NOT_INSERTING: &[char] = &['\u{1b}', '\u{10}', '\u{3}', '\u{7f}', '\t', '\r'];
+
+    for word in ["was", "cats", "exit", "hoongf"] {
+        for (boundary, inserts) in NOT_INSERTING
+            .iter()
+            .map(|c| (*c, false))
+            .chain(INSERTING.iter().map(|c| (*c, true)))
+        {
+            let mut session = Options {
+                method: InputMethod::Telex,
+                auto_fix: true,
+                restore_english: false,
+                quick_telex: false,
+                telex_brackets: false,
+                strict_spell_check: false,
+                auto_capitalize: false,
+                macro_defined: false,
+            }
+            .session();
+            let mut screen = Screen::default();
+            // Existing text the correction must never touch.
+            screen.committed.push_str("xin chào ");
+
+            for ch in word.chars() {
+                step(&mut session, &mut screen, ch).expect("typing");
+            }
+            step(&mut session, &mut screen, boundary).expect("boundary");
+            let document_before = screen.committed.clone();
+
+            match correction_step(&mut session, &mut screen) {
+                Ok(()) => {}
+                Err(why) => panic!("{word:?} + {boundary:?}: {why}"),
+            }
+            assert!(
+                screen.committed.starts_with("xin chào "),
+                "{word:?} + {boundary:?}: the correction reached into the preceding \
+                 text — {:?} became {:?}",
+                document_before,
+                screen.committed
+            );
+            if !inserts {
+                assert_eq!(
+                    screen.committed, document_before,
+                    "{word:?} + {boundary:?}: nothing was inserted at the caret, so \
+                     there was nothing to correct"
+                );
+            }
+        }
+    }
+}
+
+/// Committing twice must not emit a second edit for a word already finished.
+///
+/// Its own test rather than a line in the shared model: a second `commit` clears
+/// the correction memory, so checking it inline disabled the correction coverage
+/// for everything after it.
+#[test]
+fn committing_twice_emits_nothing_the_second_time() {
+    for word in ["hoongf", "exit", "was", "nguowif"] {
+        let mut session = Options {
+            method: InputMethod::Telex,
+            auto_fix: true,
+            restore_english: false,
+            quick_telex: false,
+            telex_brackets: false,
+            strict_spell_check: false,
+            auto_capitalize: false,
+            macro_defined: false,
+        }
+        .session();
+        for ch in word.chars() {
+            session.process_key(ch);
+        }
+        let _ = session.commit();
+        assert!(
+            session.commit().is_none(),
+            "{word:?}: the second commit emitted an edit for a finished word"
+        );
+    }
 }

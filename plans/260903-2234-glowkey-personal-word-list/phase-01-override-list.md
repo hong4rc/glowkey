@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "The override list"
-status: pending
+status: completed
 priority: P1
 effort: "0.5d"
 dependencies: []
@@ -104,11 +104,11 @@ index. Same relationship as the plan files and `plans.db`.
 
 ## Success Criteria
 
-- [ ] All five test pairs above pass
-- [ ] `cargo test --workspace` green including `tests/properties.rs`
-- [ ] An old `settings.json` loads and gains an empty list
-- [ ] Lookup is a map, not a scan
-- [ ] Clippy silent
+- [x] All five test pairs above pass
+- [x] `cargo test --workspace` green including `tests/properties.rs`
+- [x] An old `settings.json` loads and gains an empty list
+- [x] Lookup is a map, not a scan
+- [x] Clippy silent
 
 ## Risk Assessment
 

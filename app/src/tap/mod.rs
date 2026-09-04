@@ -103,6 +103,17 @@ pub(crate) struct TapState {
     /// True while the Settings window is recording a custom toggle hotkey: the
     /// next key-down with ⌃ or ⌥ becomes the hotkey; Escape cancels.
     recording_hotkey: RefCell<bool>,
+    /// Set by `decide` when it changed something that must reach the settings
+    /// file, and consumed by `handle_key_down`.
+    ///
+    /// `decide` is deliberately free of disk side effects — that is what lets the
+    /// tests drive it with real events without writing to the user's real
+    /// settings file — so it cannot save for itself. Without this the correction
+    /// hotkey recorded its decision in memory only, and every word the user
+    /// taught GlowKey was lost at quit: the feature looked like it had learned,
+    /// the Personal Words window even showed the word, and a restart forgot all
+    /// of it.
+    pending_save: Cell<bool>,
 }
 
 impl TapState {
@@ -122,6 +133,7 @@ impl TapState {
             source,
             recent_emits: RefCell::new(VecDeque::new()),
             recording_hotkey: RefCell::new(false),
+            pending_save: Cell::new(false),
         })
     }
 

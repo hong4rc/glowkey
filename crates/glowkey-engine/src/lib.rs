@@ -213,11 +213,21 @@ struct CorrectableWord {
     raw: String,
     /// The Vietnamese rendering of those keys.
     rendered: String,
-    /// Which of the two is on screen right now.
-    on_screen: WordPreference,
-    /// The boundary character typed after the word, which the correction has to
-    /// step back over and then put back.
-    boundary: char,
+    /// The exact text sitting on screen, stored rather than derived.
+    ///
+    /// An enum saying "raw" or "Vietnamese" cannot express what is actually
+    /// there the moment `commit` can restore to a *third* string — which is
+    /// precisely what the planned ASCII-render restore does. The backspace count
+    /// comes from this field, so it can never disagree with the screen.
+    on_screen: String,
+    /// The boundary character the host inserted after the word.
+    ///
+    /// `None` until `note_boundary` supplies it, and the correction refuses while
+    /// it is `None`. That removes an ordering requirement rather than documenting
+    /// one: a caller that commits without noting a boundary gets an inert
+    /// keystroke instead of an edit that under-deletes by one and strands a
+    /// character.
+    boundary: Option<char>,
 }
 
 /// Which reading of one set of typed keys the user wants.
@@ -229,9 +239,14 @@ struct CorrectableWord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum WordPreference {
     /// Keep the keys as typed: `cats` stays `cats`.
+    ///
+    /// The aliases exist because this list is meant to be hand-editable, and
+    /// `"raw"` is what a person writes.
     #[default]
+    #[serde(alias = "raw", alias = "typed")]
     Raw,
     /// Keep the Vietnamese rendering: `cats` becomes `cát`.
+    #[serde(alias = "vietnamese", alias = "vi")]
     Vietnamese,
 }
 
@@ -245,9 +260,34 @@ pub enum WordPreference {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WordOverride {
     /// The typed keys, lowercase.
+    #[serde(default)]
     pub keys: String,
-    /// Which reading to keep.
+    /// Which reading to keep. An unrecognised or missing value reads as "keep
+    /// what was typed", the safe answer.
+    ///
+    /// Lenient on purpose, because hand-editing this list is a documented
+    /// workflow and the file is parsed with `unwrap_or_default`: one mistyped
+    /// verdict used to discard **every** setting in it — exclusions, macros,
+    /// hotkey, the lot — and the next change from the UI then wrote the defaults
+    /// back over them. Losing a curated exclusion list to a typo in an unrelated
+    /// field is not a trade anyone would accept, so this field refuses to be the
+    /// thing that fails the document.
+    #[serde(default, deserialize_with = "lenient_preference")]
     pub prefer: WordPreference,
+}
+
+/// Reads a word preference, treating anything unrecognised as the default.
+///
+/// See [`WordOverride::prefer`] for why this cannot be allowed to fail.
+fn lenient_preference<'de, D>(deserializer: D) -> Result<WordPreference, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer).unwrap_or_default();
+    Ok(match raw.to_ascii_lowercase().as_str() {
+        "vietnamese" | "vi" => WordPreference::Vietnamese,
+        _ => WordPreference::Raw,
+    })
 }
 
 /// The `version` a UniKey macro-table header declares for a UTF-8 body. Anything
@@ -1266,10 +1306,24 @@ impl Session {
             self.pending_capital = true;
         }
         // `commit` runs before this and cannot know which key ended the word, so
-        // it leaves the boundary blank and this fills it in. A correction has to
+        // it leaves the boundary empty and this fills it in. A correction has to
         // step back over that character and put it back afterwards.
-        if let Some(word) = self.correctable.as_mut() {
-            word.boundary = ch;
+        //
+        // **Only a character the host actually inserts counts.** Several keys
+        // reach the boundary path while putting nothing at the caret — Escape,
+        // the function keys, keypad Enter, Help and forward-delete all arrive as
+        // control characters — and charging a backspace for one of them ate the
+        // space belonging to the *previous* word and typed a control code into
+        // the document. Tab and Return are control characters too, and they are
+        // worse: they move the caret entirely, so a correction after Tab posted
+        // its edit into the next field, and after Return in a send-on-enter app
+        // into a conversation that had already been sent. One rule covers all of
+        // them, and the conservative reading of the blind model (§5) is the right
+        // one: if the caret may have moved, there is nothing to correct.
+        if ch.is_control() {
+            self.forget_last_word();
+        } else if let Some(word) = self.correctable.as_mut() {
+            word.boundary = Some(ch);
         }
     }
 
@@ -1380,6 +1434,11 @@ impl Session {
     /// Records the frontmost application and flushes any in-progress word so it
     /// cannot leak across a focus change.
     pub fn set_frontmost_app(&mut self, bundle_id: impl Into<String>) {
+        // A change of app, mode or exclusion means the caret is somewhere else or
+        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // claimed this happened; it did not, and an app that activates itself (a
+        // call popup, a finished build) changes focus with no event to flush on.
+        self.forget_last_word();
         self.current_bundle_id = Some(bundle_id.into());
         self.engine.reset();
     }
@@ -1401,6 +1460,11 @@ impl Session {
     /// deliberate, permanent removal goes through the Excluded Apps editor
     /// ([`exclusions_mut`](Self::exclusions_mut) → `remove`).
     pub fn toggle_app_exclusion(&mut self, bundle_id: &str) -> ExclusionToggle {
+        // A change of app, mode or exclusion means the caret is somewhere else or
+        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // claimed this happened; it did not, and an app that activates itself (a
+        // call popup, a finished build) changes focus with no event to flush on.
+        self.forget_last_word();
         self.current_bundle_id = Some(bundle_id.to_string());
         self.engine.reset();
         if self.exclusions.is_excluded(bundle_id) {
@@ -1422,6 +1486,11 @@ impl Session {
     /// Toggles VN/EN mode and flushes the current word. Has no effect on whether an
     /// excluded application transforms — exclusion still wins.
     pub fn toggle_mode(&mut self) -> InputMode {
+        // A change of app, mode or exclusion means the caret is somewhere else or
+        // the word is no longer ours to edit. `forget_last_word`'s own comment
+        // claimed this happened; it did not, and an app that activates itself (a
+        // call popup, a finished build) changes focus with no event to flush on.
+        self.forget_last_word();
         self.mode = match self.mode {
             InputMode::Vietnamese => InputMode::English,
             InputMode::English => InputMode::Vietnamese,
@@ -1572,19 +1641,18 @@ impl Session {
         self.correctable = if self.engine.is_composing() {
             let raw = self.engine.raw_string();
             let rendered = self.engine.current_word().to_string();
-            // What is on screen is the raw keys if something restored them, and
-            // the rendering otherwise.
+            // Whatever the restore inserted is what the shell will put on screen;
+            // with no restore, the rendering is already there.
             let on_screen = match &restore {
-                Some(edit) if edit.insert == raw => WordPreference::Raw,
-                Some(_) => WordPreference::Vietnamese,
-                None => WordPreference::Vietnamese,
+                Some(edit) => edit.insert.clone(),
+                None => rendered.clone(),
             };
             // Nothing to correct when both readings are the same word.
             (raw != rendered).then_some(CorrectableWord {
                 raw,
                 rendered,
                 on_screen,
-                boundary: '\0',
+                boundary: None,
             })
         } else {
             None
@@ -1606,37 +1674,54 @@ impl Session {
     /// learn whichever direction the user happened to stop on.
     pub fn correct_last_word(&mut self) -> Option<KeyResponse> {
         let word = self.correctable.take()?;
+        // The word just changed identity on screen, so nothing about it is
+        // re-composable any more. Clearing only `correctable` and leaving
+        // `last_committed` behind is a guaranteed corruption: the following
+        // Backspace re-composes the *old* rendering, and the next letter is then
+        // diffed against a baseline that no longer matches the screen —
+        // `was `⌃⇧W⌫`f` produced `wừa`. Three ordinary keystrokes.
+        self.forget_last_word();
         if self.engine.is_composing() {
             // Mid-word: the caret is not just after that boundary any more.
             return None;
         }
-        let (on_screen, replacement, prefer) = match word.on_screen {
-            WordPreference::Raw => (&word.raw, &word.rendered, WordPreference::Vietnamese),
-            WordPreference::Vietnamese => (&word.rendered, &word.raw, WordPreference::Raw),
+        // No boundary means the host inserted nothing after the word, so the
+        // caret's position is not something this can reason about.
+        let boundary = word.boundary?;
+        // Swap to whichever reading is not the one on screen. Comparing against
+        // the raw keys rather than the rendering means a third string — an
+        // ASCII-render restore, say — falls back to restoring what was typed,
+        // which is always a defensible answer.
+        let (replacement, prefer) = if word.on_screen == word.raw {
+            (word.rendered.clone(), WordPreference::Vietnamese)
+        } else {
+            (word.raw.clone(), WordPreference::Raw)
         };
         self.set_word_override(&word.raw, prefer);
-        // Delete the boundary and the word, then insert the other reading and put
+        // Delete the word and its boundary, then insert the other reading and put
         // the boundary back — one edit, one ordered post, so nothing can arrive
         // out of order (`docs/handoff.md` §5).
-        let mut insert = replacement.clone();
-        let mut backspaces = on_screen.encode_utf16().count();
-        if word.boundary != '\0' {
-            backspaces += word.boundary.len_utf16();
-            insert.push(word.boundary);
-        }
+        let mut insert = replacement;
+        insert.push(boundary);
         Some(KeyResponse {
             handled: true,
-            backspaces,
+            backspaces: word.on_screen.encode_utf16().count() + boundary.len_utf16(),
             insert,
         })
     }
 
-    /// The word that a correction would act on, for the on-screen confirmation.
+    /// The word a correction would act on and what it would become, for the
+    /// on-screen confirmation. `None` when there is nothing to correct.
     #[must_use]
-    pub fn correctable_word(&self) -> Option<(String, WordPreference)> {
-        self.correctable
-            .as_ref()
-            .map(|w| (w.raw.clone(), w.on_screen))
+    pub fn correctable_word(&self) -> Option<(String, String)> {
+        let word = self.correctable.as_ref()?;
+        word.boundary?;
+        let becomes = if word.on_screen == word.raw {
+            word.rendered.clone()
+        } else {
+            word.raw.clone()
+        };
+        Some((word.on_screen.clone(), becomes))
     }
 
     /// On a Backspace that deletes the boundary immediately after a just-committed

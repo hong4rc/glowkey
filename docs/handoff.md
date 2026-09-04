@@ -63,11 +63,12 @@ Cargo workspace:
   mode, auto-fix, launch-at-login, reset, reveal log, Settings, About, Quit).
 - `prefs/` — Settings window, an `NSTabView` of four panes (General / Typing /
   Corrections / Apps & macros), plus the separate **Excluded Apps** and
-  **Macros** windows. Split five ways (2026-09-03, from 1423 lines): `mod.rs`
+  **Macros** windows. Split six ways (2026-09-03, from 1423 lines): `mod.rs`
   (the `define_class!` controller and its actions), `tabs.rs` (the four panes),
   `excluded.rs`, `macros_window.rs` (including the import/export bodies, moved
   out of the class where 141 lines of file dialog sat among forty four-line
-  toggles), `widgets.rs` (the shared row/label/stack helpers). The panes exist
+  toggles), `personal_words.rs` (the per-word ambiguity decisions, §6.3),
+  `widgets.rs` (the shared row/label/stack helpers). The panes exist
   because a single column had grown past 800 points — each tab builds its own
   stack via `tab_stack`, and the tab title carries the grouping that section
   headers used to.
@@ -96,6 +97,16 @@ Cargo workspace:
   Words that merely *contain* the pair still restore (`address`, `odd`, `sudden`),
   since their đ is not leading.
 - **Re-composition**: `hồng`␣⌫`z` → `hông` (deleting the boundary re-opens the word).
+- **Personal word list + ⌃⇧W** (2026-09-03): a per-word answer to the
+  English/Telex ambiguity, which §6.3 had recorded as unresolvable. A word pinned
+  to either reading beats auto-fix, the curated English list and the global
+  switch, in both directions, and loses only to a macro — so `was`→`was` and
+  `cats`→`cát` hold at the same time, which no setting of the global switch can
+  do. **⌃⇧W** right after a word swaps it and records the choice; the list is
+  managed in Settings → Corrections → Personal Words…. The hotkey is fixed, like
+  ⌃⇧E and unlike the VN/EN toggle, and the recorder refuses both.
+  `tests/word_overrides.rs`, and the correction is modelled in
+  `tests/properties.rs`.
 - **Mid-word backspace stays composed**: `hoongf`⌫`z` → `hôn`. The host does the
   delete, so the engine has to land on exactly what the screen shows — the render
   minus its last character (`hồn`), which means dropping the raw `g` and keeping
@@ -110,7 +121,7 @@ Cargo workspace:
   recorder**: the "Custom…" segment in Settings arms a recorder that captures the
   next ⌃/⌥ combo (`HotkeyPreset::Custom`). Safety: while armed, only ⌃/⌥ combos
   are intercepted — plain typing and every ⌘ shortcut pass through; Esc, any
-  mouse click, or switching apps cancels; ⌃⇧E is rejected (reserved for the
+  mouse click, or switching apps cancels; ⌃⇧E and ⌃⇧W are rejected (reserved for the
   per-app toggle).
 - **Chromium omnibox guard**: before emitting backspaces in a Chromium browser,
   one AX check (focused element is an `AXTextField` with non-empty
@@ -257,17 +268,36 @@ Cargo workspace:
    defaults merge into old settings files at load (tombstones in
    `removed_default_exclusions`), so `org.alacritty` etc. self-heal. Permanent
    removal is still possible, but only via the Excluded Apps window.
-3. **English/Telex ambiguity** — MITIGATED by the opt-in "Restore common English
-   words" (curated list, `english.rs`). Still inherent in principle, and the
-   trade-off is wide: with the option ON, syllables typed with a trailing tone
-   key that collide with listed words become untypeable in that key order —
-   á→as, í→is, ú→us, ò→of, ỏ→or, mã→max, sĩ→six, thú→thus, cả→car, hải→hair,
-   tả→tar, cát→cats, sét→sets… That is exactly why it is OFF by default; the
-   Settings caption states it. The **per-word escape hatch already exists**,
-   inherited from the `vi` crate: pressing the diacritic key again rejects the
-   mark and leaves the literal key (`cass`→`cas`, `aaa`→`aa`, `ddd`→`dd`,
-   `hoongff`→`hôngf`) — the same gesture Unikey uses. Pinned by
-   `repeating_the_diacritic_key_rejects_it` in `tests/telex.rs`.
+3. **English/Telex ambiguity** — RESOLVED per word (2026-09-03), still inherent
+   in principle. The same keystrokes are legitimate Vietnamese and legitimate
+   English, and no blind rule decides which: `was` is `ứa`, `cats` is `cát`.
+
+   Two blunt instruments existed and both remain. The opt-in "Restore common
+   English words" (curated list, `english.rs`) is global, and its trade-off is
+   wide — with it ON, syllables typed with a trailing tone key that collide with
+   listed words become untypeable in that key order (á→as, í→is, ú→us, ò→of,
+   ỏ→or, mã→max, sĩ→six, thú→thus, cả→car, hải→hair, tả→tar, cát→cats, sét→sets),
+   which is why it ships OFF. And pressing a diacritic key again rejects the mark
+   (`cass`→`cas`, `hoongff`→`hôngf`), the gesture Unikey uses, pinned by
+   `repeating_the_diacritic_key_rejects_it` in `tests/telex.rs` — but nothing
+   remembered it, so the same word had to be rejected again every time.
+
+   **The answer is now per word.** `Settings.word_overrides` pins a word to
+   either reading; an override beats auto-fix, the curated list and the global
+   switch, in both directions, and loses only to a macro. With it, `was`→`was`
+   and `cats`→`cát` are both true at once, which no setting of the global switch
+   can achieve. Managed in Settings → Corrections → **Personal Words…**, and
+   learned in one keystroke: **⌃⇧W** right after a word swaps it to the other
+   reading and records the choice. `tests/word_overrides.rs`.
+
+   Three things about ⌃⇧W are load-bearing and each is a bug that shipped once:
+   it forgets the word afterwards (a corrected word must not re-compose, or the
+   next Backspace reopens the old rendering and the letter after that eats a
+   character); it refuses when the boundary key inserted nothing at the caret
+   (Escape, function keys, keypad Enter, Help, ⌦ — and Tab and Return, which move
+   the caret outright); and the decision is written to disk from
+   `handle_key_down`, because `decide` is deliberately free of disk side effects
+   and the feature otherwise forgot everything at quit.
 4. **All GUI is unverifiable headless** (unchanged) — new controls to eyeball:
    English-restore checkbox, the 5-segment hotkey picker ("Custom…" arms the
    recorder; the caption row shows "Current: …"), "VI ⚠" HUD variant.

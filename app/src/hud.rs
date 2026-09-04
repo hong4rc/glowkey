@@ -89,9 +89,15 @@ impl HudController {
     fn show(&self, text: &str) {
         if let Some(label) = self.ivars().label.borrow().as_ref() {
             label.setStringValue(&NSString::from_str(text));
-            // The panel is fixed-width; longer texts ("VI ⚠") need a smaller font
-            // than the two-letter "VI"/"EN" to fit.
-            let size = if text.chars().count() <= 2 { 64.0 } else { 36.0 };
+            // The panel is fixed-width, so the font shrinks as the text grows.
+            // Three bands rather than two: "VI"/"EN", the warning variants like
+            // "VI ⚠", and the correction flash ("was → ứa"), which names both
+            // readings and is the longest thing shown here.
+            let size = match text.chars().count() {
+                0..=2 => 64.0,
+                3..=6 => 36.0,
+                _ => 20.0,
+            };
             label.setFont(Some(&NSFont::systemFontOfSize(size)));
         }
         if let Some(window) = self.ivars().window.borrow().as_ref() {

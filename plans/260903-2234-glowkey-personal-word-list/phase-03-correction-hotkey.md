@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "The correction hotkey"
-status: pending
+status: completed
 priority: P1
 effort: "1d"
 dependencies: [1, 2]
@@ -115,15 +115,15 @@ the correction key as their VN/EN toggle and lose both.
 
 ## Success Criteria
 
-- [ ] `was`␣ then ⌃⇧W gives `was ` on screen, and `was` is in the list as Raw
-- [ ] Typing `was`␣ again gives `was` with no keystroke
-- [ ] `cát`␣ then ⌃⇧W gives `cats ` and pins Raw; pressing it on `cats`␣ pins
+- [x] `was`␣ then ⌃⇧W gives `was ` on screen, and `was` is in the list as Raw
+- [x] Typing `was`␣ again gives `was` with no keystroke
+- [x] `cát`␣ then ⌃⇧W gives `cats ` and pins Raw; pressing it on `cats`␣ pins
       Vietnamese — the direction follows what is on screen, not a fixed side
-- [ ] A second press does nothing
-- [ ] After a mouse click, a caret key, or an app switch, the key does nothing
-- [ ] It does nothing in an excluded app
-- [ ] The HUD says what was learned
-- [ ] `tests/properties.rs` still green, clippy silent
+- [x] A second press does nothing
+- [x] After a mouse click, a caret key, or an app switch, the key does nothing
+- [x] It does nothing in an excluded app
+- [x] The HUD says what was learned
+- [x] `tests/properties.rs` still green, clippy silent
 
 ## Risk Assessment
 
@@ -144,3 +144,58 @@ the correction key as their VN/EN toggle and lose both.
 - **The user cannot find what it learned.** Phase 2 exists first for this reason,
   and the HUD flash means the write is announced rather than silent. If the flash
   proves annoying it can go; the window cannot.
+
+## Review — 2026-09-04
+
+`code-reviewer` found **three reachable document-corruption paths** in this
+phase, all fixed. Phases 1 and 2 came back clean.
+
+**The word stayed re-composable after being corrected.** The correction cleared
+its own memory but left `last_committed` describing a word no longer on screen,
+so the next Backspace reopened the *old* rendering and the letter after it was
+diffed against a baseline that no longer matched: `was `⌃⇧W⌫`f` produced `wừa`.
+Three ordinary keystrokes, and it always corrupted. Fixed by routing the
+correction through `forget_last_word()` — the tenth clear-site, which I had added
+and not routed through the helper I wrote for exactly this reason.
+
+**Keys that insert nothing were charged as boundaries.** Escape, the function
+keys, keypad Enter, Help and forward-delete all reach the boundary branch as
+control characters while putting nothing at the caret, so the edit deleted one
+unit too many — eating the space belonging to the *previous* word and typing a
+control code into the document (`xin chào ứa` + Escape + ⌃⇧W → `xin chàowas␛`).
+Pressing Escape to dismiss a popover is routine, and every function key does it.
+
+**Tab and Return moved the caret entirely.** Both are control characters too, and
+both are worse than a miscount: after Tab the edit posts into the next field
+(deleting up to three characters GlowKey never wrote), and after Return in a
+send-on-enter application into a message already sent. One rule covers all three
+findings — a word is only correctable when the boundary key actually inserted
+something — and it is the conservative reading of the blind model.
+
+Also fixed: the decision was **never written to disk** (`decide` is deliberately
+free of disk side effects, so it now flags `handle_key_down` to save), which
+falsified this phase's headline claim; an app that activates itself did not clear
+the memory although `forget_last_word`'s own comment said it did; the `on_screen`
+enum could not express a third restored string and would have broken silently
+when the ASCII-render restore lands on the same function, so it stores the text
+itself; the `'\0'` sentinel became `Option<char>`, which removes the call-order
+requirement rather than documenting it; one mistyped verdict in a hand-edited
+settings file discarded every other setting; and the HUD now names both readings.
+
+### The harness lesson, which is the real one
+
+None of it was caught, and the reason was structural rather than luck:
+`correct_last_word` had **no property coverage at all**. Adding it exposed two
+further layers of self-deception, both mine:
+
+1. The model pushed control characters onto the screen — sharing the engine's
+   wrong belief, so there was nothing to disagree about. A model that makes the
+   same assumption as the code under test cannot falsify it.
+2. Once that was fixed the mutation still passed, because the model called
+   `commit()` a second time to assert double-commit was inert — and that call
+   clears the correction memory. Every correction check downstream silently
+   became "nothing to correct" and returned OK. **A probe that destroys the state
+   it is probing is worse than no probe, because it looks like coverage.** The
+   double-commit assertion now lives in its own test.
+
+With both fixed, re-introducing either critical bug fails the suite by name.

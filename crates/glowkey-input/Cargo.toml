@@ -1,0 +1,13 @@
+[package]
+name = "glowkey-input"
+version = "0.1.0"
+description = "Platform-free input policy for GlowKey — the decision ladder and hotkey matching"
+edition = "2021"
+license = "MIT"
+
+# Deliberately the engine and nothing else. This crate is the policy every
+# platform runs, so a dependency on an OS crate here would be a dependency on
+# that OS everywhere — which is the whole thing the split exists to prevent.
+# CI compiles and tests it on ubuntu-latest with `-D warnings` for that reason.
+[dependencies]
+glowkey-engine = { path = "../glowkey-engine" }

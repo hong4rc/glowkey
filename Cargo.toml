@@ -2,7 +2,7 @@
 # Workspace root. The engine crate is platform-free and unit-testable on any OS;
 # the app crate is the macOS InputMethodKit shell (built via `scripts/build-app.sh`).
 [workspace]
-members = ["crates/glowkey-engine", "app"]
+members = ["crates/glowkey-engine", "crates/glowkey-input", "app"]
 resolver = "2"
 
 # Release profile tuned like the sibling `marau` project: small, fast, stripped.

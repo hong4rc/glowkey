@@ -1,0 +1,42 @@
+{
+  "exclusions": [
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "com.apple.dt.Xcode",
+    "com.microsoft.VSCode",
+    "com.jetbrains.intellij",
+    "com.jetbrains.pycharm",
+    "com.jetbrains.WebStorm",
+    "dev.warp.Warp-Stable",
+    "dev.warp.Warp-Preview",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "com.mitchellh.ghostty",
+    "org.alacritty",
+    "co.zeit.hyper"
+  ],
+  "removed_default_exclusions": [],
+  "auto_fix": true,
+  "style": "New",
+  "input_method": "Telex",
+  "auto_capitalize": false,
+  "toggle_hotkey": {
+    "Custom": {
+      "control": true,
+      "shift": false,
+      "option": true,
+      "keycode": 40,
+      "key_char": "K"
+    }
+  },
+  "macros": [],
+  "restore_english_words": false,
+  "open_settings_at_launch": true,
+  "language": "System",
+  "quick_telex": false,
+  "telex_brackets": false,
+  "strict_spell_check": false,
+  "always_macro": false,
+  "welcome_shown": false,
+  "word_overrides": []
+}

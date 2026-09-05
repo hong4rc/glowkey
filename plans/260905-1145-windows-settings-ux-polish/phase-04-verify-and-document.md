@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Verify and document"
-status: pending
+status: completed
 priority: P2
 effort: "1h"
 dependencies: [1, 2, 3]

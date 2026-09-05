@@ -233,9 +233,9 @@ impl UiHost {
                 }
                 let app = Arc::clone(app);
                 #[cfg(test)]
-                self.asked_for.push(list_id(list));
+                self.asked_for.push(settings_ui::list_viewport_id(list));
                 ctx.show_viewport_deferred(
-                    list_id(list),
+                    settings_ui::list_viewport_id(list),
                     settings_ui::list_viewport_builder(list),
                     move |ctx, _class| {
                         let mut app = lock(&app);
@@ -287,10 +287,6 @@ fn settings_id() -> egui::ViewportId {
 
 fn about_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of(ABOUT_VIEWPORT)
-}
-
-fn list_id(list: ListId) -> egui::ViewportId {
-    egui::ViewportId::from_hash_of(("glowkey_list", list))
 }
 
 /// A lock that survives a poisoned mutex: the UI is the last thing that should
@@ -380,13 +376,16 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
         assert!(host.asked_for.contains(&settings_id()));
         assert!(
-            host.asked_for.contains(&list_id(ListId::Macros)),
+            host.asked_for
+                .contains(&settings_ui::list_viewport_id(ListId::Macros)),
             "{:?}",
             host.asked_for
         );
         lock(host.settings.as_ref().unwrap()).set_list_open(ListId::Macros, false);
         let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
-        assert!(!host.asked_for.contains(&list_id(ListId::Macros)));
+        assert!(!host
+            .asked_for
+            .contains(&settings_ui::list_viewport_id(ListId::Macros)));
     }
 
     /// The root shim refuses to close: it carries the event loop.

@@ -113,7 +113,10 @@ returns `RecreationAttempt`, which is now logged rather than silent. Fixing it
 properly is a design decision — a separate process, or a dedicated long-lived UI
 thread — not a patch.
 
-### 3. The list editors are overlays, not windows
+### 3. The list editors are overlays, not windows — CLOSED 2026-09-05
+
+Each is its own deferred viewport now (`plans/260905-1145-windows-settings-ux-polish/`).
+The paragraph below is the history.
 
 Excluded apps, Macros and Personal words are `egui::Window` overlays inside the
 main window; on macOS they are genuinely separate windows. They were inset

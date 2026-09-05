@@ -153,6 +153,17 @@ listed with what "wrong" looks like, because several fail quietly.
 - [ ] "Open this window at launch" on: Settings appears at startup. Off: it does
       not.
 - [ ] Tray Quit ends the process: no `GlowKey.exe` left in Task Manager.
+- [ ] Manage… on Excluded apps, Macros and Personal words each opens its own
+      window beside Settings, with a taskbar entry; Esc closes it; closing
+      Settings closes them too; an app added in Excluded apps is saved when
+      Settings closes.
+- [ ] Every control and every caption starts on one vertical line, the control
+      column; checkboxes are not at the left margin.
+- [ ] Tab reaches the tab strip and each segmented control; ←/→ move the
+      selection and a ring shows on the raised segment; the hotkey popup opens
+      with Space/Enter.
+- [ ] The shortcut row shows keycaps; captions are plain text.
+- [ ] About: Copy puts the version and commit on the clipboard.
 
 ## Tier 6 — the shipped exclusion table
 

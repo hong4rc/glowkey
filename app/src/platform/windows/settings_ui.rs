@@ -16,8 +16,8 @@
 //! tab for tab and window for window, rather than inventing a second layout; the
 //! `t(english, vietnamese)` pairs are copied verbatim from the macOS source so
 //! the two interfaces cannot drift into naming the same setting two different
-//! things. The list editors are `egui::Window` overlays — the nearest thing this
-//! toolkit has to an auxiliary window.
+//! things. The list editors are windows of their own (`draw_list`), hosted by
+//! the same UI thread.
 //!
 //! About is **not** here. It belongs next to Settings in the tray menu, where
 //! macOS keeps it (`menu_bar.rs`); it is its own viewport (`about_ui`).
@@ -53,6 +53,12 @@ pub fn viewport_builder() -> egui::ViewportBuilder {
         .with_min_inner_size([420.0, 420.0])
         .with_resizable(true)
         .with_icon(window_icon())
+}
+
+/// A list editor's viewport id, shared by the root that asks for it and the
+/// button that brings it forward.
+pub(super) fn list_viewport_id(list: ListId) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("glowkey_list", list))
 }
 
 /// A list editor's viewport, before it opens.
@@ -300,7 +306,33 @@ fn segmented<T: PartialEq + Copy>(
     // enough; the track's interaction is what keeps the id alive.
     let track_response = ui.interact(track, base_id, egui::Sense::focusable_noninteractive());
     let focused = track_response.has_focus();
+    // What Tab lands on, for a screen reader: the control and its current choice.
+    {
+        let current = options
+            .iter()
+            .find(|(v, _)| *v == *value)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_default();
+        track_response.widget_info(move || {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, true, &current)
+        });
+    }
     if focused {
+        // egui turns arrow keys into focus moves before any widget runs, so a
+        // Right here would also hand focus to whatever sits to the right and
+        // below — the Manage… button, say. This filter is how sliders keep
+        // their arrows.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                base_id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: false,
+                    tab: false,
+                    escape: false,
+                },
+            )
+        });
         let selected = options.iter().position(|(v, _)| *v == *value).unwrap_or(0);
         let last = options.len().saturating_sub(1);
         let next = ui.input(|i| {
@@ -344,7 +376,16 @@ fn segmented<T: PartialEq + Copy>(
     for (i, width) in widths.iter().enumerate() {
         let rect =
             egui::Rect::from_min_size(egui::pos2(x, track.min.y), egui::vec2(*width, HEIGHT));
-        let response = ui.interact(rect, base_id.with(i), egui::Sense::click());
+        // Clickable but not a Tab stop: the track is the one focusable thing.
+        let response = ui.interact(
+            rect,
+            base_id.with(i),
+            egui::Sense {
+                click: true,
+                drag: false,
+                focusable: false,
+            },
+        );
         let selected = options[i].0 == *value;
         // What a screen reader hears for this segment.
         let label = options[i].1.clone();
@@ -526,8 +567,8 @@ fn finish_row(ui: &mut egui::Ui, help: Option<&str>, caption_x: f32) {
 /// In the control column, as the macOS form puts it: a checkbox is a control
 /// whose label is its own text, so it starts where every other control starts
 /// rather than at the pane's left edge. One axis for the eye to follow.
-fn checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str, help: Option<&str>) {
-    let column = label_column_width(ui) + COLUMN_GAP;
+fn checkbox_row(ui: &mut egui::Ui, column: f32, value: &mut bool, label: &str, help: Option<&str>) {
+    let column = column + COLUMN_GAP;
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
         ui.add_space(column);
@@ -540,11 +581,11 @@ fn checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str, help: Option<&
 /// every picker in the window lines up on one edge — the macOS `form_row`.
 fn control_row(
     ui: &mut egui::Ui,
+    column: f32,
     label: &str,
     help: Option<&str>,
     add: impl FnOnce(&mut egui::Ui),
 ) {
-    let column = label_column_width(ui);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
         // Right-aligned against the control, as the macOS form is.
@@ -566,8 +607,8 @@ fn control_row(
 /// [`LABEL_COLUMN`].
 ///
 /// A fixed column clipped "Toggle current app" to "ggle current app" — right
-/// alignment cuts from the left. Measuring every frame costs twenty small
-/// layouts and keeps the column right when the language changes mid-session.
+/// alignment cuts from the left. Measured once per tab per frame: twenty small
+/// layouts, and the column stays right when the language changes mid-session.
 fn label_column_width(ui: &egui::Ui) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let widest = TABS
@@ -599,7 +640,8 @@ fn list_row(ui: &mut egui::Ui, text: &str, buttons: impl FnOnce(&mut egui::Ui)) 
 /// The gap that separates one group of settings from the next, where the macOS
 /// stack uses `setCustomSpacing:`.
 fn group_gap(ui: &mut egui::Ui) {
-    ui.add_space((GROUP_GAP - ui.spacing().item_spacing.y).max(0.0));
+    // The row above already left `ROW_GAP`; only the difference is added.
+    ui.add_space((GROUP_GAP - ROW_GAP).max(0.0));
 }
 
 /// A section title, in the macOS settings shape: bold, small, secondary.
@@ -652,6 +694,8 @@ pub(super) struct SettingsApp {
     /// The value being edited. Every control writes here directly.
     pub(super) draft: Settings,
     tab: Tab,
+    /// The label column for this frame, measured once per tab in `render_tab`.
+    column: f32,
     /// `Some(None)` once the window has decided "closing, nothing to save";
     /// `Some(Some(settings))` once it has decided "closing, save this". Read
     /// once by the root through [`SettingsApp::take_result`].
@@ -694,6 +738,7 @@ impl SettingsApp {
             draft: initial.clone(),
             initial,
             tab: Tab::General,
+            column: LABEL_COLUMN,
             result: None,
             excluded_open: false,
             macros_open: false,
@@ -774,6 +819,7 @@ impl SettingsApp {
 
     /// Draws one tab: its sections, each a header and its rows.
     fn render_tab(&mut self, ui: &mut egui::Ui, tab: &TabSpec) {
+        self.column = label_column_width(ui);
         for (i, section) in tab.sections.iter().enumerate() {
             if i > 0 {
                 group_gap(ui);
@@ -826,7 +872,7 @@ impl SettingsApp {
                 // chose right. `set_language` is the same call the app makes at
                 // startup; the value is persisted like any other edit.
                 let before = self.draft.language;
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     segmented(
                         ui,
                         &mut self.draft.language,
@@ -840,7 +886,7 @@ impl SettingsApp {
                 }
             }
             Control::InputMethod(options) => {
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     segmented(
                         ui,
                         &mut self.draft.input_method,
@@ -851,7 +897,7 @@ impl SettingsApp {
                 });
             }
             Control::ToneMarks(options) => {
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     segmented(
                         ui,
                         &mut self.draft.style,
@@ -869,7 +915,7 @@ impl SettingsApp {
                 // open window is nowhere near the keystroke path.
                 let mut at_login = crate::platform::windows::startup::is_enabled();
                 let was = at_login;
-                checkbox_row(ui, &mut at_login, label, caption_text);
+                checkbox_row(ui, self.column, &mut at_login, label, caption_text);
                 if at_login != was && !crate::platform::windows::startup::set_enabled(at_login) {
                     // The write failed, so the checkbox must not go on claiming
                     // it worked. Nothing is stored here, so the next frame
@@ -881,14 +927,14 @@ impl SettingsApp {
                 let value = toggle
                     .settings_field(&mut self.draft)
                     .expect("every toggle but LaunchAtLogin is a Settings field");
-                checkbox_row(ui, value, label, caption_text);
+                checkbox_row(ui, self.column, value, label, caption_text);
             }
             Control::ToggleHotkey => {
                 // A popup rather than a segmented control: "Ctrl+Shift+Space"
                 // three times over does not fit a 460-point window, and the HIG
                 // reserves segments for a few short labels. macOS keeps its
                 // segmented glyphs; the spec does not care which.
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     let current = self.draft.toggle_hotkey;
                     egui::ComboBox::from_id_salt("toggle_hotkey")
                         .selected_text(hotkey_display(current))
@@ -905,7 +951,7 @@ impl SettingsApp {
                 });
             }
             Control::Shortcut(shortcut) => {
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     keycaps(ui, shortcut_display(shortcut));
                 });
             }
@@ -923,17 +969,25 @@ impl SettingsApp {
                     ListId::PersonalWords => t("words", "từ"),
                 };
                 let mut open = false;
-                control_row(ui, label, caption_text, |ui| {
+                control_row(ui, self.column, label, caption_text, |ui| {
                     let color = secondary_color(ui);
                     ui.label(egui::RichText::new(format!("{count} {unit}")).color(color));
                     open = ui.button(MANAGE.get()).clicked();
                 });
                 if open {
-                    self.set_list_open(list, true);
-                    // Only the root asks for windows, and this runs inside the
-                    // settings viewport: without a root repaint the flag would sit
-                    // unread until something else happened to wake it.
-                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    if self.list_open(list) {
+                        // Already open, maybe behind this window: bring it forward.
+                        ui.ctx().send_viewport_cmd_to(
+                            list_viewport_id(list),
+                            egui::ViewportCommand::Focus,
+                        );
+                    } else {
+                        self.set_list_open(list, true);
+                        // Only the root asks for windows, and this runs inside the
+                        // settings viewport: without a root repaint the flag would
+                        // sit unread until something else happened to wake it.
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
                 }
             }
         }
@@ -1277,7 +1331,6 @@ impl SettingsApp {
         self.render_tab(ui, spec);
     }
 
-    /// Every auxiliary window, drawn over the tabs.
     /// Whether a list editor's window is open. The root asks for the viewport
     /// while this is true.
     pub(super) fn list_open(&self, list: ListId) -> bool {
@@ -1302,7 +1355,10 @@ impl SettingsApp {
     /// tabs, followed the user from tab to tab, and had no taskbar entry.
     pub(super) fn draw_list(&mut self, list: ListId, ctx: &egui::Context) {
         apply_theme(ctx);
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Esc closes the window — unless a field has focus, where egui already
+        // uses Esc to leave the field; one key should not do both.
+        let typing = ctx.memory(|m| m.focused().is_some());
+        if !typing && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         egui::CentralPanel::default()
@@ -1311,10 +1367,17 @@ impl SettingsApp {
                     .fill(ctx.style().visuals.window_fill)
                     .inner_margin(egui::Margin::symmetric(16.0, 12.0)),
             )
-            .show(ctx, |ui| match list {
-                ListId::ExcludedApps => self.excluded_body(ui),
-                ListId::Macros => self.macros_body(ui),
-                ListId::PersonalWords => self.words_body(ui),
+            .show(ctx, |ui| {
+                // The whole body scrolls, so at the smallest window size the
+                // controls under a long list are still reachable.
+                egui::ScrollArea::vertical()
+                    .id_salt(("list_body", list))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match list {
+                        ListId::ExcludedApps => self.excluded_body(ui),
+                        ListId::Macros => self.macros_body(ui),
+                        ListId::PersonalWords => self.words_body(ui),
+                    });
             });
     }
 
@@ -1324,7 +1387,6 @@ impl SettingsApp {
     /// bare [`egui::Context`] with no window, no GPU and no event loop — which
     /// is how the tabs are smoke-tested. `eframe::Frame` is not used here and
     /// there is nothing else to keep the two together.
-    /// One frame of the window.
     pub(super) fn draw(&mut self, ctx: &egui::Context) {
         // Before anything is laid out, so a theme the user switched while the
         // window was open takes effect on this frame rather than the next one.
@@ -1651,7 +1713,7 @@ mod tests {
 
     /// The two states the default settings never put a tab in: auto-fix off,
     /// so the dependent row renders disabled, and a hotkey recorded on a Mac,
-    /// which has no radio of its own until the renderer adds one.
+    /// which the popup lists only because the renderer appends the saved value.
     #[test]
     fn dependent_and_foreign_hotkey_states_render() {
         let ctx = egui::Context::default();
@@ -1822,6 +1884,72 @@ mod tests {
         assert_eq!(value.get(), 2, "ArrowRight moved to the third segment");
         let _ = ctx.run(key_press(egui::Key::Home), |ctx| frame(ctx));
         assert_eq!(value.get(), 0, "Home jumped to the first");
+    }
+
+    /// The arrows stay with the control: a focusable button below and to the
+    /// right must not take focus on ArrowRight.
+    #[test]
+    fn arrows_do_not_hand_focus_to_a_neighbour() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let value = std::cell::Cell::new(0u8);
+        let rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+        let mut frame = |ctx: &egui::Context| {
+            egui::Area::new(egui::Id::new("segmented_neighbour"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let mut v = value.get();
+                    *rects.borrow_mut() = segmented(
+                        ui,
+                        &mut v,
+                        [
+                            (0u8, "One".to_string()),
+                            (1, "Two".to_string()),
+                            (2, "Three".to_string()),
+                        ],
+                    );
+                    value.set(v);
+                    ui.horizontal(|ui| {
+                        ui.add_space(200.0);
+                        let _ = ui.button("Manage…");
+                    });
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        let target = rects.borrow()[0].center();
+        let _ = click_segment(&ctx, &mut frame, target);
+        assert_eq!(value.get(), 0);
+        // The focus filter takes hold one frame after focus is gained, as
+        // egui's sliders do; between a click and a keypress there is always one.
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        let _ = ctx.run(key_press(egui::Key::ArrowRight), |ctx| frame(ctx));
+        assert_eq!(value.get(), 1, "first ArrowRight");
+        let _ = ctx.run(key_press(egui::Key::ArrowRight), |ctx| frame(ctx));
+        assert_eq!(
+            value.get(),
+            2,
+            "second ArrowRight: focus stayed on the control"
+        );
+    }
+
+    /// Esc closes a list window when nothing is being typed.
+    #[test]
+    fn a_list_window_closes_on_escape() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let mut app = SettingsApp::new(Settings::default());
+        app.set_list_open(ListId::Macros, true);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            app.draw_list(ListId::Macros, ctx)
+        });
+        let output = ctx.run(key_press(egui::Key::Escape), |ctx| {
+            app.draw_list(ListId::Macros, ctx)
+        });
+        let root = &output.viewport_output[&egui::ViewportId::ROOT];
+        assert!(root
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Close)));
     }
 
     /// With a screen reader on, a clicked segment reports its label.

@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "List editors as real windows"
-status: pending
+status: completed
 priority: P1
 effort: "4h"
 dependencies: []

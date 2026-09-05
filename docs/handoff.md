@@ -349,8 +349,9 @@ GlowKey now has a Windows backend. It is **early** and should not be relied on.
 **What is built.** `app/src/platform/windows/`: a `WH_KEYBOARD_LL` hook and
 `SendInput` injection running the same `glowkey-input` decision ladder as macOS,
 plus a tray icon, launch-at-login, the clipboard tools, an indicator with four
-states, and two `egui` windows — Settings, rendered from the same
-`settings_spec.rs` the macOS window uses, and About — hosted by one eframe event
+states, and the `egui` windows — Settings, rendered from the same
+`settings_spec.rs` the macOS window uses, About, and the three list editors —
+hosted by one eframe event
 loop on a dedicated thread for the life of the process (`decisions/0011`,
 `platform/windows/ui_thread.rs`). Settings reopens; About is a window, not a
 message box; "open at launch" is honoured. The engine's full suite passes on Windows and

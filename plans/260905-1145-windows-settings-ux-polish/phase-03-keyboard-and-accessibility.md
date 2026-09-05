@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Keyboard and accessibility"
-status: pending
+status: completed
 priority: P2
 effort: "3h"
 dependencies: [2]

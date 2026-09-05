@@ -1,7 +1,7 @@
 ---
 title: "Windows settings UX polish: every item, from screenshots"
 description: "Item-by-item improvements to the Windows settings and About windows: list editors as real windows, one alignment axis, even rhythm, a popup for long hotkey names, keycaps for shortcuts, keyboard and screen-reader access for the custom controls."
-status: pending
+status: completed
 priority: P2
 effort: "1-1.5 days"
 tags: [glowkey, windows, ui, ux, egui, settings]
@@ -27,7 +27,7 @@ keyboard nav, spacing rhythm, progressive disclosure).
 | 2 | Alignment | Two axes: form controls start at the label column (x≈150), checkboxes at the left margin (x≈30). Captions under checkboxes indent 22, captions under form rows indent to neither | One control axis. Checkboxes sit in the control column with no label text, as in the macOS form. Every caption aligns to the control column. |
 | 3 | Vertical rhythm | A checkbox row without a caption gets the same trailing gap as one with, so "Launch at login" → "Open at launch" is a 20-pt hole while captioned rows are tight | Constants: 6 between control and its caption, 10 between rows, 18 before a section header. One `row_gap` applied after the caption or the control, never both. |
 | 4 | Toggle Vietnamese hotkey | Three long segments ("Ctrl+Shift+Space") end 3 pt from the window edge; a fourth (a Mac-recorded custom) would overflow | A popup button (`egui::ComboBox` styled like `NSPopUpButton`: white, hairline, chevron) on Windows. Spec unchanged; the renderer picks the control. macOS keeps its segmented glyphs. HIG: segmented for ≤5 short labels, popup otherwise. |
-| 5 | Shortcut display ("Ctrl+Shift+E", and inside captions) | Plain body text, same colour as the label; hard to scan | Keycaps: each key in a small rounded badge (white/hairline in light, grey in dark), monospace-free, 11.5 pt. In the read-only row and where a caption names a shortcut. |
+| 5 | Shortcut display ("Ctrl+Shift+E", and inside captions) | Plain body text, same colour as the label; hard to scan | Keycaps in the read-only row. **Outcome:** keycaps inside caption text inflated the line and broke it oddly; captions stay text. |
 | 6 | Count + Manage rows | "Personal words 0 Manage…", "Excluded apps 20 Manage…": a bare number between label and button | Secondary text with a unit, "20 apps", "0 words", "0 macros", then the button. Count text in the caption colour. |
 | 7 | Segmented control (tabs and choices) | Track and raised segment read well. No keyboard focus, no arrow keys, no screen-reader name | Focusable: Tab reaches it, ←/→ move the selection, a focus ring on the raised segment; `WidgetInfo::selected` per segment for AccessKit. |
 | 8 | Checkboxes | Hairline and fill fine. Caption colour fine (≈6.6:1) | Only the alignment change from item 2. |
@@ -43,10 +43,10 @@ keyboard nav, spacing rhythm, progressive disclosure).
 
 | # | Phase | Status | Depends on |
 |---|---|---|---|
-| 1 | [List editors as real windows](./phase-01-start.md) | pending | — |
-| 2 | [Alignment, rhythm and controls](./phase-02-alignment-rhythm-and-controls.md) | pending | — |
-| 3 | [Keyboard and accessibility](./phase-03-keyboard-and-accessibility.md) | pending | 2 |
-| 4 | [Verify and document](./phase-04-verify-and-document.md) | pending | 1, 2, 3 |
+| 1 | [List editors as real windows](./phase-01-start.md) | done | — |
+| 2 | [Alignment, rhythm and controls](./phase-02-alignment-rhythm-and-controls.md) | done; caption keycaps dropped after a trial | — |
+| 3 | [Keyboard and accessibility](./phase-03-keyboard-and-accessibility.md) | done | 2 |
+| 4 | [Verify and document](./phase-04-verify-and-document.md) | done, light theme only; report `plans/reports/verification-260905-1216-windows-settings-ux-polish.md` | 1, 2, 3 |
 
 ## Acceptance criteria
 
@@ -54,17 +54,19 @@ keyboard nav, spacing rhythm, progressive disclosure).
    from Manage…, alongside Settings; Esc and X close; reopen works; the list
    fills the window and scrolls; edits still reach the draft and save on
    Settings close exactly as today.
-2. Every control on every tab starts at one x (the control column); every
-   caption starts there too. Row gaps are 10, control-to-caption 6, section
-   gap 18, verified by capture.
+2. Every control on every tab starts at one x (the control column); a caption
+   starts under its control's text (the column for a form row, the column plus
+   the checkbox glyph for a checkbox row). Row gaps are 10, control-to-caption
+   6, section gap 18, verified by capture.
 3. The hotkey is a popup on Windows; all four presets and a saved custom or
    Alt+Space value are reachable; the row fits with ≥ 20 pt to spare.
-4. Shortcuts render as keycaps in the shortcut row and in captions.
+4. Shortcuts render as keycaps in the shortcut row; captions stay text (trial
+   showed keycaps inflating running text).
 5. Count rows read "20 apps", "0 macros", "0 words" in the caption colour.
 6. Tab reaches the segmented controls and the popup; ←/→ change a segmented
    selection; a focus ring is visible; AccessKit exposes each segment's name
    and selected state (headless test on `WidgetInfo`).
-7. About is 280 pt tall with a Copy button beside the version.
+7. About is 300 pt tall with a Copy button under the version.
 8. `cargo test -p glowkey`, clippy (Windows and `aarch64-apple-darwin`) green.
    macOS renderer untouched except where the spec-neutral row layout helper
    changes require a compile fix.

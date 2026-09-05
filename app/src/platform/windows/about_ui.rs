@@ -17,7 +17,7 @@ use crate::strings::t;
 pub fn viewport_builder() -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
         .with_title(t("About GlowKey", "Giới thiệu GlowKey"))
-        .with_inner_size([360.0, 280.0])
+        .with_inner_size([360.0, 300.0])
         .with_resizable(false)
         .with_maximize_button(false)
         .with_minimize_button(false)
@@ -39,7 +39,8 @@ pub fn build_string() -> String {
 /// One frame of the window.
 pub fn draw(ctx: &egui::Context) {
     super::settings_ui::apply_theme(ctx);
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    let typing = ctx.memory(|m| m.focused().is_some());
+    if !typing && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
     egui::CentralPanel::default()

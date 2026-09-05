@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Alignment, rhythm and controls"
-status: pending
+status: completed
 priority: P1
 effort: "4h"
 dependencies: []

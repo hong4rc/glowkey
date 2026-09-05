@@ -695,18 +695,44 @@ stop both variants first.
 - Reports: `plans/reports/`. UI design: `docs/ui-design.md`. Checkpoint:
   superseded pointer only.
 
-## 11. Suggested next steps for a new session
+## 11. Suggested next steps for a new session (updated 2026-09-05)
 
-1. **Verify the freeze fix first** (§6.9). Toggle the Accessibility grant off
-   while typing and confirm nothing wedges — that is the user's own reproduction,
-   and it is the only unverified thing here that can hurt the whole machine.
-   `manual-verification.md` §9 carries the steps.
-2. Then the rest of the live pass, which has never been run end to end: the
-   omnibox guard in Chrome (`hoongf`→`hồng` in the address bar), the "VI ⚠" HUD on
-   ⌃⇧E in Ghostty, the Settings controls, hotkey recording, and re-composition
-   after a comma (`hoongf, ` ⌫⌫ `z` → `hông`).
-3. Read `EMIT took=` in a live Chromium window versus a plain field — the one
-   number §7 still calls an estimate.
-4. If the omnibox guard proves itself, consider extending it beyond Chromium
-   (Safari's address bar has the same autocomplete pattern) — kept narrow first.
-5. Everything in §6 is otherwise shipped; plan records in §10.
+The engine split (`decisions/0012`, plan `260905-1333`) and the shared settings
+spec with the Windows UI thread (`0010`, `0011`) all landed today on `main`. Both
+shells compile and their headless suites pass; the **macOS side of all of it is
+compile-checked only** and has not been run.
+
+1. **macOS runtime pass.** Build with `just dev`, then: the spec-rendered
+   Settings window (all four tabs, list editors, hotkey recording), ⌃⇧Space,
+   ⌃⇧E in Ghostty ("VI ⚠" HUD), and ⌃⇧W **with the Personal Words window
+   open** (the review found and fixed a blanked list there; nobody has watched
+   it work). Check the log reads `KEY` before `TOGGLE mode` now, as on Windows.
+2. **Windows desktop checks the user has not done yet**
+   (`manual-verification-windows.md` Tier 5): reopen Settings three times, About
+   with Esc and X, dark theme, ⌃⇧Space with About open, tray Quit leaves no
+   process. Never send synthetic keystrokes into the live session; use posted
+   window messages to GlowKey's own windows only.
+3. **macOS renderer parity, still unanswered by the user:** checkbox in the
+   control column, "N apps" count units, and the rhythm constants that the
+   Windows renderer got in plan `260905-1145`. Ask before doing.
+4. **Publishing.** `cargo publish --dry-run -p glowkey-engine` is green. The
+   session and input crates cannot be packaged until the engine is on
+   crates.io; `ci.yml` says where to add them. Before a first tag: drop
+   `continue-on-error` from the semver job, and make the session README louder
+   that `Session::builder()` without `.exclusions(..)` has no terminal rule.
+5. The older items below still stand: the freeze fix (§6.9) has never been
+   verified live, and the omnibox `EMIT took=` number in §7 is an estimate.
+
+### Working notes for the agent
+
+- The Bash tool rejects heredocs that contain an apostrophe, even inside a
+  quoted delimiter. Put multi-line patches in a Python file written with the
+  Write tool; have it write files only at the end so a failed assert leaves
+  nothing half-applied. On Windows, `glob` returns backslash paths.
+- Gates to run for a library change: `cargo test --workspace`, the three
+  library crates with and without `--features serde`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo clippy --target aarch64-apple-darwin -p
+  glowkey --all-targets -- -D warnings`, `cargo check --target
+  x86_64-unknown-linux-gnu` for the three crates, `cargo doc` with
+  `RUSTDOCFLAGS=-D warnings`. The macOS `--all-targets` check is what caught a
+  stale test field the previous phase had missed.

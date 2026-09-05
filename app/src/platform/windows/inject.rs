@@ -284,6 +284,62 @@ mod tests {
         }
     }
 
+    /// **`hoongf` emits exactly three backspaces and `ồng`, in that order.**
+    ///
+    /// This is the diff the address-bar defect is reported against, pinned at
+    /// the layer that builds the key sequence — the last point where the bug
+    /// could still be ours. It cannot fail and the browser still be at fault, so
+    /// when the next `hoồng` report arrives this test decides, in one run, which
+    /// side of the boundary to look at.
+    ///
+    /// Deliberately asserted as a whole sequence rather than a count. The blind
+    /// diff model's invariant is that the host receives the deletions *and then*
+    /// the insertion, in one ordered batch (`emit_edit`'s doc comment); a test
+    /// that only counted keys would pass on a batch that interleaved them, and
+    /// interleaving is precisely what produced `hoồng` on macOS before the
+    /// single-source rule.
+    #[test]
+    fn the_hong_diff_is_three_backspaces_then_the_text() {
+        // The state after `hoong`: the screen reads `hông`, and the `f` makes it
+        // `hồng` — a common prefix of `h`, so three code units go and three come
+        // back.
+        let inputs = edit_inputs(3, "ồng", Some("chrome.exe"));
+
+        // Down/up per key, so six entries of backspace then six of text.
+        let vks: Vec<Option<u16>> = inputs.iter().map(vk_of).collect();
+        assert_eq!(
+            vks,
+            vec![
+                Some(VK_BACK),
+                Some(VK_BACK),
+                Some(VK_BACK),
+                Some(VK_BACK),
+                Some(VK_BACK),
+                Some(VK_BACK),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ],
+            "the deletions must all precede the insertion, and nothing else may \
+             be in the batch"
+        );
+
+        // And the inserted units are the text itself, not a normalisation of it:
+        // `ồ` is one code unit here, so a decomposed render would show up as
+        // three entries rather than one and this would fail.
+        let units: Vec<u16> = inputs
+            .iter()
+            .filter(|i| vk_of(i).is_none())
+            .step_by(2)
+            // SAFETY: every entry is a KEYBDINPUT; see `vk_of`.
+            .map(|i| unsafe { i.Anonymous.ki.wScan })
+            .collect();
+        assert_eq!(units, "ồng".encode_utf16().collect::<Vec<_>>());
+    }
+
     /// The guard's scope answers yes for a Chromium browser with backspaces to
     /// send, and no for everything else.
     ///

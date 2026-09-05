@@ -63,9 +63,32 @@ Run these first. If either fails, the rest of the list is noise.
 Notepad proves almost nothing. Every input method works in Notepad.
 
 - [ ] **Notepad** — the baseline
-- [ ] **Chrome / Edge**, and specifically the **address bar**. Measure whether
-      the trailing-selection defect the macOS AX guard exists for reproduces
-      here. If it does not, say so and do not port the guard.
+- [ ] **Chrome / Edge address bar** — type `hoongf`. **Known to produce
+      `hoồng`** (reproduced 2026-09-05, and again after the guard was disabled).
+      The address bar holds a trailing inline-autocomplete selection, so the
+      first synthetic Backspace deletes the selection instead of a character and
+      the edit lands one short.
+
+      **No headless test can catch this**, and it is worth knowing why: GlowKey
+      emits the *correct* diff. `crates/glowkey-engine/tests/telex.rs` pins
+      `hoongf` → `hồng`, and
+      `inject::tests::the_hong_diff_is_three_backspaces_then_the_text` pins the
+      exact key sequence that leaves the process. Both pass while the browser
+      shows `hoồng`. The defect is in how the host applies a correct edit, so
+      the only instrument that sees it is a person looking at a browser — which
+      is what this line is for. If those two tests ever fail, the fault has
+      moved to our side and this check is not the one to read.
+
+      The macOS AX guard (`decisions/0003`) is what fixes this properly, by
+      asking whether a selection exists before clearing it. The Windows guard was
+      disabled on 2026-09-05 because it asked nothing and deleted real text in
+      page bodies; re-enabling it needs focus cached off the keystroke path.
+- [ ] **Chrome / Edge page body** — the other half, and the more important one.
+      Type a paragraph in a Gmail or Facebook draft, click into the **middle** of
+      it, then type Vietnamese. **No character may disappear to the right of the
+      caret.** This is the regression that disabling the guard exists to
+      prevent; if it reappears, the guard has been re-enabled without its second
+      condition.
 - [ ] **Windows Terminal** — must be excluded by default and stay excluded
 - [ ] **VS Code** — Electron; the macOS race showed up in exactly this class
 - [ ] **An Electron app** (Slack, Discord) — multiprocess renderer path

@@ -65,7 +65,7 @@ const ROW_HEIGHT: f32 = 24.0;
 /// Width of the label column in a label + control row — the macOS window aligns
 /// its controls on one edge (`prefs/widgets.rs`'s `LABEL_COLUMN_WIDTH`) and so
 /// does this one.
-const LABEL_COLUMN: f32 = 92.0;
+const LABEL_COLUMN: f32 = 92.0; // a floor; see `label_column_width`
 /// How far a caption is inset under the control it explains — roughly a checkbox
 /// plus its gap, so the text starts under the label, not under the box.
 const INDENT: f32 = 22.0;
@@ -179,16 +179,55 @@ pub(super) fn apply_style(ctx: &egui::Context) {
     // The macOS settings window is one flat grey, tabs and pane alike: light
     // 236/236/236, dark 40/40/40. egui's defaults are a near-white and a
     // near-black, and give the tab strip its own colour.
+    //
+    // Buttons and boxes are painted like macOS push buttons: a lighter fill
+    // than the window with a hairline. egui's defaults are a grey two shades off
+    // the window with no border, which on this grey is a button nobody can see.
     ctx.style_mut_of(egui::Theme::Light, |style| {
         let grey = egui::Color32::from_gray(236);
         style.visuals.window_fill = grey;
         style.visuals.panel_fill = grey;
+        raise_controls(
+            &mut style.visuals.widgets,
+            egui::Color32::WHITE,
+            egui::Color32::from_gray(246),
+            egui::Color32::from_gray(222),
+            egui::Color32::from_gray(200),
+        );
     });
     ctx.style_mut_of(egui::Theme::Dark, |style| {
         let grey = egui::Color32::from_gray(40);
         style.visuals.window_fill = grey;
         style.visuals.panel_fill = grey;
+        raise_controls(
+            &mut style.visuals.widgets,
+            egui::Color32::from_gray(92),
+            egui::Color32::from_gray(104),
+            egui::Color32::from_gray(76),
+            egui::Color32::from_gray(118),
+        );
     });
+}
+
+/// Fills and hairline for the interactive widgets — buttons, checkboxes, text
+/// fields, combo boxes — at rest, hovered and pressed.
+fn raise_controls(
+    widgets: &mut egui::style::Widgets,
+    rest: egui::Color32,
+    hovered: egui::Color32,
+    pressed: egui::Color32,
+    hairline: egui::Color32,
+) {
+    let stroke = egui::Stroke::new(1.0_f32, hairline);
+    for (w, fill) in [
+        (&mut widgets.inactive, rest),
+        (&mut widgets.hovered, hovered),
+        (&mut widgets.active, pressed),
+    ] {
+        w.weak_bg_fill = fill;
+        w.bg_fill = fill;
+        w.bg_stroke = stroke;
+    }
 }
 
 /// A segmented control: one choice, every option visible, the chosen one raised.
@@ -385,11 +424,12 @@ fn control_row(
     help: Option<&str>,
     add: impl FnOnce(&mut egui::Ui),
 ) {
+    let column = label_column_width(ui);
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
         // Right-aligned against the control, as the macOS form is.
         ui.allocate_ui_with_layout(
-            egui::vec2(LABEL_COLUMN, ROW_HEIGHT),
+            egui::vec2(column, ROW_HEIGHT),
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
                 ui.label(label);
@@ -401,6 +441,31 @@ fn control_row(
         caption(ui, text);
     }
     ui.add_space(4.0);
+}
+
+/// The label column's width: wide enough for the longest label in the whole
+/// window, in the current language and font, and never under
+/// [`LABEL_COLUMN`].
+///
+/// A fixed column clipped "Toggle current app" to "ggle current app" — right
+/// alignment cuts from the left. Measuring every frame costs twenty small
+/// layouts and keeps the column right when the language changes mid-session.
+fn label_column_width(ui: &egui::Ui) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let widest = TABS
+        .iter()
+        .flat_map(|tab| tab.sections.iter())
+        .flat_map(|section| section.rows.iter())
+        .filter(|row| !matches!(row.control, Control::Checkbox(_)))
+        .filter_map(|row| row.label)
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(label.get().to_string(), font.clone(), egui::Color32::BLACK)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    (widest + 4.0).max(LABEL_COLUMN)
 }
 
 /// A list row: its text on the left, its buttons flush to the right edge, on the

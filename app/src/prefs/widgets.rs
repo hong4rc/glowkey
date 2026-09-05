@@ -14,6 +14,9 @@ use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSString};
 
 use super::PrefsController;
 
+/// The label column's floor. The Settings window measures its labels and uses
+/// the widest (`tabs.rs`), so a long one is never clipped; this is what a
+/// column is never narrower than.
 pub(super) const LABEL_COLUMN_WIDTH: f64 = 92.0;
 
 impl PrefsController {
@@ -55,6 +58,7 @@ impl PrefsController {
         &self,
         title: &str,
         control: &NSView,
+        label_width: f64,
         mtm: MainThreadMarker,
     ) -> Retained<NSStackView> {
         let row = NSStackView::new(mtm);
@@ -63,9 +67,7 @@ impl PrefsController {
 
         let label = self.make_label(title, mtm);
         label.setAlignment(NSTextAlignment::Right);
-        let width = label
-            .widthAnchor()
-            .constraintEqualToConstant(LABEL_COLUMN_WIDTH);
+        let width = label.widthAnchor().constraintEqualToConstant(label_width);
         width.setActive(true);
 
         row.addArrangedSubview(&label);

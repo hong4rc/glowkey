@@ -70,9 +70,13 @@ impl PrefsController {
         self.ivars().dependents.borrow_mut().clear();
         self.ivars().list_counts.borrow_mut().clear();
 
+        // Wide enough for the longest label in this language, so none is
+        // truncated; never narrower than the macOS form's usual column.
+        let label_width = self.label_column_width(mtm);
+
         let tabs = NSTabView::new(mtm);
         for tab in &TABS {
-            let view = self.build_tab(tab, mtm);
+            let view = self.build_tab(tab, label_width, mtm);
             let item = NSTabViewItem::new();
             item.setLabel(&NSString::from_str(tab.title.get()));
             item.setView(Some(&view));
@@ -87,7 +91,12 @@ impl PrefsController {
     }
 
     /// One tab: a vertical stack of section headers and rows.
-    fn build_tab(&self, tab: &TabSpec, mtm: MainThreadMarker) -> Retained<NSStackView> {
+    fn build_tab(
+        &self,
+        tab: &TabSpec,
+        label_width: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSStackView> {
         let stack = self.tab_stack(mtm);
         let mut last: Option<Retained<NSView>> = None;
         for section in tab.sections {
@@ -99,7 +108,7 @@ impl PrefsController {
             }
             stack.addArrangedSubview(&self.section_header(section.title.get(), mtm));
             for row in section.rows {
-                last = Some(self.add_row(&stack, row, mtm));
+                last = Some(self.add_row(&stack, row, label_width, mtm));
             }
         }
         stack
@@ -107,7 +116,13 @@ impl PrefsController {
 
     /// Adds one row (and its caption) to `stack`; returns the last view added,
     /// so the caller can put a section gap after it.
-    fn add_row(&self, stack: &NSStackView, row: &Row, mtm: MainThreadMarker) -> Retained<NSView> {
+    fn add_row(
+        &self,
+        stack: &NSStackView,
+        row: &Row,
+        label_width: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSView> {
         let label = row.label.map(|l| l.get()).unwrap_or("");
         let caption = row
             .caption
@@ -132,11 +147,11 @@ impl PrefsController {
                         sel!(languageChanged:),
                         mtm,
                     );
-                    let row_view = self.form_row(label, &seg, mtm);
+                    let row_view = self.form_row(label, &seg, label_width, mtm);
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        LABEL_COLUMN_WIDTH + 8.0,
+                        label_width + 8.0,
                     )
                 }
                 Control::InputMethod(options) => {
@@ -148,11 +163,11 @@ impl PrefsController {
                         sel!(inputMethodChanged:),
                         mtm,
                     );
-                    let row_view = self.form_row(label, &seg, mtm);
+                    let row_view = self.form_row(label, &seg, label_width, mtm);
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        LABEL_COLUMN_WIDTH + 8.0,
+                        label_width + 8.0,
                     )
                 }
                 Control::ToneMarks(options) => {
@@ -164,11 +179,11 @@ impl PrefsController {
                         sel!(toneChanged:),
                         mtm,
                     );
-                    let row_view = self.form_row(label, &seg, mtm);
+                    let row_view = self.form_row(label, &seg, label_width, mtm);
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        LABEL_COLUMN_WIDTH + 8.0,
+                        label_width + 8.0,
                     )
                 }
                 Control::Checkbox(toggle) => {
@@ -207,27 +222,27 @@ impl PrefsController {
                         .map(|p| hotkey_display(*p))
                         .chain(std::iter::once(CUSTOM_HOTKEY.get().to_string()));
                     let seg = self.segmented(labels, None, sel!(hotkeyChanged:), mtm);
-                    let row_view = self.form_row(label, &seg, mtm);
+                    let row_view = self.form_row(label, &seg, label_width, mtm);
                     // This row is two views. The picker goes in here; the status
                     // line under it — "Current: ⌃⇧Space", or the recording
                     // prompt while "Custom…" is armed — is handed back as this
                     // row's view so the common path adds it in order.
                     stack.addArrangedSubview(&row_view);
                     let status = self.caption("", mtm);
-                    let status_row = self.caption_row(&status, LABEL_COLUMN_WIDTH + 8.0, mtm);
+                    let status_row = self.caption_row(&status, label_width + 8.0, mtm);
                     *self.ivars().hotkey_seg.borrow_mut() = Some(seg);
                     *self.ivars().hotkey_label.borrow_mut() = Some(status);
                     (stack_view(status_row), None, 0.0)
                 }
                 Control::Shortcut(shortcut) => {
                     let value = self.make_label(shortcut_display(shortcut), mtm);
-                    let row_view = self.form_row(label, &value, mtm);
+                    let row_view = self.form_row(label, &value, label_width, mtm);
                     // The value label carries the help: the row is opaque
                     // without its caption.
                     (
                         stack_view(row_view),
                         Some(control_view(value)),
-                        LABEL_COLUMN_WIDTH + 8.0,
+                        label_width + 8.0,
                     )
                 }
                 Control::List(list) => {
@@ -247,11 +262,11 @@ impl PrefsController {
                     cluster.addArrangedSubview(&count);
                     cluster.addArrangedSubview(&button);
                     self.ivars().list_counts.borrow_mut().push((list, count));
-                    let row_view = self.form_row(label, &cluster, mtm);
+                    let row_view = self.form_row(label, &cluster, label_width, mtm);
                     (
                         stack_view(row_view),
                         Some(control_view(button)),
-                        LABEL_COLUMN_WIDTH + 8.0,
+                        label_width + 8.0,
                     )
                 }
             };
@@ -302,6 +317,24 @@ impl PrefsController {
             seg.setSelectedSegment(index as isize);
         }
         seg
+    }
+
+    /// The label column: the widest label in the window, in this language, and
+    /// never under `LABEL_COLUMN_WIDTH`. Measured with the same label view the
+    /// rows use, so the answer is the one AppKit will lay out.
+    fn label_column_width(&self, mtm: MainThreadMarker) -> f64 {
+        TABS.iter()
+            .flat_map(|tab| tab.sections.iter())
+            .flat_map(|section| section.rows.iter())
+            .filter(|row| !matches!(row.control, Control::Checkbox(_)))
+            .filter_map(|row| row.label)
+            .map(|label| {
+                self.make_label(label.get(), mtm)
+                    .intrinsicContentSize()
+                    .width
+                    + 4.0
+            })
+            .fold(LABEL_COLUMN_WIDTH, f64::max)
     }
 
     /// A section title: bold, small, secondary — the shape macOS System

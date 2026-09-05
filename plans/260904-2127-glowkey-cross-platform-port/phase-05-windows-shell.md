@@ -39,6 +39,10 @@ that tells the truth about whether GlowKey is actually working.
 
 ### The settings UI: `winit` + `egui`, decided
 
+*2026-09-05 addendum.* The window is rendered from the shared
+`app/src/settings_spec.rs` (decision 0010) and hosted, together with About, by one
+eframe loop on a dedicated thread (decision 0011), which is what lets it reopen.
+
 The earlier draft of this phase recommended raw Win32 dialogs and left the choice
 open until one pane had been prototyped. **That is now decided: `winit` + `egui`.**
 Recording it here so it is decided once rather than oscillated over.

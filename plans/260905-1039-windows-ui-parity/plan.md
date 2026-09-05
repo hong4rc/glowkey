@@ -40,7 +40,9 @@ handoff deferred.
   so the root is created hidden and never toggled; Settings and About are
   `show_viewport_deferred` viewports opened and closed by whether the root calls
   them each frame; `Context::request_repaint()` is thread-safe and wakes the loop;
-  idle cost at rest is one hidden win32 window.
+  idle cost at rest is one parked win32 window. **Implementation note:** the
+  same issues mean a *hidden* root never drains its queue either, so the root is
+  a visible 1×1 undecorated window parked off-screen (`ui_thread.rs`).
 - Segmented control appearance: Apple HIG segmented controls and the Big Sur+
   "switcher" style — a rounded track slightly darker than the window, the selected
   segment raised (white in light, lighter grey in dark) with a soft shadow, no
@@ -59,10 +61,10 @@ checkpoint (2026-09-05 10:37).
 
 | # | Phase | Status | Depends on |
 |---|---|---|---|
-| 1 | [Long-lived UI thread, Settings as a deferred viewport](./phase-01-start.md) | pending | — |
-| 2 | [About window](./phase-02-about-window.md) | pending | 1 |
-| 3 | [Segmented control and chrome polish](./phase-03-segmented-control-polish.md) | pending | — |
-| 4 | [Windows UX parity and docs](./phase-04-windows-ux-parity.md) | pending | 1, 2, 3 |
+| 1 | [Long-lived UI thread, Settings as a deferred viewport](./phase-01-start.md) | done; desktop checks open | — |
+| 2 | [About window](./phase-02-about-window.md) | done; desktop checks open | 1 |
+| 3 | [Segmented control and chrome polish](./phase-03-segmented-control-polish.md) | done; visual check open | — |
+| 4 | [Windows UX parity and docs](./phase-04-windows-ux-parity.md) | docs done; desktop checks handed to the user | 1, 2, 3 |
 
 ## Acceptance criteria
 
@@ -97,9 +99,10 @@ checkpoint (2026-09-05 10:37).
   the UI thread must never call `hook::with_session` (thread-local). Signal: a
   `None` from `with_session` on the UI thread. Response: route through the
   result channel only.
-- Quit path changes: root never closes; tray Quit ends the main loop and exits
-  the process. Signal: a zombie GlowKey after Quit. Response: `process::exit`
-  after cleanup.
+- Quit path: root never closes; tray Quit ends the main loop, `main` returns,
+  and returning from `main` ends the process (`ExitProcess`), UI thread included.
+  Signal: a zombie GlowKey after Quit. Response: a `Quit` command that lets the
+  root close, joined with a timeout.
 
 ## Rollback
 

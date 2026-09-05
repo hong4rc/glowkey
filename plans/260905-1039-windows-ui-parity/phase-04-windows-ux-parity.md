@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Windows UX parity and docs"
-status: pending
+status: in-progress
 priority: P2
 effort: "2h"
 dependencies: [1, 2, 3]

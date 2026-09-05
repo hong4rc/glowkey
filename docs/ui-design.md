@@ -110,6 +110,11 @@ Layout rules the spec enforces, from the 2026-09-05 UX review:
 - List rows show their count beside a single "Manage…" button.
 - No Done/OK button anywhere: every change applies live and is saved at once.
 
+On Windows both windows — Settings and About — are egui viewports hosted by one
+event loop on a dedicated thread (decision 0011, `app/src/platform/windows/ui_thread.rs`,
+`about_ui.rs`). About mirrors the macOS window: icon, name, version with commit,
+description, credit line, no button.
+
 Four tabs rather than the single pane sketched below, because a single column had
 grown past 800 points. The sketch is kept as the record of the original intent.
 Throughout: system font (SF Pro), standard control metrics, and system colors so

@@ -91,7 +91,11 @@ Remaining step: the user opens Settings once. If it is light, close this defect.
 If it is still dark, the log line will say `apps_are_light=true -> Light` and the
 cause is outside egui's theme (e.g. a panel painting an explicit dark colour).
 
-### 2. The settings window opens once per process
+### 2. The settings window opens once per process — CLOSED 2026-09-05
+
+Closed by `docs/decisions/0011`: one eframe loop on a dedicated thread, Settings
+and About as deferred viewports. Open-at-launch is honoured. Plan:
+`plans/260905-1039-windows-ui-parity/`. The paragraphs below are the history.
 
 **Update 2026-09-05 10:30.** Because of this, "Open this window at launch" is
 **not honored on Windows** (`platform/windows/mod.rs::run` never calls

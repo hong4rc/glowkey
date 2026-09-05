@@ -49,12 +49,15 @@ the elevated-windows note. No button, no sound, non-modal.
 4. Gates; run; open About, press Ctrl+Shift+Space, watch the tray glyph.
 
 ## Success Criteria
+Unticked items need a hand on the desktop (no synthetic input into the live
+session); the code and headless tests are in place. `open_settings_at_launch`
+was seen working in the log on 2026-09-05 10:45.
 - [ ] About opens with no sound and no button.
 - [ ] Esc and the title-bar X close it; it reopens.
 - [ ] About and Settings open together.
 - [ ] Ctrl+Shift+Space while About is open toggles the mode and the tray glyph
       updates immediately; the tray menu toggle too.
-- [ ] Gates green.
+- [x] Gates green.
 
 ## Risk Assessment
 - Deferred viewport focus/taskbar quirks (research Q6): verify manually; if the

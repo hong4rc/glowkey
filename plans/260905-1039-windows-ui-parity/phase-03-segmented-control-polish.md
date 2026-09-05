@@ -59,11 +59,14 @@ the checkbox tick colour matches the raised-segment accent (leave egui's).
    `docs/ui-design.md` intent: no hairlines, raised selection.
 
 ## Success Criteria
+Unticked items need a hand on the desktop (no synthetic input into the live
+session); the code and headless tests are in place. `open_settings_at_launch`
+was seen working in the log on 2026-09-05 10:45.
 - [ ] No stroke around the track or the selected segment in either theme.
 - [ ] Selected segment raised (white light / gray 105 dark) with a shadow; text
       colour normal.
-- [ ] Tab strip uses the same control.
-- [ ] Gates green.
+- [x] Tab strip uses the same control.
+- [x] Gates green.
 
 ## Risk Assessment
 - egui `SelectableLabel` internals may change per version; the two-pass paint

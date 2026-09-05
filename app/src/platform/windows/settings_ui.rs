@@ -1,12 +1,12 @@
-//! The Windows settings window (`egui`/`eframe`), built on demand and fully
-//! torn down on close.
+//! The Windows settings window (`egui`), drawn from the shared
+//! `settings_spec` and hosted by the UI thread as a deferred viewport.
 //!
-//! GlowKey at rest is a keyboard hook, a message loop and a tray icon — nothing
-//! that renders. This module exists so the renderer only exists while the
-//! window is open: [`show`] creates the `eframe` app, blocks on its event loop,
-//! and returns the edited [`Settings`] once the loop (and every resource it
-//! held) is gone. Nothing here is reachable from the hook's callback: there is
-//! no global state, only values passed in and a value passed back.
+//! GlowKey at rest is a keyboard hook, a message loop and a tray icon. The
+//! renderer lives on its own thread (`ui_thread`, `decisions/0011`); this module
+//! is the window's content. [`SettingsApp`] is handed a [`Settings`] snapshot,
+//! [`SettingsApp::draw`] paints one frame, and when the user closes the window
+//! [`SettingsApp::finalize`] decides what to hand back. Nothing here reaches the
+//! session or the hook: values in, a value out.
 //!
 //! **Shaped after the macOS window, deliberately.** GlowKey is one product, and
 //! the macOS settings window (`app/src/prefs/`) is where its shape was decided:
@@ -20,9 +20,7 @@
 //! toolkit has to an auxiliary window.
 //!
 //! About is **not** here. It belongs next to Settings in the tray menu, where
-//! macOS keeps it (`menu_bar.rs`), and it is a native message box
-//! (`shell::show_about`) because winit permits one event loop per process: once
-//! this window has opened, a second toolkit window cannot.
+//! macOS keeps it (`menu_bar.rs`); it is its own viewport (`about_ui`).
 //!
 //! Two things here are not decoration. The interface font is taken from the
 //! system (see [`install_system_font`]), because egui's bundled font cannot draw
@@ -227,6 +225,10 @@ fn segmented<T: PartialEq + Copy>(
     let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * PAD_X).collect();
     let total = egui::vec2(widths.iter().sum(), HEIGHT);
     let (track, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+    // One id per control from the auto-id sequence, so two controls in one
+    // scope cannot answer each other's clicks.
+    let base_id = ui.next_auto_id();
+    ui.skip_ahead_auto_ids(1);
 
     let dark = ui.visuals().dark_mode;
     let (track_fill, raised_fill, hover_fill, shadow) = if dark {
@@ -251,7 +253,7 @@ fn segmented<T: PartialEq + Copy>(
     for (i, width) in widths.iter().enumerate() {
         let rect =
             egui::Rect::from_min_size(egui::pos2(x, track.min.y), egui::vec2(*width, HEIGHT));
-        let response = ui.interact(rect, ui.id().with(("segment", i)), egui::Sense::click());
+        let response = ui.interact(rect, base_id.with(i), egui::Sense::click());
         if response.clicked() {
             *value = options[i].0;
         }
@@ -296,8 +298,9 @@ fn segmented<T: PartialEq + Copy>(
 /// path calls this.
 pub(super) fn apply_theme(ctx: &egui::Context) {
     let light = crate::platform::windows::theme::apps_are_light();
-    // Once per window, not per frame: this runs every frame and a line per frame
-    // is not a diagnostic, it is a way of hiding one.
+    // Once per process, not per frame: this runs every frame of a context that
+    // now lives as long as GlowKey, and a line per frame is not a diagnostic,
+    // it is a way of hiding one.
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -492,7 +495,7 @@ pub(super) struct SettingsApp {
     /// against it — the only way to know whether to return `None`.
     initial: Settings,
     /// The value being edited. Every control writes here directly.
-    draft: Settings,
+    pub(super) draft: Settings,
     tab: Tab,
     /// `Some(None)` once the window has decided "closing, nothing to save";
     /// `Some(Some(settings))` once it has decided "closing, save this". Read
@@ -552,7 +555,7 @@ impl SettingsApp {
         }
     }
 
-    /// Decides what to hand back to [`show`] and records it. Idempotent, so
+    /// Decides what to hand back to the main thread and records it. Idempotent, so
     /// it is safe to call from both the window-close event and the explicit
     /// Close button without double-deciding.
     pub(super) fn finalize(&mut self) {
@@ -592,10 +595,19 @@ impl SettingsApp {
         self.result.take()
     }
 
-    /// The settings the window was opened on: the baseline every edit is a
-    /// diff against when the main thread merges it into the live session.
-    pub(super) fn baseline(&self) -> &Settings {
-        &self.initial
+    /// The settings the window was opened on, in the form [`finalize`] compared
+    /// the draft against: the baseline every edit is a diff against when the
+    /// main thread merges it into the live session.
+    ///
+    /// Normalized, not raw. `finalize` rewrites the exclusion fields to their
+    /// sorted effective form before comparing, so the value it returns always
+    /// carries that form. Handing the merge the raw file order alongside it
+    /// would read as "the user edited the exclusions" on every open, and the
+    /// window's list would overwrite an app the tray excluded meanwhile.
+    ///
+    /// [`finalize`]: SettingsApp::finalize
+    pub(super) fn baseline(&self) -> Settings {
+        normalize_exclusions(&self.initial)
     }
 
     // ----- Tabs -------------------------------------------------------------

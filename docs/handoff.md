@@ -348,9 +348,12 @@ GlowKey now has a Windows backend. It is **early** and should not be relied on.
 
 **What is built.** `app/src/platform/windows/`: a `WH_KEYBOARD_LL` hook and
 `SendInput` injection running the same `glowkey-input` decision ladder as macOS,
-plus a tray icon, an `egui` settings window rendered from the same
-`settings_spec.rs` the macOS window uses, launch-at-login, the clipboard tools
-and an indicator with four states. The engine's full suite passes on Windows and
+plus a tray icon, launch-at-login, the clipboard tools, an indicator with four
+states, and two `egui` windows — Settings, rendered from the same
+`settings_spec.rs` the macOS window uses, and About — hosted by one eframe event
+loop on a dedicated thread for the life of the process (`decisions/0011`,
+`platform/windows/ui_thread.rs`). Settings reopens; About is a window, not a
+message box; "open at launch" is honoured. The engine's full suite passes on Windows and
 CI now has a `windows-latest` job.
 
 **What is verified.** `hoongf` → `hồng`, mid-word backspace, boundary
@@ -368,10 +371,11 @@ Full list in `plans/reports/windows-verification-260905.md`.
 the open defects and the open questions, written for a session picking this up
 cold. What follows is the short version.
 
-**Two open defects.** The settings window renders dark on a light-themed machine
-(one of the two causes is fixed, the other is not — a diagnostic log line is in
-place and unread), and it can only be opened once per process because winit
-permits one event loop.
+**Both 2026-09-05 defects are closed.** The dark-on-light window was the old
+build (the log now reads `apps_are_light=true -> Light`), and the once-per-process
+window is gone with the UI thread. What remains unverified on a real desktop is
+the per-viewport taskbar and focus behaviour of deferred viewports on Windows 11;
+`docs/manual-verification-windows.md` Tier 5 lists the checks.
 
 **The open question that matters most.** GlowKey is unusable in League of Legends
 while EVKey is fine. The log rules out elevation and Vanguard-refusing-injection

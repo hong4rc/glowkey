@@ -158,8 +158,15 @@ pub fn wake_main_loop() {
     }
     // SAFETY: posting a message to a thread of this process. It enqueues and
     // returns without waiting for the receiver.
-    unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(tid, WM_GLOWKEY_SAVE, 0, 0);
+    let posted = unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(tid, WM_GLOWKEY_SAVE, 0, 0)
+    };
+    if posted == 0 {
+        // The result then waits for the next unrelated message — the next
+        // keystroke — which is a delay worth a line, not a silence.
+        crate::log::log(
+            "SETTINGS could not wake the main loop; the result waits for the next message",
+        );
     }
 }
 
@@ -258,6 +265,14 @@ pub fn run_message_loop() {
     // exists to prevent, at the one moment there is no next message to rely on.
     if let Some(settings) = take_pending_save() {
         crate::settings_store::save(&settings);
+    }
+    // And a settings window closed in the same instant as Quit: its edits are
+    // applied and saved rather than lost with the queue.
+    if let Some((baseline, updated)) = super::shell::take_pending_settings_result() {
+        super::shell::apply_settings(&baseline, updated);
+        if let Some(settings) = take_pending_save() {
+            crate::settings_store::save(&settings);
+        }
     }
 }
 

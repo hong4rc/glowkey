@@ -91,13 +91,16 @@ main thread (hook + tray loop)            glowkey-ui thread
    GlowKey, start the new one, open Settings twice from the tray.
 
 ## Success Criteria
+Unticked items need a hand on the desktop (no synthetic input into the live
+session); the code and headless tests are in place. `open_settings_at_launch`
+was seen working in the log on 2026-09-05 10:45.
 - [ ] Settings opens, closes, reopens three times in one process (log shows no
       `RecreationAttempt`).
 - [ ] An edit made in the second open is saved and applied.
 - [ ] Typing Vietnamese in Notepad works while Settings is open.
-- [ ] `open_settings_at_launch = true` opens Settings at startup.
+- [x] `open_settings_at_launch = true` opens Settings at startup.
 - [ ] Tray Quit ends the process (no GlowKey.exe left).
-- [ ] Gates green on both targets.
+- [x] Gates green on both targets.
 
 ## Risk Assessment
 - egui #3655/#5229: never send `Visible` to the root. If a viewport fails to

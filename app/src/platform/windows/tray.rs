@@ -3,8 +3,8 @@
 //! Raw Win32, deliberately, and not `egui`. This lives for the whole run of a
 //! background process that must never be the reason a machine feels slow, so it
 //! is a window class, a notify-icon, and a popup menu, with no renderer behind
-//! it. The settings window is the part that gets a UI toolkit, and it is created
-//! on demand and destroyed on close.
+//! it. The settings and About windows are the part that gets a UI toolkit, on
+//! their own thread (`ui_thread`).
 //!
 //! The glyph is drawn with GDI rather than loaded from four `.ico` files. Four
 //! icons that must stay in sync with four states is four chances for the picture
@@ -601,8 +601,7 @@ fn draw_glyph(state: Indicator) -> HICON {
 
 /// The tray window's message handler.
 ///
-/// Wrapped in `catch_unwind` for the same reason the hook callback is, and with
-/// more at stake: this one reaches the whole settings-window stack, so a panic
+/// Wrapped in `catch_unwind` for the same reason the hook callback is: a panic
 /// anywhere in it would unwind out of an `extern "system"` function across
 /// `DispatchMessageW`, which Rust defines as a process abort. GlowKey would
 /// vanish — no log line, no saved settings, and the tray icon left behind as a

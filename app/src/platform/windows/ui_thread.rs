@@ -92,8 +92,13 @@ fn send(command: UiCommand) {
     }
     // Wake the loop. Before the first frame the context does not exist yet;
     // the command waits in the channel and the first frame drains it.
+    //
+    // The root by name: `request_repaint()` targets whichever viewport is on
+    // the context's stack *at this instant*, and from another thread that can
+    // be Settings or About mid-frame. Only the root drains the channel; waking
+    // a child would leave the command sitting there.
     if let Some(ctx) = CONTEXT.get() {
-        ctx.request_repaint();
+        ctx.request_repaint_of(egui::ViewportId::ROOT);
     }
 }
 
@@ -175,21 +180,22 @@ impl UiHost {
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        self.drain(ctx);
-
         // A settings window whose user closed it has decided its result; hand
-        // that to the main thread and stop asking for the viewport.
+        // that to the main thread and stop asking for the viewport. Before the
+        // commands, so an OpenSettings that arrived in the same instant makes a
+        // fresh window rather than focusing the one about to go.
         if let Some(app) = &self.settings {
             let done = {
                 let mut app = lock(app);
-                app.take_result()
-                    .map(|outcome| (app.baseline().clone(), outcome))
+                app.take_result().map(|outcome| (app.baseline(), outcome))
             };
             if let Some((baseline, outcome)) = done {
                 super::shell::deliver_settings_result(baseline, outcome);
                 self.settings = None;
             }
         }
+
+        self.drain(ctx);
 
         if let Some(app) = &self.settings {
             let app = Arc::clone(app);
@@ -290,6 +296,33 @@ mod tests {
         assert!(host.settings.is_none());
         // The result went to the main thread's slot.
         assert!(super::super::shell::take_pending_settings_result().is_some());
+    }
+
+    /// After the window has decided, another OpenSettings makes a new window
+    /// on the new snapshot — the reopen the old shape could not do. Even when
+    /// the command lands in the same frame as the decision.
+    #[test]
+    fn settings_reopens_fresh_after_a_decision() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let mut host = UiHost::new(rx);
+        tx.send(UiCommand::OpenSettings(Settings::default()))
+            .unwrap();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
+        let first = Arc::clone(host.settings.as_ref().unwrap());
+        lock(&first).finalize();
+
+        let second_snapshot = Settings {
+            auto_capitalize: true,
+            ..Settings::default()
+        };
+        tx.send(UiCommand::OpenSettings(second_snapshot.clone()))
+            .unwrap();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
+        let second = host.settings.as_ref().expect("a new window");
+        assert!(!Arc::ptr_eq(&first, second), "the old window was reused");
+        assert!(lock(second).baseline().auto_capitalize);
+        let _ = super::super::shell::take_pending_settings_result();
     }
 
     /// The root shim refuses to close: it carries the event loop.

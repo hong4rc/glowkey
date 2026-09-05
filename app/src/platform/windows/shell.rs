@@ -6,9 +6,12 @@
 //! when apply to this file, not to the drawing code.
 //!
 //! Everything here runs on the message-loop thread, the same one the hook
-//! callback runs on. That is what makes reaching into the session safe without a
-//! lock: the two can never run at once. It is also why nothing here may be called
-//! from anywhere else.
+//! callback runs on — with one named exception. That is what makes reaching
+//! into the session safe without a lock: the two can never run at once. The
+//! exception is [`deliver_settings_result`], which the UI thread calls when the
+//! settings window closes: it touches only its own slot and posts a message; the
+//! session is reached from [`apply_settings`], back on this thread. Nothing else
+//! here may be called from anywhere but the message-loop thread.
 
 use std::sync::Mutex;
 
@@ -177,9 +180,16 @@ pub fn deliver_settings_result(
     baseline: glowkey_engine::Settings,
     updated: Option<glowkey_engine::Settings>,
 ) {
-    *PENDING_SETTINGS
+    let previous = PENDING_SETTINGS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((baseline, updated));
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace((baseline, updated));
+    if previous.is_some() {
+        // One slot. A second result before the main loop drained the first
+        // should not happen (a reopen takes a tray click, which drains); if it
+        // does, the earlier result is the one lost, and the log should say so.
+        crate::log::log("SETTINGS a result was replaced before the main loop applied it");
+    }
     hook::wake_main_loop();
 }
 
@@ -397,6 +407,43 @@ mod tests {
 
     /// A mode or per-app change made by hotkey while the window was open also
     /// survives.
+    /// The real path, not a hand-built `edited`: a window opened on a file
+    /// whose exclusions are in raw order, one unrelated edit, and an app the
+    /// tray excluded while the window was open. The tray's exclusion must
+    /// survive. It did not while the baseline crossed the thread un-normalized:
+    /// `finalize` returns the sorted effective list, so a raw baseline read as
+    /// "the user edited the exclusions" and the window's list overwrote the
+    /// tray's.
+    #[test]
+    fn a_tray_exclusion_survives_the_real_window_round_trip() {
+        let opened_on = glowkey_engine::Settings {
+            exclusions: vec!["zzz.exe".into(), "aaa.exe".into()],
+            ..glowkey_engine::Settings::default()
+        };
+        let mut app = super::super::settings_ui::SettingsApp::new(opened_on.clone());
+        app.draft.auto_capitalize = !app.draft.auto_capitalize;
+        app.finalize();
+        let edited = app.take_result().expect("decided").expect("changed");
+
+        let mut live = opened_on.clone();
+        live.exclusions.push("game.exe".into());
+
+        let merged = merge_settings(&app.baseline(), &edited, live);
+        assert!(
+            merged.exclusions.iter().any(|e| e == "game.exe"),
+            "{:?}",
+            merged.exclusions
+        );
+        assert_eq!(merged.auto_capitalize, edited.auto_capitalize);
+    }
+
+    /// "Closed, nothing changed" applies nothing and touches nothing.
+    #[test]
+    fn applying_no_change_is_a_no_op() {
+        apply_settings(&glowkey_engine::Settings::default(), None);
+        assert!(take_pending_settings_result().is_none());
+    }
+
     #[test]
     fn a_hotkey_exclusion_made_while_the_window_was_open_survives() {
         let baseline = Settings::default();

@@ -136,7 +136,23 @@ listed with what "wrong" looks like, because several fail quietly.
 - [ ] No console window appears at any point
 - [ ] **Idle cost with the settings window closed** — record CPU and working set
       as numbers. This is the check on the `winit`+`egui` decision, and taking it
-      with the window open measures nothing.
+      with the window open measures nothing. Since 2026-09-05 a one-point
+      off-screen shim window exists for the process's life (`decisions/0011`);
+      the number should not have moved.
+- [ ] Settings opens, closes, and reopens three times from the tray in one
+      process; an edit made in the third open is saved.
+- [ ] About opens from the tray: icon, name, version with commit, no button, no
+      sound. Esc closes it; the title-bar X closes it; it reopens.
+- [ ] About and Settings open side by side; each has its own taskbar entry and
+      neither steals focus from the other on repaint.
+- [ ] With About open, Ctrl+Shift+Space toggles VI/EN and the tray glyph changes
+      at once; the tray-menu toggle does the same.
+- [ ] Segmented controls: no hairline around the track or the selected segment;
+      the selected segment is raised (white in light, lighter grey in dark) and
+      its label is the normal text colour. Both themes.
+- [ ] "Open this window at launch" on: Settings appears at startup. Off: it does
+      not.
+- [ ] Tray Quit ends the process: no `GlowKey.exe` left in Task Manager.
 
 ## Tier 6 — the shipped exclusion table
 

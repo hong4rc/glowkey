@@ -122,6 +122,12 @@ Accessibility grant.
       absence is invisible until you close a window twice.
 - [ ] Settings' four tabs (General / Typing / Corrections / Apps & macros) each
       lay out without clipping, at both languages.
+- [ ] Since 2026-09-05 the tabs are rendered from `settings_spec.rs` and the
+      renderer was written without a Mac. Check: every section has a bold grey
+      header; captions wrap instead of clipping; "Fix as I type" is indented
+      and greys out when "Auto-fix" is off; each list row shows a count that
+      changes when its window adds or removes an entry; VoiceOver reads a
+      control's caption as its help.
 - [ ] Macros: add `vn` → `Việt Nam`, type `vn`␣ in TextEdit, get `Việt Nam`.
 - [ ] Macro export writes a file; importing it back reports `(0 added, N
       skipped)` — an existing shortcut is skipped, never overwritten.

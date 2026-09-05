@@ -15,16 +15,15 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSControlStateValueOn, NSModalResponseOK, NSOpenPanel,
+    NSAlert, NSApplication, NSButton, NSControlStateValueOn, NSModalResponseOK, NSOpenPanel,
     NSSegmentedControl, NSStackView, NSTextField, NSWindow,
 };
 use objc2_foundation::{MainThreadMarker, NSBundle, NSString, NSURL};
 
 use std::cell::RefCell;
 
-use glowkey_engine::{HotkeyPreset, InputMethod, Language, PlacementStyle};
-
 use crate::platform::macos::TapState;
+use crate::settings_spec::{ListId, Toggle, HOTKEY_PRESETS, INPUT_METHODS, LANGUAGES, TONE_MARKS};
 use crate::strings::t;
 
 /// Ivars for the Settings window controller: the shared `TapState`, the window
@@ -60,6 +59,12 @@ pub struct PrefsIvars {
     /// the preset segmented control and the "Current: …" label.
     hotkey_seg: RefCell<Option<Retained<NSSegmentedControl>>>,
     hotkey_label: RefCell<Option<Retained<NSTextField>>>,
+    /// Checkboxes that only mean something while another toggle is on, with
+    /// that toggle. `refresh_dependents` sets their enabled state from it.
+    dependents: RefCell<Vec<(Toggle, Retained<NSButton>)>>,
+    /// The count label beside each list's "Manage…" button, refreshed whenever
+    /// a list window changes its list.
+    list_counts: RefCell<Vec<(ListId, Retained<NSTextField>)>>,
 }
 
 mod excluded;
@@ -68,7 +73,7 @@ mod personal_words;
 mod tabs;
 mod widgets;
 
-pub(crate) use widgets::hotkey_display;
+pub(crate) use crate::settings_spec::hotkey_display;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -85,12 +90,10 @@ define_class!(
         fn tone_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
-            let style = if seg == 0 {
-                PlacementStyle::New
-            } else {
-                PlacementStyle::Old
+            let Some((_, style)) = usize::try_from(seg).ok().and_then(|i| TONE_MARKS.get(i)) else {
+                return;
             };
-            self.state().set_style_and_save(style);
+            self.state().set_style_and_save(*style);
         }
 
         /// Input method changed (0 = Telex, 1 = VNI, 2 = Simple Telex).
@@ -98,12 +101,10 @@ define_class!(
         fn input_method_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
-            let method = match seg {
-                1 => InputMethod::Vni,
-                2 => InputMethod::SimpleTelex,
-                _ => InputMethod::Telex,
+            let Some((_, method)) = usize::try_from(seg).ok().and_then(|i| INPUT_METHODS.get(i)) else {
+                return;
             };
-            self.state().set_input_method_and_save(method);
+            self.state().set_input_method_and_save(*method);
         }
 
         /// Toggle-hotkey segment clicked (0..=3 presets; 4 = "Custom…" arms the
@@ -112,12 +113,9 @@ define_class!(
         fn hotkey_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
-            let preset = match seg {
-                0 => HotkeyPreset::CtrlShiftSpace,
-                1 => HotkeyPreset::CtrlSpace,
-                2 => HotkeyPreset::OptionSpace,
-                3 => HotkeyPreset::CtrlShiftZ,
-                _ => {
+            let preset = match usize::try_from(seg).ok().and_then(|i| HOTKEY_PRESETS.get(i)) {
+                Some(preset) => *preset,
+                None => {
                     // "Custom…": arm the recorder. The label is the prompt; the
                     // segment snaps to the real state when recording ends.
                     if !self.state().is_recording_hotkey() {
@@ -141,12 +139,10 @@ define_class!(
         fn language_changed(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let seg: isize = unsafe { msg_send![sender, selectedSegment] };
-            let language = match seg {
-                1 => Language::Vietnamese,
-                2 => Language::English,
-                _ => Language::System,
+            let Some((_, language)) = usize::try_from(seg).ok().and_then(|i| LANGUAGES.get(i)) else {
+                return;
             };
-            self.state().set_language_and_save(language);
+            self.state().set_language_and_save(*language);
             self.rebuild_windows();
         }
 
@@ -213,6 +209,8 @@ define_class!(
             let Some(sender) = sender else { return };
             let state: isize = unsafe { msg_send![sender, state] };
             self.state().set_auto_fix_and_save(state == NSControlStateValueOn);
+            // "Fix as I type" only means something under this one.
+            self.refresh_dependents();
         }
 
         /// Auto-capitalize checkbox toggled.
@@ -454,6 +452,8 @@ impl PrefsController {
             word_order: RefCell::new(Vec::new()),
             hotkey_seg: RefCell::new(None),
             hotkey_label: RefCell::new(None),
+            dependents: RefCell::new(Vec::new()),
+            list_counts: RefCell::new(Vec::new()),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -617,13 +617,11 @@ impl PrefsController {
         if let Some(seg) = self.ivars().hotkey_seg.borrow().as_ref() {
             // Always a real segment — a SelectOne segmented control does not
             // reliably support clearing the selection with -1.
-            let selected: isize = match preset {
-                HotkeyPreset::CtrlShiftSpace => 0,
-                HotkeyPreset::CtrlSpace => 1,
-                HotkeyPreset::OptionSpace => 2,
-                HotkeyPreset::CtrlShiftZ => 3,
-                HotkeyPreset::Custom { .. } => 4,
-            };
+            // A custom combination is the segment after the presets.
+            let selected = HOTKEY_PRESETS
+                .iter()
+                .position(|p| *p == preset)
+                .unwrap_or(HOTKEY_PRESETS.len()) as isize;
             seg.setSelectedSegment(selected);
         }
         if let Some(label) = self.ivars().hotkey_label.borrow().as_ref() {

@@ -1,9 +1,8 @@
-//! The small view helpers every pane is built from, and the two pure formatters.
+//! The small view helpers every pane is built from.
 //!
 //! Nothing here knows what a setting is: a labelled row, a caption, a stack with
-//! the right insets, a hotkey rendered for display, a bundle id rendered as a
-//! name. They are together because they are the vocabulary the four tabs and the
-//! two extra windows all speak.
+//! the right insets, a scroll view around a list. They are together because they
+//! are the vocabulary the four tabs and the three list windows all speak.
 
 use objc2::msg_send;
 use objc2::rc::Retained;
@@ -13,50 +12,9 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSString};
 
-use glowkey_engine::HotkeyPreset;
-
 use super::PrefsController;
 
 pub(super) const LABEL_COLUMN_WIDTH: f64 = 92.0;
-
-/// A human-readable rendering of a toggle-hotkey preset ("⌃⇧Space", "⌃⌥K").
-///
-/// Crate-visible because the menu bar and the Quick Guide name this shortcut too,
-/// and both used to spell it out as a literal `⌃⇧Space` — which stopped being
-/// true the moment the hotkey became configurable. One renderer means the three
-/// places that show it cannot disagree.
-pub(crate) fn hotkey_display(preset: HotkeyPreset) -> String {
-    match preset {
-        HotkeyPreset::CtrlShiftSpace => "⌃⇧Space".to_string(),
-        HotkeyPreset::CtrlSpace => "⌃Space".to_string(),
-        HotkeyPreset::OptionSpace => "⌥Space".to_string(),
-        HotkeyPreset::CtrlShiftZ => "⌃⇧Z".to_string(),
-        HotkeyPreset::Custom {
-            control,
-            shift,
-            option,
-            key_char,
-            ..
-        } => {
-            let mut out = String::new();
-            if control {
-                out.push('⌃');
-            }
-            if option {
-                out.push('⌥');
-            }
-            if shift {
-                out.push('⇧');
-            }
-            if key_char == ' ' {
-                out.push_str("Space");
-            } else {
-                out.push(key_char);
-            }
-            out
-        }
-    }
-}
 
 impl PrefsController {
     /// One tab's content stack: vertical, leading-aligned, inset from the pane.

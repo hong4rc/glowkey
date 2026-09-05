@@ -128,6 +128,9 @@ impl PrefsController {
 
     /// Rebuilds the macro rows from the live list.
     pub(super) fn refresh_macros(&self) {
+        // Before the early return below: the count on the Settings tab must
+        // track the list whether or not this window has been built.
+        self.refresh_list_counts();
         let mtm = MainThreadMarker::from(self);
         let Some(list) = self.ivars().macros_list.borrow().clone() else {
             return;

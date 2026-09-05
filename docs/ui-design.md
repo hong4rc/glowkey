@@ -90,13 +90,30 @@ a way to lose it.
 
 ## 2. Settings window
 
-**Four tabs** (General / Typing / Corrections / Apps & macros), not the single
-pane specified below. A single column had grown past 800 points, which is taller
-than the content area of a small laptop; each tab now builds its own stack and the
-tab title carries the grouping that section headers used to. The original
-single-pane sketch is kept below as the record of what was intended when the scope
-was two settings. Throughout: system font (SF Pro), standard control metrics, and
-system colors so light/dark and contrast are automatic.
+**One definition, a native renderer per platform** (decision 0010, 2026-09-05).
+The four tabs — General / Typing / Corrections / Apps & macros — their sections,
+rows, captions in both languages, and which row depends on which, are data in
+`app/src/settings_spec.rs`. AppKit (`app/src/prefs/tabs.rs`) and egui
+(`app/src/platform/windows/settings_ui.rs`) each walk that data and own only the
+drawing: controls, fonts, metrics, wrapping, window lifetime. A wording change is
+one edit and lands on every platform.
+
+Layout rules the spec enforces, from the 2026-09-05 UX review:
+
+- Every section has a header: bold, small, secondary text.
+- A caption is one sentence with at most one example, and doubles as the
+  control's accessibility help. No hard line breaks; the renderer wraps.
+- A dependent setting ("Fix as I type" under "Auto-fix") is indented and
+  disabled while its parent is off.
+- Shortcuts in captions are placeholders the renderer spells for its platform
+  (`⌃⇧E` on macOS, `Ctrl+Shift+E` on Windows).
+- List rows show their count beside a single "Manage…" button.
+- No Done/OK button anywhere: every change applies live and is saved at once.
+
+Four tabs rather than the single pane sketched below, because a single column had
+grown past 800 points. The sketch is kept as the record of the original intent.
+Throughout: system font (SF Pro), standard control metrics, and system colors so
+light/dark and contrast are automatic.
 
 The three list windows — Excluded Apps, Macros, Personal Words — are **resizable
 and scrolled**. They hold lists of unbounded length and were all built fixed-size
@@ -159,9 +176,11 @@ fourteen shipped exclusions overflowed on a clean install, and an import reporti
 ## 3. What maps to what
 
 - Menu bar → `app/src/menu_bar.rs`; the invisible main menu → `app/src/main_menu.rs`.
-- Settings window → `app/src/prefs/` (`mod.rs` controller, `tabs.rs` panes,
-  `widgets.rs` shared helpers, plus `excluded.rs`, `macros_window.rs` and
-  `personal_words.rs` for the three list windows).
+- Settings window layout → `app/src/settings_spec.rs` (tabs, sections, rows,
+  strings, dependencies; platform-free). macOS renderer → `app/src/prefs/`
+  (`mod.rs` controller, `tabs.rs` spec walker, `widgets.rs` shared helpers, plus
+  `excluded.rs`, `macros_window.rs` and `personal_words.rs` for the three list
+  windows). Windows renderer → `app/src/platform/windows/settings_ui.rs`.
 - App icon and name resolution for the excluded list → `app/src/app_info.rs`.
 - The engine already exposes everything the UI drives (`toggle_mode`, `set_style`,
   `set_auto_fix`, `exclusions_mut`), so this is shell-only.

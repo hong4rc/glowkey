@@ -82,9 +82,12 @@ Cargo workspace:
   a latching **circuit breaker** caps runaways.
 - `menu_bar.rs` — `NSStatusItem`, live **VI/EN glyph**, menu (per-app toggle,
   mode, auto-fix, launch-at-login, reset, reveal log, Settings, About, Quit).
-- `prefs/` — Settings window, an `NSTabView` of four panes (General / Typing /
-  Corrections / Apps & macros), plus the separate **Excluded Apps** and
-  **Macros** windows. Split six ways (2026-09-03, from 1423 lines): `mod.rs`
+- `settings_spec.rs` — the Settings window's four tabs as data, shared with the
+  Windows renderer (decision 0010). Rows, captions in both languages, which row
+  depends on which. Change wording here, not in a renderer.
+- `prefs/` — the AppKit renderer of that spec: an `NSTabView` of four panes
+  (General / Typing / Corrections / Apps & macros), plus the separate **Excluded
+  Apps** and **Macros** windows. Split six ways (2026-09-03, from 1423 lines): `mod.rs`
   (the `define_class!` controller and its actions), `tabs.rs` (the four panes),
   `excluded.rs`, `macros_window.rs` (including the import/export bodies, moved
   out of the class where 141 lines of file dialog sat among forty four-line
@@ -345,7 +348,8 @@ GlowKey now has a Windows backend. It is **early** and should not be relied on.
 
 **What is built.** `app/src/platform/windows/`: a `WH_KEYBOARD_LL` hook and
 `SendInput` injection running the same `glowkey-input` decision ladder as macOS,
-plus a tray icon, an `egui` settings window, launch-at-login, the clipboard tools
+plus a tray icon, an `egui` settings window rendered from the same
+`settings_spec.rs` the macOS window uses, launch-at-login, the clipboard tools
 and an indicator with four states. The engine's full suite passes on Windows and
 CI now has a `windows-latest` job.
 

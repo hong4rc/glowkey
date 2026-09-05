@@ -91,6 +91,9 @@ impl PrefsController {
 
     /// Rebuilds the excluded-app rows from the live ignore list.
     pub(super) fn refresh_list(&self) {
+        // Before the early return below: the count on the Settings tab must
+        // track the list whether or not this window has been built.
+        self.refresh_list_counts();
         let mtm = MainThreadMarker::from(self);
         let Some(list) = self.ivars().list_stack.borrow().clone() else {
             return;

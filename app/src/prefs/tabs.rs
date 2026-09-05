@@ -1,33 +1,53 @@
 //! The Settings window itself: four tabs, built once on first open.
 //!
-//! Split out because it is by far the largest thing in this module and it is all
-//! one shape — make a control, set its state from the session, add it to a stack.
-//! The four tabs exist because a single column had grown past 800 points, taller
-//! than the screen it had to fit on; each tab's title now carries the grouping
-//! the section headers used to.
+//! The tabs are not written here. They are `settings_spec::TABS`, the same data
+//! the Windows window is built from, and this is the AppKit renderer of it: for
+//! each row, make the native control the row calls for, set its state from the
+//! session, wire its action, and add it to the tab's stack. What the rows *are*
+//! — order, wording in both languages, which setting each binds to, which row
+//! depends on which — is decided once, in the spec, so the two windows cannot
+//! drift apart the way they had.
+//!
+//! Everything AppKit-specific stays here: `NSSegmentedControl` for a choice,
+//! `NSButton` checkboxes, the hotkey recorder's status line, wrapping widths,
+//! the accessibility help each control carries.
 
 use objc2::rc::Retained;
+use objc2::runtime::Sel;
 use objc2::{msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
+    NSBackingStoreType, NSButton, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont,
     NSSegmentSwitchTracking, NSSegmentedControl, NSStackView, NSTabView, NSTabViewItem,
-    NSUserInterfaceLayoutOrientation, NSWindow, NSWindowStyleMask,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSString};
 
-use glowkey_engine::{InputMethod, Language, PlacementStyle};
-
-use crate::strings::t;
-
 use super::widgets::LABEL_COLUMN_WIDTH;
 use super::PrefsController;
+use crate::settings_spec::{
+    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, TabSpec, Text,
+    Toggle, HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
+};
+
+/// The window's content size, in points. The same on every platform.
+const WINDOW_SIZE: (f64, f64) = (460.0, 540.0);
+/// Inset of a tab's stack from the pane edge (`widgets::tab_stack`).
+const PANE_INSET: f64 = 18.0;
+/// How far a dependent row sits under its parent: a checkbox glyph plus its gap.
+const DEPENDENT_INDENT: f64 = 20.0;
+/// Larger gap before a section header.
+const SECTION_GAP: f64 = 22.0;
+/// The label on the recorder segment. macOS only — Windows has no recorder —
+/// so it is a detail of this renderer rather than of the spec.
+const CUSTOM_HOTKEY: Text = Text::new("Custom…", "Tùy chọn…");
 
 impl PrefsController {
     /// Constructs the window and its static controls once.
     pub(super) fn build_window(&self, mtm: MainThreadMarker) {
-        // Sized for the full stack (this grew with the English-restore caption and
-        // the hotkey recorder row) — an NSStackView compresses silently if short.
-        let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(460.0, 540.0));
+        let content = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1),
+        );
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
             | NSWindowStyleMask::Miniaturizable;
@@ -41,417 +61,385 @@ impl PrefsController {
                 defer: false,
             ]
         };
-        window.setTitle(&NSString::from_str(t(
-            "GlowKey Settings",
-            "Cài đặt GlowKey",
-        )));
+        window.setTitle(&NSString::from_str(WINDOW_TITLE.get()));
         unsafe { window.setReleasedWhenClosed(false) };
 
-        // One vertical stack per tab. Every option used to live in a single
-        // scrolling column, which had grown past 800 points tall — a wall of
-        // checkboxes with no shape. Four tabs keep each pane short enough to read
-        // at a glance, and the tab title carries the grouping that section
-        // headers used to.
-        let general = self.tab_stack(mtm);
-        let typing = self.tab_stack(mtm);
-        let corrections = self.tab_stack(mtm);
-        let apps = self.tab_stack(mtm);
+        // Rebuilt from scratch: a language change tears the window down and
+        // builds it again, and stale references to the old controls would
+        // otherwise pile up here.
+        self.ivars().dependents.borrow_mut().clear();
+        self.ivars().list_counts.borrow_mut().clear();
 
-        // ===== General =====
-
-        // Interface language — first, because it changes everything below it.
-        let language_labels = NSArray::from_retained_slice(&[
-            NSString::from_str(t("System", "Hệ thống")),
-            NSString::from_str("Tiếng Việt"),
-            NSString::from_str("English"),
-        ]);
-        let language_seg: Retained<NSSegmentedControl> = unsafe {
-            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &language_labels,
-                NSSegmentSwitchTracking::SelectOne,
-                Some(self.as_ref()),
-                Some(sel!(languageChanged:)),
-                mtm,
-            )
-        };
-        language_seg.setSelectedSegment(match self.state().language() {
-            Language::System => 0,
-            Language::Vietnamese => 1,
-            Language::English => 2,
-        });
-        general.addArrangedSubview(&self.form_row(t("Language", "Ngôn ngữ"), &language_seg, mtm));
-
-        let launch_at_login: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t("Launch GlowKey at login", "Khởi động GlowKey cùng máy")),
-                Some(self.as_ref()),
-                Some(sel!(launchAtLoginChanged:)),
-                mtm,
-            )
-        };
-        launch_at_login.setState(if crate::login_item::is_enabled() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        general.addArrangedSubview(&launch_at_login);
-
-        let open_at_launch: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Open this window at launch",
-                    "Mở cửa sổ này khi khởi động",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(openAtLaunchChanged:)),
-                mtm,
-            )
-        };
-        open_at_launch.setState(if self.state().open_settings_at_launch() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        general.addArrangedSubview(&open_at_launch);
-        unsafe {
-            let _: () = msg_send![&general, setCustomSpacing: 22.0f64, afterView: &*open_at_launch];
+        let tabs = NSTabView::new(mtm);
+        for tab in &TABS {
+            let view = self.build_tab(tab, mtm);
+            let item = NSTabViewItem::new();
+            item.setLabel(&NSString::from_str(tab.title.get()));
+            item.setView(Some(&view));
+            tabs.addTabViewItem(&item);
         }
+        window.setContentView(Some(&tabs));
+        *self.ivars().window.borrow_mut() = Some(window);
 
-        // ===== Typing =====
+        self.refresh_hotkey_ui();
+        self.refresh_dependents();
+        self.refresh_list_counts();
+    }
 
-        // Input method — Telex / VNI.
-        let method_labels = NSArray::from_retained_slice(&[
-            NSString::from_str("Telex"),
-            NSString::from_str("VNI"),
-            NSString::from_str(t("Simple Telex", "Telex đơn giản")),
-        ]);
-        let method_seg: Retained<NSSegmentedControl> = unsafe {
-            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &method_labels,
-                NSSegmentSwitchTracking::SelectOne,
-                Some(self.as_ref()),
-                Some(sel!(inputMethodChanged:)),
-                mtm,
-            )
+    /// One tab: a vertical stack of section headers and rows.
+    fn build_tab(&self, tab: &TabSpec, mtm: MainThreadMarker) -> Retained<NSStackView> {
+        let stack = self.tab_stack(mtm);
+        let mut last: Option<Retained<NSView>> = None;
+        for section in tab.sections {
+            if let Some(previous) = &last {
+                unsafe {
+                    let _: () =
+                        msg_send![&stack, setCustomSpacing: SECTION_GAP, afterView: &**previous];
+                }
+            }
+            stack.addArrangedSubview(&self.section_header(section.title.get(), mtm));
+            for row in section.rows {
+                last = Some(self.add_row(&stack, row, mtm));
+            }
+        }
+        stack
+    }
+
+    /// Adds one row (and its caption) to `stack`; returns the last view added,
+    /// so the caller can put a section gap after it.
+    fn add_row(&self, stack: &NSStackView, row: &Row, mtm: MainThreadMarker) -> Retained<NSView> {
+        let label = row.label.map(|l| l.get()).unwrap_or("");
+        let caption = row
+            .caption
+            .map(|c| expand_shortcuts(c.get(), |s| shortcut_display(s).to_string()));
+        let indent = if row.enabled_when.is_some() {
+            DEPENDENT_INDENT
+        } else {
+            0.0
         };
-        method_seg.setSelectedSegment(match self.state().input_method() {
-            InputMethod::Telex => 0,
-            InputMethod::Vni => 1,
-            InputMethod::SimpleTelex => 2,
-        });
-        typing.addArrangedSubview(&self.form_row(t("Input method", "Kiểu gõ"), &method_seg, mtm));
 
-        // Tone marks — aligned label + segmented control.
-        let labels = NSArray::from_retained_slice(&[
-            NSString::from_str(t("Modern  hoà", "Kiểu mới  hoà")),
-            NSString::from_str(t("Classic  hòa", "Kiểu cũ  hòa")),
-        ]);
+        // The view that goes in the stack, and the control that carries the
+        // caption as its accessibility help (a screen reader hears what a
+        // sighted user reads under the control, not a bare title).
+        let (view, control, caption_inset): (Retained<NSView>, Option<Retained<NSView>>, f64) =
+            match row.control {
+                Control::Language(options) => {
+                    let current = self.state().language();
+                    let selected = options.iter().position(|(_, v)| *v == current);
+                    let seg = self.segmented(
+                        options.iter().map(|(text, _)| text.get()),
+                        selected,
+                        sel!(languageChanged:),
+                        mtm,
+                    );
+                    let row_view = self.form_row(label, &seg, mtm);
+                    (
+                        stack_view(row_view),
+                        Some(control_view(seg)),
+                        LABEL_COLUMN_WIDTH + 8.0,
+                    )
+                }
+                Control::InputMethod(options) => {
+                    let current = self.state().input_method();
+                    let selected = options.iter().position(|(_, v)| *v == current);
+                    let seg = self.segmented(
+                        options.iter().map(|(text, _)| text.get()),
+                        selected,
+                        sel!(inputMethodChanged:),
+                        mtm,
+                    );
+                    let row_view = self.form_row(label, &seg, mtm);
+                    (
+                        stack_view(row_view),
+                        Some(control_view(seg)),
+                        LABEL_COLUMN_WIDTH + 8.0,
+                    )
+                }
+                Control::ToneMarks(options) => {
+                    let current = self.state().style();
+                    let selected = options.iter().position(|(_, v)| *v == current);
+                    let seg = self.segmented(
+                        options.iter().map(|(text, _)| text.get()),
+                        selected,
+                        sel!(toneChanged:),
+                        mtm,
+                    );
+                    let row_view = self.form_row(label, &seg, mtm);
+                    (
+                        stack_view(row_view),
+                        Some(control_view(seg)),
+                        LABEL_COLUMN_WIDTH + 8.0,
+                    )
+                }
+                Control::Checkbox(toggle) => {
+                    let checkbox: Retained<NSButton> = unsafe {
+                        NSButton::checkboxWithTitle_target_action(
+                            &NSString::from_str(label),
+                            Some(self.as_ref()),
+                            Some(toggle_selector(toggle)),
+                            mtm,
+                        )
+                    };
+                    checkbox.setState(if self.toggle_value(toggle) {
+                        NSControlStateValueOn
+                    } else {
+                        NSControlStateValueOff
+                    });
+                    if let Some(parent) = row.enabled_when {
+                        self.ivars()
+                            .dependents
+                            .borrow_mut()
+                            .push((parent, checkbox.clone()));
+                    }
+                    let view = if indent > 0.0 {
+                        stack_view(self.indented(&checkbox, indent, mtm))
+                    } else {
+                        control_view(checkbox.clone())
+                    };
+                    (view, Some(control_view(checkbox)), DEPENDENT_INDENT)
+                }
+                Control::ToggleHotkey => {
+                    // Presets plus "Custom…", which arms the recorder (the tap
+                    // captures the next ⌃/⌥ combo; Esc, a click, or an app switch
+                    // cancel). The selected segment is set by `refresh_hotkey_ui`.
+                    let labels = HOTKEY_PRESETS
+                        .iter()
+                        .map(|p| hotkey_display(*p))
+                        .chain(std::iter::once(CUSTOM_HOTKEY.get().to_string()));
+                    let seg = self.segmented(labels, None, sel!(hotkeyChanged:), mtm);
+                    let row_view = self.form_row(label, &seg, mtm);
+                    // This row is two views. The picker goes in here; the status
+                    // line under it — "Current: ⌃⇧Space", or the recording
+                    // prompt while "Custom…" is armed — is handed back as this
+                    // row's view so the common path adds it in order.
+                    stack.addArrangedSubview(&row_view);
+                    let status = self.caption("", mtm);
+                    let status_row = self.caption_row(&status, LABEL_COLUMN_WIDTH + 8.0, mtm);
+                    *self.ivars().hotkey_seg.borrow_mut() = Some(seg);
+                    *self.ivars().hotkey_label.borrow_mut() = Some(status);
+                    (stack_view(status_row), None, 0.0)
+                }
+                Control::Shortcut(shortcut) => {
+                    let value = self.make_label(shortcut_display(shortcut), mtm);
+                    let row_view = self.form_row(label, &value, mtm);
+                    // The value label carries the help: the row is opaque
+                    // without its caption.
+                    (
+                        stack_view(row_view),
+                        Some(control_view(value)),
+                        LABEL_COLUMN_WIDTH + 8.0,
+                    )
+                }
+                Control::List(list) => {
+                    let count = self.make_label("", mtm);
+                    count.setTextColor(Some(&NSColor::secondaryLabelColor()));
+                    let button: Retained<NSButton> = unsafe {
+                        NSButton::buttonWithTitle_target_action(
+                            &NSString::from_str(MANAGE.get()),
+                            Some(self.as_ref()),
+                            Some(list_selector(list)),
+                            mtm,
+                        )
+                    };
+                    let cluster = NSStackView::new(mtm);
+                    cluster.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+                    cluster.setSpacing(8.0);
+                    cluster.addArrangedSubview(&count);
+                    cluster.addArrangedSubview(&button);
+                    self.ivars().list_counts.borrow_mut().push((list, count));
+                    let row_view = self.form_row(label, &cluster, mtm);
+                    (
+                        stack_view(row_view),
+                        Some(control_view(button)),
+                        LABEL_COLUMN_WIDTH + 8.0,
+                    )
+                }
+            };
+
+        stack.addArrangedSubview(&view);
+
+        let Some(caption) = caption else {
+            return view;
+        };
+        if let Some(control) = &control {
+            let help = NSString::from_str(&caption);
+            // `msg_send!` rather than the typed `NSAccessibility` method: that
+            // protocol sits behind the `NSAccessibilityProtocols` feature, which
+            // the crate does not enable for one call.
+            // SAFETY: `control` is a live NSView, which conforms to
+            // NSAccessibility; the selector takes one NSString.
+            unsafe {
+                let _: () = msg_send![&**control, setAccessibilityHelp: &*help];
+            }
+        }
+        let text = self.wrapping_caption(&caption, caption_inset + indent, mtm);
+        let caption_view = self.caption_row(&text, caption_inset + indent, mtm);
+        stack.addArrangedSubview(&caption_view);
+        stack_view(caption_view)
+    }
+
+    /// A `SelectOne` segmented control with these labels and this action.
+    fn segmented(
+        &self,
+        labels: impl Iterator<Item = impl AsRef<str>>,
+        selected: Option<usize>,
+        action: Sel,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSSegmentedControl> {
+        let labels: Vec<Retained<NSString>> =
+            labels.map(|l| NSString::from_str(l.as_ref())).collect();
+        let labels = NSArray::from_retained_slice(&labels);
         let seg: Retained<NSSegmentedControl> = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
                 &labels,
                 NSSegmentSwitchTracking::SelectOne,
                 Some(self.as_ref()),
-                Some(sel!(toneChanged:)),
+                Some(action),
                 mtm,
             )
         };
-        seg.setSelectedSegment(if self.state().style() == PlacementStyle::New {
-            0
-        } else {
-            1
-        });
-        typing.addArrangedSubview(&self.form_row(t("Tone marks", "Dấu thanh"), &seg, mtm));
-
-        // Quick Telex — doubled-consonant shortcuts, as EVKey and later UniKey
-        // releases offer. (Not present in the 2015 UniKey source, so the idea is
-        // credited loosely rather than to a specific implementation.)
-        let quick_telex: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t("Quick Telex", "Gõ tắt phụ âm")),
-                Some(self.as_ref()),
-                Some(sel!(quickTelexChanged:)),
-                mtm,
-            )
-        };
-        quick_telex.setState(if self.state().quick_telex() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        typing.addArrangedSubview(&quick_telex);
-        typing.addArrangedSubview(&self.caption(
-            t(
-                "A doubled consonant at the start of a syllable types its digraph:\ncc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
-                "Phụ âm gõ đôi ở đầu âm tiết cho ra phụ âm ghép:\ncc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
-            ),
-            mtm,
-        ));
-
-        // Telex bracket shortcuts — UniKey's `[`/`]` vowel keys.
-        let brackets: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t("Telex bracket shortcuts", "Phím ngoặc kiểu Telex")),
-                Some(self.as_ref()),
-                Some(sel!(telexBracketsChanged:)),
-                mtm,
-            )
-        };
-        brackets.setState(if self.state().telex_brackets() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        typing.addArrangedSubview(&brackets);
-        typing.addArrangedSubview(&self.caption(
-            t(
-                "[ → ơ, ] → ư, { → Ơ, } → Ư while typing Telex. These four keys stop\nreaching the app entirely, including where they are shortcuts.",
-                "[ → ơ, ] → ư, { → Ơ, } → Ư khi gõ Telex. Bốn phím này sẽ không đến\nứng dụng nữa, kể cả khi chúng là phím tắt.",
-            ),
-            mtm,
-        ));
-
-        // Auto-fix — a full-width checkbox with a secondary caption beneath it.
-        let checkbox: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Auto-fix non-Vietnamese words",
-                    "Tự động khôi phục từ không phải tiếng Việt",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(autoFixChanged:)),
-                mtm,
-            )
-        };
-        checkbox.setState(if self.state().auto_fix() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        corrections.addArrangedSubview(&checkbox);
-        corrections.addArrangedSubview(&self.caption(
-            t(
-                "Restores the raw keys at the space when the result isn’t valid\nVietnamese — types “exit”, not “eĩt”.",
-                "Khôi phục phím gốc ở dấu cách khi kết quả không phải tiếng Việt —\ngõ ra “exit”, không phải “eĩt”.",
-            ),
-            mtm,
-        ));
-
-        // Mid-word spell check — UniKey's second, separate spell-check option.
-        let strict: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Fix as I type, not at the space",
-                    "Sửa ngay khi gõ, không đợi dấu cách",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(strictSpellCheckChanged:)),
-                mtm,
-            )
-        };
-        strict.setState(if self.state().strict_spell_check() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        corrections.addArrangedSubview(&strict);
-        corrections.addArrangedSubview(&self.caption(
-            t(
-                "Restores the raw keys the moment a word stops being possible\nVietnamese — “exit” repairs at the x, not at the space.",
-                "Khôi phục phím gốc ngay khi từ không còn là tiếng Việt hợp lệ —\n“exit” được sửa ngay ở chữ x, không đợi dấu cách.",
-            ),
-            mtm,
-        ));
-
-        // Auto-capitalize — a full-width checkbox with a secondary caption.
-        let capitalize: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Auto-capitalize first letter of each sentence",
-                    "Tự động viết hoa chữ đầu câu",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(autoCapitalizeChanged:)),
-                mtm,
-            )
-        };
-        capitalize.setState(if self.state().auto_capitalize() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        corrections.addArrangedSubview(&capitalize);
-
-        // English word restore — opt-in resolution of the Telex/English ambiguity.
-        let english: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Restore common English words",
-                    "Khôi phục từ tiếng Anh thông dụng",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(englishRestoreChanged:)),
-                mtm,
-            )
-        };
-        english.setState(if self.state().restore_english_words() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        corrections.addArrangedSubview(&english);
-        corrections.addArrangedSubview(&self.caption(
-            t(
-                "The blunt version: “was” stays “was”, but every syllable sharing keys with a\nlisted word (á→as, í→is, cát→cats, cả→car, hải→hair) then needs a different\nkey order. Personal Words below decides one word at a time instead, and wins\nover this.",
-                "Cách thô: “was” giữ nguyên “was”, nhưng mọi âm tiết trùng phím với từ trong\ndanh sách (á→as, í→is, cát→cats, cả→car, hải→hair) sẽ phải gõ theo thứ tự\nkhác. “Từ riêng” bên dưới quyết định từng từ một, và được ưu tiên hơn.",
-            ),
-            mtm,
-        ));
-
-        // Personal Words — the per-word answer, directly under the global switch
-        // it supersedes. Anywhere else and a user who found one would not find
-        // the other.
-        let words_button: Retained<NSButton> = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str(t("Personal Words…", "Từ riêng…")),
-                Some(self.as_ref()),
-                Some(sel!(managePersonalWords:)),
-                mtm,
-            )
-        };
-        corrections.addArrangedSubview(&words_button);
-        corrections.addArrangedSubview(&self.caption(
-            t(
-                "Decide a single word and it stays decided — or press ⌃⇧W right after typing\none to fix it and remember the choice.",
-                "Quyết định một từ và nó được giữ nguyên — hoặc bấm ⌃⇧W ngay sau khi gõ một\ntừ để sửa và ghi nhớ lựa chọn.",
-            ),
-            mtm,
-        ));
-
-        // Toggle hotkey — presets plus "Custom…", which arms the recorder (the
-        // tap captures the next ⌃/⌥ combo; Esc, a click, or an app switch cancel).
-        let hotkey_labels = NSArray::from_retained_slice(&[
-            NSString::from_str("⌃⇧Space"),
-            NSString::from_str("⌃Space"),
-            NSString::from_str("⌥Space"),
-            NSString::from_str("⌃⇧Z"),
-            NSString::from_str(t("Custom…", "Tùy chọn…")),
-        ]);
-        let hotkey_seg: Retained<NSSegmentedControl> = unsafe {
-            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &hotkey_labels,
-                NSSegmentSwitchTracking::SelectOne,
-                Some(self.as_ref()),
-                Some(sel!(hotkeyChanged:)),
-                mtm,
-            )
-        };
-        general.addArrangedSubview(&self.form_row(
-            t("Toggle key", "Phím chuyển"),
-            &hotkey_seg,
-            mtm,
-        ));
-
-        // Status row under the picker: "Current: ⌃⇧Space" / the recording prompt.
-        let record_row = NSStackView::new(mtm);
-        record_row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        record_row.setSpacing(8.0);
-        let spacer = self.make_label("", mtm);
-        let spacer_width = spacer
-            .widthAnchor()
-            .constraintEqualToConstant(LABEL_COLUMN_WIDTH);
-        spacer_width.setActive(true);
-        let hotkey_label = self.caption("", mtm);
-        record_row.addArrangedSubview(&spacer);
-        record_row.addArrangedSubview(&hotkey_label);
-        general.addArrangedSubview(&record_row);
-        *self.ivars().hotkey_seg.borrow_mut() = Some(hotkey_seg);
-        *self.ivars().hotkey_label.borrow_mut() = Some(hotkey_label);
-        self.refresh_hotkey_ui();
-
-        // Group separation: a larger gap before the next section header.
-        unsafe {
-            let _: () = msg_send![&general, setCustomSpacing: 22.0f64, afterView: &*record_row];
+        if let Some(index) = selected {
+            seg.setSelectedSegment(index as isize);
         }
-
-        // ===== Excluded apps =====
-        // The list itself lives in its own window (advanced/rare) so it does not
-        // clutter the everyday settings; this is just the entry point.
-        apps.addArrangedSubview(&self.caption(
-            t(
-                "Apps where GlowKey stays off — terminals & editors by default, so it never\nmangles commands. Toggle the current app anytime with ⌃⇧E.",
-                "Những ứng dụng GlowKey luôn tắt — mặc định là terminal và trình soạn thảo, để\nkhông làm hỏng câu lệnh. Bật tắt ứng dụng hiện tại bất cứ lúc nào bằng ⌃⇧E.",
-            ),
-            mtm,
-        ));
-        let manage_button: Retained<NSButton> = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str(t("Manage Excluded Apps…", "Quản lý ứng dụng loại trừ…")),
-                Some(self.as_ref()),
-                Some(sel!(manageExcludedApps:)),
-                mtm,
-            )
-        };
-        apps.addArrangedSubview(&manage_button);
-        unsafe {
-            let _: () = msg_send![&apps, setCustomSpacing: 22.0f64, afterView: &*manage_button];
-        }
-
-        // ===== Macros =====
-        apps.addArrangedSubview(&self.caption(
-            t(
-                "Text expansion (gõ tắt): type a shortcut then a space to expand it.",
-                "Gõ tắt: gõ chữ viết tắt rồi dấu cách để bung ra.",
-            ),
-            mtm,
-        ));
-        let macros_button: Retained<NSButton> = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str(t("Manage Macros…", "Quản lý gõ tắt…")),
-                Some(self.as_ref()),
-                Some(sel!(manageMacros:)),
-                mtm,
-            )
-        };
-        apps.addArrangedSubview(&macros_button);
-
-        let always_macro: Retained<NSButton> = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str(t(
-                    "Expand macros even when Vietnamese is off",
-                    "Bung gõ tắt cả khi đã tắt tiếng Việt",
-                )),
-                Some(self.as_ref()),
-                Some(sel!(alwaysMacroChanged:)),
-                mtm,
-            )
-        };
-        always_macro.setState(if self.state().always_macro() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        apps.addArrangedSubview(&always_macro);
-        apps.addArrangedSubview(&self.caption(
-            t(
-                "Never in an excluded app.",
-                "Không áp dụng trong ứng dụng đã loại trừ.",
-            ),
-            mtm,
-        ));
-
-        let tabs = NSTabView::new(mtm);
-        for (title, view) in [
-            (t("General", "Chung"), &general),
-            (t("Typing", "Gõ phím"), &typing),
-            (t("Corrections", "Sửa lỗi"), &corrections),
-            (t("Apps & macros", "Ứng dụng & gõ tắt"), &apps),
-        ] {
-            let item = NSTabViewItem::new();
-            item.setLabel(&NSString::from_str(title));
-            item.setView(Some(view));
-            tabs.addTabViewItem(&item);
-        }
-        window.setContentView(Some(&tabs));
-        *self.ivars().window.borrow_mut() = Some(window);
+        seg
     }
+
+    /// A section title: bold, small, secondary — the shape macOS System
+    /// Settings gives a group heading.
+    fn section_header(&self, title: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
+        let label = self.make_label(title, mtm);
+        label.setFont(Some(&NSFont::boldSystemFontOfSize(11.0)));
+        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        label
+    }
+
+    /// A caption that wraps at the pane width rather than carrying `\n`.
+    ///
+    /// The spec's strings have no hard breaks — a break chosen for one toolkit's
+    /// width is wrong in the other — so the wrapping is decided here, from the
+    /// window width and the inset the caption sits at.
+    fn wrapping_caption(
+        &self,
+        text: &str,
+        inset: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSTextField> {
+        let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
+        label.setSelectable(false);
+        label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        // `preferredMaxLayoutWidth` alone is a hint for the intrinsic height,
+        // not a limit: pin the width too, so the height AppKit computes is for
+        // the width it actually lays out at.
+        let width = WINDOW_SIZE.0 - 2.0 * PANE_INSET - inset;
+        label.setPreferredMaxLayoutWidth(width);
+        label
+            .widthAnchor()
+            .constraintEqualToConstant(width)
+            .setActive(true);
+        label
+    }
+
+    /// `view` pushed right by `inset` points, so it reads as sitting under the
+    /// row above.
+    fn caption_row(
+        &self,
+        view: &NSView,
+        inset: f64,
+        mtm: MainThreadMarker,
+    ) -> Retained<NSStackView> {
+        self.indented(view, inset, mtm)
+    }
+
+    fn indented(&self, view: &NSView, inset: f64, mtm: MainThreadMarker) -> Retained<NSStackView> {
+        let row = NSStackView::new(mtm);
+        row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        row.setSpacing(0.0);
+        let spacer = self.make_label("", mtm);
+        spacer
+            .widthAnchor()
+            .constraintEqualToConstant(inset)
+            .setActive(true);
+        row.addArrangedSubview(&spacer);
+        row.addArrangedSubview(view);
+        row
+    }
+
+    /// The current value of a toggle, from the session or — for the login item
+    /// — from the operating system.
+    fn toggle_value(&self, toggle: Toggle) -> bool {
+        let state = self.state();
+        match toggle {
+            Toggle::LaunchAtLogin => crate::login_item::is_enabled(),
+            Toggle::OpenSettingsAtLaunch => state.open_settings_at_launch(),
+            Toggle::QuickTelex => state.quick_telex(),
+            Toggle::TelexBrackets => state.telex_brackets(),
+            Toggle::AutoFix => state.auto_fix(),
+            Toggle::StrictSpellCheck => state.strict_spell_check(),
+            Toggle::AutoCapitalize => state.auto_capitalize(),
+            Toggle::RestoreEnglishWords => state.restore_english_words(),
+            Toggle::AlwaysMacro => state.always_macro(),
+        }
+    }
+
+    /// Enables or disables every dependent checkbox from its parent's current
+    /// value. Called after the window is built and whenever a parent changes.
+    pub(super) fn refresh_dependents(&self) {
+        for (parent, checkbox) in self.ivars().dependents.borrow().iter() {
+            checkbox.setEnabled(self.toggle_value(*parent));
+        }
+    }
+
+    /// Rewrites the count beside each "Manage…" button from the session.
+    /// Called after the window is built and whenever a list window changes its
+    /// list, so the number never lags what the window would show.
+    pub(super) fn refresh_list_counts(&self) {
+        let state = self.state();
+        for (list, label) in self.ivars().list_counts.borrow().iter() {
+            let count = match list {
+                ListId::ExcludedApps => state.exclusion_ids().len(),
+                ListId::Macros => state.macros().len(),
+                ListId::PersonalWords => state.word_overrides().len(),
+            };
+            label.setStringValue(&NSString::from_str(&count.to_string()));
+        }
+    }
+}
+
+/// The action a toggle's checkbox fires. Each handler lives in `prefs/mod.rs`.
+fn toggle_selector(toggle: Toggle) -> Sel {
+    match toggle {
+        Toggle::LaunchAtLogin => sel!(launchAtLoginChanged:),
+        Toggle::OpenSettingsAtLaunch => sel!(openAtLaunchChanged:),
+        Toggle::QuickTelex => sel!(quickTelexChanged:),
+        Toggle::TelexBrackets => sel!(telexBracketsChanged:),
+        Toggle::AutoFix => sel!(autoFixChanged:),
+        Toggle::StrictSpellCheck => sel!(strictSpellCheckChanged:),
+        Toggle::AutoCapitalize => sel!(autoCapitalizeChanged:),
+        Toggle::RestoreEnglishWords => sel!(englishRestoreChanged:),
+        Toggle::AlwaysMacro => sel!(alwaysMacroChanged:),
+    }
+}
+
+/// The action that opens a list's window.
+fn list_selector(list: ListId) -> Sel {
+    match list {
+        ListId::ExcludedApps => sel!(manageExcludedApps:),
+        ListId::Macros => sel!(manageMacros:),
+        ListId::PersonalWords => sel!(managePersonalWords:),
+    }
+}
+
+/// A control (`NSButton`, `NSSegmentedControl`, `NSTextField`) as the `NSView`
+/// two levels up its class chain.
+fn control_view<T>(control: Retained<T>) -> Retained<NSView>
+where
+    T: objc2::ClassType<Super = objc2_app_kit::NSControl> + objc2::Message + 'static,
+{
+    control.into_super().into_super()
+}
+
+/// A stack view as the `NSView` one level up.
+fn stack_view(stack: Retained<NSStackView>) -> Retained<NSView> {
+    stack.into_super()
 }

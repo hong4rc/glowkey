@@ -129,6 +129,9 @@ impl PrefsController {
     /// Rebuilds the row list from the session. Called after every mutation, so a
     /// removed or flipped row cannot leave a stale index behind on a button tag.
     pub(super) fn refresh_words(&self) {
+        // Before the early return below: the count on the Settings tab must
+        // track the list whether or not this window has been built.
+        self.refresh_list_counts();
         let mtm = MainThreadMarker::from(self);
         let Some(list) = self.ivars().words_list.borrow().clone() else {
             return;

@@ -36,11 +36,12 @@ use std::rc::Rc;
 
 use eframe::egui;
 
-use glowkey_engine::{
-    ExclusionList, InputMethod, Language, Macro, PlacementStyle, Settings, WordOverride,
-    WordPreference,
-};
+use glowkey_engine::{ExclusionList, HotkeyPreset, Macro, Settings, WordOverride, WordPreference};
 
+use crate::settings_spec::{
+    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, TabSpec, Toggle,
+    HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
+};
 use crate::strings::t;
 
 /// Opens the settings window and blocks until the user closes it.
@@ -61,7 +62,7 @@ pub fn show(initial: Settings) -> Option<Settings> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title(t("GlowKey Settings", "Cài đặt GlowKey"))
+            .with_title(WINDOW_TITLE.get())
             // The macOS window's content size, to the point
             // (`app/src/prefs/tabs.rs`): a settings window for a background
             // utility is a small window, and this one had grown to nearly twice
@@ -375,6 +376,13 @@ fn group_gap(ui: &mut egui::Ui) {
     ui.add_space(GROUP_GAP);
 }
 
+/// A section title, in the macOS settings shape: bold, small, secondary.
+fn section_header(ui: &mut egui::Ui, title: &str) {
+    let color = secondary_color(ui);
+    ui.label(egui::RichText::new(title).small().strong().color(color));
+    ui.add_space(2.0);
+}
+
 /// An auxiliary window: the toolkit's nearest equivalent of the separate windows
 /// the macOS build opens for About and the three list editors. Centred on first
 /// open (as `NSWindow::center` does) and draggable after, with the close button
@@ -418,14 +426,24 @@ enum Tab {
 }
 
 impl Tab {
-    /// The tab titles, in order. The same `t` pairs the macOS `NSTabView` uses.
+    const ORDER: [Self; 4] = [Self::General, Self::Typing, Self::Corrections, Self::Apps];
+
+    /// The tab's definition in the shared spec, by position.
+    fn spec(self) -> &'static TabSpec {
+        let index = Self::ORDER
+            .iter()
+            .position(|t| *t == self)
+            .expect("every tab is in ORDER");
+        &TABS[index]
+    }
+
+    /// The tab titles, in order, from the spec the macOS window also reads.
     fn all() -> [(Self, &'static str); 4] {
-        [
-            (Self::General, t("General", "Chung")),
-            (Self::Typing, t("Typing", "Gõ phím")),
-            (Self::Corrections, t("Corrections", "Sửa lỗi")),
-            (Self::Apps, t("Apps & macros", "Ứng dụng & gõ tắt")),
-        ]
+        let mut out = [(Self::General, ""); 4];
+        for (slot, tab) in out.iter_mut().zip(Self::ORDER) {
+            *slot = (tab, tab.spec().title.get());
+        }
+        out
     }
 }
 
@@ -527,256 +545,180 @@ impl SettingsApp {
     }
 
     // ----- Tabs -------------------------------------------------------------
+    //
+    // The four tabs are not written here. They are `settings_spec::TABS`, the
+    // same data the macOS window is built from, and this is one of the two
+    // renderers of it. Everything below is "what does an egui row for this
+    // control look like"; what the rows *are* is decided in one place.
 
-    /// General: the interface language and what happens at launch.
+    /// Draws one tab: its sections, each a header and its rows.
+    fn render_tab(&mut self, ui: &mut egui::Ui, tab: &TabSpec) {
+        for (i, section) in tab.sections.iter().enumerate() {
+            if i > 0 {
+                group_gap(ui);
+            }
+            section_header(ui, section.title.get());
+            for row in section.rows {
+                self.render_row(ui, row);
+            }
+        }
+    }
+
+    /// Draws one row of the spec.
     ///
-    /// Shorter than the macOS tab on purpose. "Launch at login", the
-    /// toggle-hotkey picker and About all live in the tray menu on this
-    /// platform, and the tray owns them; duplicating a control here would give
-    /// the same setting two places to disagree with itself.
-    fn general_tab(&mut self, ui: &mut egui::Ui) {
-        // The picker applies immediately rather than at save, so the window is
-        // in the chosen language before the user has to decide whether they
-        // chose right. `set_language` is the same call the app makes at startup;
-        // the value is returned and persisted like any other edit.
-        let before = self.draft.language;
-        control_row(ui, t("Language", "Ngôn ngữ"), None, |ui| {
-            ui.radio_value(
-                &mut self.draft.language,
-                Language::System,
-                t("System", "Hệ thống"),
-            );
-            ui.radio_value(&mut self.draft.language, Language::Vietnamese, "Tiếng Việt");
-            ui.radio_value(&mut self.draft.language, Language::English, "English");
-        });
-        if self.draft.language != before {
-            crate::strings::set_language(self.draft.language);
-        }
+    /// A row that depends on another toggle is indented under it and disabled
+    /// while that toggle is off, so "Fix as I type" reads as the refinement of
+    /// "Auto-fix" it is rather than as an equal.
+    fn render_row(&mut self, ui: &mut egui::Ui, row: &Row) {
+        let enabled = row
+            .enabled_when
+            .is_none_or(|parent| self.toggle_is_on(parent));
+        let inset = if row.enabled_when.is_some() {
+            INDENT
+        } else {
+            0.0
+        };
+        let caption_text = row
+            .caption
+            .map(|c| expand_shortcuts(c.get(), |s| shortcut_display(s).to_string()));
 
-        group_gap(ui);
+        egui::Frame::none()
+            .inner_margin(egui::Margin {
+                left: inset,
+                right: 0.0,
+                top: 0.0,
+                bottom: 0.0,
+            })
+            .show(ui, |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    self.render_control(ui, row, caption_text.as_deref());
+                });
+            });
+    }
 
-        checkbox_row(
-            ui,
-            &mut self.draft.open_settings_at_launch,
-            t("Open this window at launch", "Mở cửa sổ này khi khởi động"),
-            Some(t(
-                "On by default, so a new user finds the controls. GlowKey keeps \
-                 running in the notification area either way.",
-                "Mặc định bật, để người dùng mới tìm thấy các tuỳ chọn. Dù bật hay tắt, \
-                 GlowKey vẫn chạy dưới khay hệ thống.",
-            )),
-        );
-
-        group_gap(ui);
-
-        // Start at login.
-        //
-        // Not a duplicate of the tray item: the macOS window carries this too
-        // (`prefs/mod.rs`) *and* keeps it in the menu bar (`menu_bar.rs`), which
-        // is the shape being matched. It also has nowhere else to live — it is
-        // registry state rather than a field of `Settings`, so it cannot ride
-        // along with the rest of the draft.
-        //
-        // Read fresh every frame rather than mirrored into a bool, so the
-        // checkbox cannot drift out of step with the tray item toggling the same
-        // thing. A registry read on a repaint of an open window is nowhere near
-        // the keystroke path.
-        let mut at_login = crate::platform::windows::startup::is_enabled();
-        let was = at_login;
-        checkbox_row(
-            ui,
-            &mut at_login,
-            t("Start at login", "Khởi động cùng máy"),
-            Some(t(
-                "Adds GlowKey to this account's startup programs. Turning it off \
-                 removes the entry rather than leaving a disabled one behind.",
-                "Thêm GlowKey vào danh sách khởi động của tài khoản này. Khi tắt, mục \
-                 khởi động được xoá hẳn chứ không để lại mục vô hiệu.",
-            )),
-        );
-        if at_login != was && !crate::platform::windows::startup::set_enabled(at_login) {
-            // The write failed, so the checkbox must not go on claiming it
-            // worked. Nothing is stored here, so the next frame re-reads the
-            // registry and shows the truth.
-            crate::log::log("SETTINGS could not change the startup entry");
+    fn render_control(&mut self, ui: &mut egui::Ui, row: &Row, caption_text: Option<&str>) {
+        let label = row.label.map(|l| l.get()).unwrap_or("");
+        match row.control {
+            Control::Language(options) => {
+                // Applies immediately rather than at save, so the window is in
+                // the chosen language before the user has to decide whether they
+                // chose right. `set_language` is the same call the app makes at
+                // startup; the value is persisted like any other edit.
+                let before = self.draft.language;
+                control_row(ui, label, caption_text, |ui| {
+                    for (text, value) in options {
+                        ui.radio_value(&mut self.draft.language, *value, text.get());
+                    }
+                });
+                if self.draft.language != before {
+                    crate::strings::set_language(self.draft.language);
+                }
+            }
+            Control::InputMethod(options) => {
+                control_row(ui, label, caption_text, |ui| {
+                    for (text, value) in options {
+                        ui.radio_value(&mut self.draft.input_method, *value, text.get());
+                    }
+                });
+            }
+            Control::ToneMarks(options) => {
+                control_row(ui, label, caption_text, |ui| {
+                    for (text, value) in options {
+                        ui.radio_value(&mut self.draft.style, *value, text.get());
+                    }
+                });
+            }
+            Control::Checkbox(Toggle::LaunchAtLogin) => {
+                // Registry state rather than a field of `Settings`, so it cannot
+                // ride along with the rest of the draft. Read fresh every frame
+                // so the checkbox cannot drift out of step with the tray item
+                // toggling the same thing; a registry read on a repaint of an
+                // open window is nowhere near the keystroke path.
+                let mut at_login = crate::platform::windows::startup::is_enabled();
+                let was = at_login;
+                checkbox_row(ui, &mut at_login, label, caption_text);
+                if at_login != was && !crate::platform::windows::startup::set_enabled(at_login) {
+                    // The write failed, so the checkbox must not go on claiming
+                    // it worked. Nothing is stored here, so the next frame
+                    // re-reads the registry and shows the truth.
+                    crate::log::log("SETTINGS could not change the startup entry");
+                }
+            }
+            Control::Checkbox(toggle) => {
+                let value = toggle
+                    .settings_field(&mut self.draft)
+                    .expect("every toggle but LaunchAtLogin is a Settings field");
+                checkbox_row(ui, value, label, caption_text);
+            }
+            Control::ToggleHotkey => {
+                control_row(ui, label, caption_text, |ui| {
+                    ui.vertical(|ui| {
+                        // Alt+Space is the system-menu key on Windows. Whether
+                        // the hook wins that race is unverified, so it is not
+                        // offered here; a settings file that already has it
+                        // still shows it below.
+                        let offered = HOTKEY_PRESETS
+                            .into_iter()
+                            .filter(|p| *p != HotkeyPreset::OptionSpace);
+                        for preset in offered {
+                            ui.radio_value(
+                                &mut self.draft.toggle_hotkey,
+                                preset,
+                                hotkey_display(preset),
+                            );
+                        }
+                        // The saved choice when it is not one of the above: a
+                        // combination recorded on a Mac (there is no recorder on
+                        // this platform), or Alt+Space. Shown as the current
+                        // choice rather than silently replaced by a preset.
+                        let current = self.draft.toggle_hotkey;
+                        if matches!(current, HotkeyPreset::Custom { .. })
+                            || current == HotkeyPreset::OptionSpace
+                        {
+                            ui.radio_value(
+                                &mut self.draft.toggle_hotkey,
+                                current,
+                                hotkey_display(current),
+                            );
+                        }
+                    });
+                });
+            }
+            Control::Shortcut(shortcut) => {
+                control_row(ui, label, caption_text, |ui| {
+                    ui.label(shortcut_display(shortcut));
+                });
+            }
+            Control::List(list) => {
+                let count = match list {
+                    // The live edit set, not the draft's saved fields: those are
+                    // written back only when the window closes.
+                    ListId::ExcludedApps => self.exclusion_list.ids().count(),
+                    ListId::Macros => self.draft.macros.len(),
+                    ListId::PersonalWords => self.draft.word_overrides.len(),
+                };
+                let mut open = false;
+                control_row(ui, label, caption_text, |ui| {
+                    ui.label(count.to_string());
+                    open = ui.button(MANAGE.get()).clicked();
+                });
+                if open {
+                    match list {
+                        ListId::ExcludedApps => self.excluded_open = true,
+                        ListId::Macros => self.macros_open = true,
+                        ListId::PersonalWords => self.words_open = true,
+                    }
+                }
+            }
         }
     }
 
-    /// Typing: how keys become Vietnamese.
-    fn typing_tab(&mut self, ui: &mut egui::Ui) {
-        control_row(ui, t("Input method", "Kiểu gõ"), None, |ui| {
-            ui.radio_value(&mut self.draft.input_method, InputMethod::Telex, "Telex");
-            ui.radio_value(&mut self.draft.input_method, InputMethod::Vni, "VNI");
-            ui.radio_value(
-                &mut self.draft.input_method,
-                InputMethod::SimpleTelex,
-                t("Simple Telex", "Telex đơn giản"),
-            );
-        });
-
-        control_row(ui, t("Tone marks", "Dấu thanh"), None, |ui| {
-            ui.radio_value(
-                &mut self.draft.style,
-                PlacementStyle::New,
-                t("Modern  hoà", "Kiểu mới  hoà"),
-            );
-            ui.radio_value(
-                &mut self.draft.style,
-                PlacementStyle::Old,
-                t("Classic  hòa", "Kiểu cũ  hòa"),
-            );
-        });
-
-        group_gap(ui);
-
-        checkbox_row(
-            ui,
-            &mut self.draft.quick_telex,
-            t("Quick Telex", "Gõ tắt phụ âm"),
-            Some(t(
-                "A doubled consonant at the start of a syllable types its digraph: \
-                 cc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
-                "Phụ âm gõ đôi ở đầu âm tiết cho ra phụ âm ghép: cc→ch, gg→gi, kk→kh, \
-                 nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
-            )),
-        );
-
-        checkbox_row(
-            ui,
-            &mut self.draft.telex_brackets,
-            t("Telex bracket shortcuts", "Phím ngoặc kiểu Telex"),
-            Some(t(
-                "[ → ơ, ] → ư, { → Ơ, } → Ư while typing Telex. These four keys stop \
-                 reaching the app entirely, including where they are shortcuts.",
-                "[ → ơ, ] → ư, { → Ơ, } → Ư khi gõ Telex. Bốn phím này sẽ không đến \
-                 ứng dụng nữa, kể cả khi chúng là phím tắt.",
-            )),
-        );
-    }
-
-    /// Corrections: what happens when a word is not Vietnamese — and the
-    /// Personal Words window, directly under the global switch it supersedes.
-    fn corrections_tab(&mut self, ui: &mut egui::Ui) {
-        checkbox_row(
-            ui,
-            &mut self.draft.auto_fix,
-            t(
-                "Auto-fix non-Vietnamese words",
-                "Tự động khôi phục từ không phải tiếng Việt",
-            ),
-            Some(t(
-                "Restores the raw keys at the space when the result isn't valid \
-                 Vietnamese — types \"exit\", not \"eĩt\".",
-                "Khôi phục phím gốc ở dấu cách khi kết quả không phải tiếng Việt — \
-                 gõ ra “exit”, không phải “eĩt”.",
-            )),
-        );
-
-        checkbox_row(
-            ui,
-            &mut self.draft.strict_spell_check,
-            t(
-                "Fix as I type, not at the space",
-                "Sửa ngay khi gõ, không đợi dấu cách",
-            ),
-            Some(t(
-                "Restores the raw keys the moment a word stops being possible \
-                 Vietnamese — \"exit\" repairs at the x, not at the space.",
-                "Khôi phục phím gốc ngay khi từ không còn là tiếng Việt hợp lệ — \
-                 “exit” được sửa ngay ở chữ x, không đợi dấu cách.",
-            )),
-        );
-
-        checkbox_row(
-            ui,
-            &mut self.draft.auto_capitalize,
-            t(
-                "Auto-capitalize first letter of each sentence",
-                "Tự động viết hoa chữ đầu câu",
-            ),
-            None,
-        );
-
-        group_gap(ui);
-
-        checkbox_row(
-            ui,
-            &mut self.draft.restore_english_words,
-            t(
-                "Restore common English words",
-                "Khôi phục từ tiếng Anh thông dụng",
-            ),
-            Some(t(
-                "Off by default: \"was\" stays \"was\", but every syllable sharing keys \
-                 with a listed word (á→as, í→is, cát→cats, cả→car, hải→hair) then needs \
-                 a different key order. Personal Words decides one word at a time \
-                 instead, and wins over this.",
-                "Mặc định tắt: “was” giữ nguyên “was”, nhưng mọi âm tiết trùng phím với từ \
-                 trong danh sách (á→as, í→is, cát→cats, cả→car, hải→hair) sẽ phải gõ theo \
-                 thứ tự khác. “Từ riêng” quyết định từng từ một, và được ưu tiên hơn.",
-            )),
-        );
-
-        if ui.button(t("Personal Words…", "Từ riêng…")).clicked() {
-            self.words_open = true;
-        }
-        caption(
-            ui,
-            t(
-                "Decide a single word and it stays decided.",
-                "Quyết định một từ và nó được giữ nguyên.",
-            ),
-        );
-    }
-
-    /// Apps & macros: the two list editors, and the one macro switch that is a
-    /// setting rather than a list.
-    fn apps_tab(&mut self, ui: &mut egui::Ui) {
-        intro(
-            ui,
-            t(
-                "Apps where GlowKey stays off — terminals and editors by default, so it \
-                 never mangles a command.",
-                "Những ứng dụng GlowKey luôn tắt — mặc định là terminal và trình soạn thảo, \
-                 để không làm hỏng câu lệnh.",
-            ),
-        );
-        ui.add_space(4.0);
-        if ui
-            .button(t("Manage Excluded Apps…", "Quản lý ứng dụng loại trừ…"))
-            .clicked()
-        {
-            self.excluded_open = true;
-        }
-
-        group_gap(ui);
-
-        intro(
-            ui,
-            t(
-                "Text expansion (gõ tắt): type a shortcut then a space to expand it.",
-                "Gõ tắt: gõ chữ viết tắt rồi dấu cách để bung ra.",
-            ),
-        );
-        ui.add_space(4.0);
-        if ui.button(t("Manage Macros…", "Quản lý gõ tắt…")).clicked() {
-            self.macros_open = true;
-        }
-
-        group_gap(ui);
-
-        checkbox_row(
-            ui,
-            &mut self.draft.always_macro,
-            t(
-                "Expand macros even when Vietnamese is off",
-                "Bung gõ tắt cả khi đã tắt tiếng Việt",
-            ),
-            Some(t(
-                "Never in an excluded app.",
-                "Không áp dụng trong ứng dụng đã loại trừ.",
-            )),
-        );
+    /// The current value of a settings-backed toggle. `LaunchAtLogin` is never
+    /// a parent, so it reads as off here rather than costing a registry read.
+    fn toggle_is_on(&mut self, toggle: Toggle) -> bool {
+        toggle
+            .settings_field(&mut self.draft)
+            .is_some_and(|value| *value)
     }
 
     // ----- The list-editor windows -----------------------------------------
@@ -1106,12 +1048,8 @@ impl SettingsApp {
 
     /// Dispatches to the tab's builder.
     fn show_tab(&mut self, ui: &mut egui::Ui) {
-        match self.tab {
-            Tab::General => self.general_tab(ui),
-            Tab::Typing => self.typing_tab(ui),
-            Tab::Corrections => self.corrections_tab(ui),
-            Tab::Apps => self.apps_tab(ui),
-        }
+        let spec = self.tab.spec();
+        self.render_tab(ui, spec);
     }
 
     /// Every auxiliary window, drawn over the tabs.
@@ -1171,7 +1109,8 @@ impl SettingsApp {
         apply_theme(ctx);
 
         // The OS/window-manager close (title-bar X, Alt+F4, …) also has to
-        // decide what to hand back, exactly like the explicit Close button.
+        // decide what to hand back; there is no Done button, this is the only
+        // way out.
         if ctx.input(|i| i.viewport().close_requested()) {
             self.finalize();
         }
@@ -1191,17 +1130,6 @@ impl SettingsApp {
                             ui.selectable_value(&mut self.tab, tab, title);
                         }
                     });
-                });
-            });
-
-        egui::TopBottomPanel::bottom("glowkey_settings_bottom")
-            .frame(chrome_frame(ctx).inner_margin(egui::Margin::symmetric(16.0, 10.0)))
-            .show(ctx, |ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t("Done", "Xong")).clicked() {
-                        self.finalize();
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
                 });
             });
 
@@ -1505,6 +1433,45 @@ mod tests {
         for (tab, title) in Tab::all() {
             assert!(!title.trim().is_empty(), "{tab:?} has no title");
         }
+        // The enum is paired with `TABS` by position; a reorder of either
+        // would put one tab's title over another's body.
+        assert_eq!(Tab::General.spec().title.en, "General");
+        assert_eq!(Tab::Typing.spec().title.en, "Typing");
+        assert_eq!(Tab::Corrections.spec().title.en, "Corrections");
+        assert_eq!(Tab::Apps.spec().title.en, "Apps & macros");
+    }
+
+    /// The two states the default settings never put a tab in: auto-fix off,
+    /// so the dependent row renders disabled, and a hotkey recorded on a Mac,
+    /// which has no radio of its own until the renderer adds one.
+    #[test]
+    fn dependent_and_foreign_hotkey_states_render() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let settings = Settings {
+            auto_fix: false,
+            toggle_hotkey: HotkeyPreset::Custom {
+                control: true,
+                shift: false,
+                option: true,
+                key_char: 'k',
+                macos_keycode: Some(40),
+                windows_vk: None,
+            },
+            ..Settings::default()
+        };
+        let slot = Rc::new(RefCell::new(None));
+        let mut app = SettingsApp::new(settings.clone(), Rc::clone(&slot));
+        for tab in [Tab::General, Tab::Corrections] {
+            app.tab = tab;
+            for _ in 0..2 {
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.ui(ctx));
+            }
+        }
+        // Rendering must not have edited anything: the foreign hotkey is shown,
+        // not replaced.
+        assert_eq!(app.draft, settings);
+        assert!(slot.borrow().is_none());
     }
 
     /// A light system gets a light window.

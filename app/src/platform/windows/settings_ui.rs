@@ -73,7 +73,8 @@ pub fn show(initial: Settings) -> Option<Settings> {
             // Resizable, but not down to where the four tab titles stop fitting
             // on one row.
             .with_min_inner_size([420.0, 420.0])
-            .with_resizable(true),
+            .with_resizable(true)
+            .with_icon(window_icon()),
         ..Default::default()
     };
 
@@ -121,7 +122,7 @@ const ROW_HEIGHT: f32 = 24.0;
 /// Width of the label column in a label + control row — the macOS window aligns
 /// its controls on one edge (`prefs/widgets.rs`'s `LABEL_COLUMN_WIDTH`) and so
 /// does this one.
-const LABEL_COLUMN: f32 = 110.0;
+const LABEL_COLUMN: f32 = 92.0;
 /// How far a caption is inset under the control it explains — roughly a checkbox
 /// plus its gap, so the text starts under the label, not under the box.
 const INDENT: f32 = 22.0;
@@ -141,25 +142,15 @@ const EXCLUDED_SIZE: [f32; 2] = [372.0, 320.0];
 const MACROS_SIZE: [f32; 2] = [396.0, 340.0];
 const WORDS_SIZE: [f32; 2] = [396.0, 340.0];
 
-/// The surface the tab strip and the button bar sit on.
+/// The application icon, for the title bar and the taskbar.
 ///
-/// Painted rather than left transparent. An unfilled panel shows whatever the
-/// clear colour is, which is how the tab strip and the button bar stayed black
-/// while the content between them was themed — the two halves of the same window
-/// disagreeing about what colour it was.
-///
-/// A shade off the content fill, with a hairline against it, so the chrome reads
-/// as chrome. Both values come from the active visuals, so this follows the
-/// light/dark switch instead of pinning a colour that is right in one theme only
-/// — the token-driven rule, applied to the one place that was breaking it.
-fn chrome_frame(ctx: &egui::Context) -> egui::Frame {
-    let visuals = &ctx.style().visuals;
-    egui::Frame::none()
-        .fill(visuals.panel_fill)
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            visuals.widgets.noninteractive.bg_stroke.color,
-        ))
+/// winit registers its own window class, so without this the window shows the
+/// stock Windows application sheet even though the executable carries the icon
+/// (`build.rs`). The PNG is a 64-pixel render of the same `AppIcon.ico`; the
+/// decoder is the one eframe already ships for exactly this.
+fn window_icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../../Resources/AppIcon.png"))
+        .unwrap_or_default()
 }
 
 /// Loads the system UI font into egui.
@@ -241,6 +232,66 @@ fn apply_style(ctx: &egui::Context) {
             widget.rounding = egui::Rounding::same(4.0);
         }
     });
+
+    // The macOS settings window is one flat grey, tabs and pane alike: light
+    // 236/236/236, dark 40/40/40. egui's defaults are a near-white and a
+    // near-black, and give the tab strip its own colour.
+    ctx.style_mut_of(egui::Theme::Light, |style| {
+        let grey = egui::Color32::from_gray(236);
+        style.visuals.window_fill = grey;
+        style.visuals.panel_fill = grey;
+    });
+    ctx.style_mut_of(egui::Theme::Dark, |style| {
+        let grey = egui::Color32::from_gray(40);
+        style.visuals.window_fill = grey;
+        style.visuals.panel_fill = grey;
+    });
+}
+
+/// A segmented control: one choice, every option visible, the chosen one
+/// filled. The macOS window uses `NSSegmentedControl` for every choice and so
+/// does this one; radio buttons were the one place the two windows still
+/// looked like different products.
+///
+/// Segments are joined: no gap, outer corners rounded, inner corners square,
+/// on a grey track with a hairline border.
+fn segmented<T: PartialEq + Copy>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    options: impl IntoIterator<Item = (T, String)>,
+) {
+    let options: Vec<(T, String)> = options.into_iter().collect();
+    let last = options.len().saturating_sub(1);
+    let visuals = ui.visuals().clone();
+    egui::Frame::none()
+        .fill(visuals.widgets.inactive.weak_bg_fill)
+        .stroke(visuals.widgets.noninteractive.bg_stroke)
+        .rounding(egui::Rounding::same(5.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.horizontal(|ui| {
+                for (i, (option, label)) in options.iter().enumerate() {
+                    let rounding = egui::Rounding {
+                        nw: if i == 0 { 5.0 } else { 0.0 },
+                        sw: if i == 0 { 5.0 } else { 0.0 },
+                        ne: if i == last { 5.0 } else { 0.0 },
+                        se: if i == last { 5.0 } else { 0.0 },
+                    };
+                    let widgets = &mut ui.visuals_mut().widgets;
+                    for w in [
+                        &mut widgets.inactive,
+                        &mut widgets.hovered,
+                        &mut widgets.active,
+                    ] {
+                        w.rounding = rounding;
+                    }
+                    let selected = *value == *option;
+                    if ui.selectable_label(selected, label).clicked() {
+                        *value = *option;
+                    }
+                }
+            });
+        });
 }
 
 /// Light or dark, asked of Windows rather than of the toolkit.
@@ -345,9 +396,10 @@ fn control_row(
 ) {
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
+        // Right-aligned against the control, as the macOS form is.
         ui.allocate_ui_with_layout(
             egui::vec2(LABEL_COLUMN, ROW_HEIGHT),
-            egui::Layout::left_to_right(egui::Align::Center),
+            egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
                 ui.label(label);
             },
@@ -606,9 +658,13 @@ impl SettingsApp {
                 // startup; the value is persisted like any other edit.
                 let before = self.draft.language;
                 control_row(ui, label, caption_text, |ui| {
-                    for (text, value) in options {
-                        ui.radio_value(&mut self.draft.language, *value, text.get());
-                    }
+                    segmented(
+                        ui,
+                        &mut self.draft.language,
+                        options
+                            .iter()
+                            .map(|(text, value)| (*value, text.get().to_string())),
+                    );
                 });
                 if self.draft.language != before {
                     crate::strings::set_language(self.draft.language);
@@ -616,16 +672,24 @@ impl SettingsApp {
             }
             Control::InputMethod(options) => {
                 control_row(ui, label, caption_text, |ui| {
-                    for (text, value) in options {
-                        ui.radio_value(&mut self.draft.input_method, *value, text.get());
-                    }
+                    segmented(
+                        ui,
+                        &mut self.draft.input_method,
+                        options
+                            .iter()
+                            .map(|(text, value)| (*value, text.get().to_string())),
+                    );
                 });
             }
             Control::ToneMarks(options) => {
                 control_row(ui, label, caption_text, |ui| {
-                    for (text, value) in options {
-                        ui.radio_value(&mut self.draft.style, *value, text.get());
-                    }
+                    segmented(
+                        ui,
+                        &mut self.draft.style,
+                        options
+                            .iter()
+                            .map(|(text, value)| (*value, text.get().to_string())),
+                    );
                 });
             }
             Control::Checkbox(Toggle::LaunchAtLogin) => {
@@ -652,36 +716,25 @@ impl SettingsApp {
             }
             Control::ToggleHotkey => {
                 control_row(ui, label, caption_text, |ui| {
-                    ui.vertical(|ui| {
-                        // Alt+Space is the system-menu key on Windows. Whether
-                        // the hook wins that race is unverified, so it is not
-                        // offered here; a settings file that already has it
-                        // still shows it below.
-                        let offered = HOTKEY_PRESETS
-                            .into_iter()
-                            .filter(|p| *p != HotkeyPreset::OptionSpace);
-                        for preset in offered {
-                            ui.radio_value(
-                                &mut self.draft.toggle_hotkey,
-                                preset,
-                                hotkey_display(preset),
-                            );
-                        }
-                        // The saved choice when it is not one of the above: a
-                        // combination recorded on a Mac (there is no recorder on
-                        // this platform), or Alt+Space. Shown as the current
-                        // choice rather than silently replaced by a preset.
-                        let current = self.draft.toggle_hotkey;
-                        if matches!(current, HotkeyPreset::Custom { .. })
-                            || current == HotkeyPreset::OptionSpace
-                        {
-                            ui.radio_value(
-                                &mut self.draft.toggle_hotkey,
-                                current,
-                                hotkey_display(current),
-                            );
-                        }
-                    });
+                    // Alt+Space is the system-menu key on Windows. Whether the
+                    // hook wins that race is unverified, so it is not offered; a
+                    // settings file that already has it still shows it, as does
+                    // a combination recorded on a Mac (there is no recorder on
+                    // this platform). The saved choice is shown, not silently
+                    // replaced by a preset.
+                    let current = self.draft.toggle_hotkey;
+                    let mut offered: Vec<HotkeyPreset> = HOTKEY_PRESETS
+                        .into_iter()
+                        .filter(|p| *p != HotkeyPreset::OptionSpace)
+                        .collect();
+                    if !offered.contains(&current) {
+                        offered.push(current);
+                    }
+                    segmented(
+                        ui,
+                        &mut self.draft.toggle_hotkey,
+                        offered.into_iter().map(|p| (p, hotkey_display(p))),
+                    );
                 });
             }
             Control::Shortcut(shortcut) => {
@@ -1116,20 +1169,25 @@ impl SettingsApp {
         }
 
         egui::TopBottomPanel::top("glowkey_settings_tabs")
-            .frame(chrome_frame(ctx).inner_margin(egui::Margin {
-                left: 10.0,
-                right: 10.0,
-                top: 8.0,
-                bottom: 6.0,
-            }))
+            .frame(
+                egui::Frame::none()
+                    .fill(ctx.style().visuals.window_fill)
+                    .inner_margin(egui::Margin {
+                        left: 10.0,
+                        right: 10.0,
+                        top: 10.0,
+                        bottom: 4.0,
+                    }),
+            )
             .show(ctx, |ui| {
-                // Centred, like the tab strip of an `NSTabView`.
+                // A centred segmented control on the pane's own grey, which is
+                // what an `NSTabView` draws.
                 ui.vertical_centered(|ui| {
-                    ui.horizontal(|ui| {
-                        for (tab, title) in Tab::all() {
-                            ui.selectable_value(&mut self.tab, tab, title);
-                        }
-                    });
+                    segmented(
+                        ui,
+                        &mut self.tab,
+                        Tab::all().map(|(tab, title)| (tab, title.to_string())),
+                    );
                 });
             });
 
@@ -1481,6 +1539,15 @@ mod tests {
     /// machine with `AppsUseLightTheme = 1` got a black window with a black Done
     /// button. The choice is now made here, from the registry value, and there
     /// is no third answer to fall back to.
+    /// The embedded PNG must decode, or the window silently falls back to the
+    /// stock sheet — the very thing this exists to replace.
+    #[test]
+    fn the_window_icon_decodes() {
+        let icon = window_icon();
+        assert_eq!((icon.width, icon.height), (64, 64));
+        assert_eq!(icon.rgba.len(), 64 * 64 * 4);
+    }
+
     #[test]
     fn the_theme_follows_windows_rather_than_guessing() {
         assert_eq!(theme_preference(true), egui::ThemePreference::Light);

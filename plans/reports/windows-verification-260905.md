@@ -280,3 +280,128 @@ its first honest run — one that a person watching a screen would have reported
    is delivered on. Not yet exercised.
 3. Does GlowKey's injected output disturb any other input method that is also
    watching? EVKey appears to ignore it; nothing establishes that in general.
+
+---
+
+# Tier 5 — the shell, 2026-09-05 (engine-split build, `c348714`)
+
+A separate run, same day, same file (the plan naming this report collided with
+the Tier 1 section above; nothing there is touched). Release build of
+`main` at `c348714` — the commit phase 1 (macOS renderer parity) landed on.
+No macOS pass was possible this session (Windows machine); this is the
+stand-in `docs/handoff.md` §11 asks for. **No synthetic keystrokes or mouse
+input went into the live session anywhere in this run.**
+
+## Method
+
+Two channels, both posting directly to a GlowKey-owned window handle, never to
+the desktop or the foreground app:
+
+- **`WM_COMMAND` to the tray's message window** (class `GlowKeyTray`), with the
+  same command ids its own context menu uses (`cmd::SETTINGS=9`,
+  `cmd::ABOUT=12`, `cmd::TOGGLE_MODE=1`, `cmd::QUIT=11`). The handler at
+  `tray.rs:669` was wired for exactly this case ("nothing routes through here
+  in practice" — it does now) and every use below went through it.
+- **`WM_CLOSE` / `WM_KEYDOWN(VK_ESCAPE)` posted straight to a viewport's own
+  `HWND`**, found by title (`GlowKey Settings`, `About GlowKey`) via
+  `EnumWindows` filtered to GlowKey's PID.
+
+**One channel did not work and is the session's one negative result:**
+`WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP` posted at computed
+client-coordinates inside a Settings viewport — checked against known-good
+`ClientToScreen`/`GetWindowRect` math, tried with both `PostMessageW` and
+synchronous `SendMessageW`, against three different targets (a checkbox, the
+Language segmented control, the tab strip) — produced no visible effect,
+not even a hover highlight, across repeated attempts. Posted keyboard
+messages to the same window **do** reach it (`Esc` closed About; see below),
+so the window is receiving posted messages in general — it is specifically
+pointer input into an egui viewport under the decision-0011 UI thread that
+this technique could not drive. This may be a regression in how the
+persistent-UI-thread/deferred-viewport model (`0011`) delivers pointer events
+compared to the pre-0011 per-open `eframe` model the `260905-1145` phase 4
+report used successfully for the same kind of click — worth a source read by
+whoever picks up the macOS pass or the next Windows UI change, but it is a
+**verification-technique gap, not a product defect**: a real mouse still
+drives the app normally. Every box below that needed a click inside a
+viewport (not the tray, not a title bar) is left unticked with this reason,
+not faked.
+
+## Pre-state (restored at the end, all three confirmed back)
+
+| | Before | After |
+|---|---|---|
+| `HKCU\...\Run\GlowKey` | `"D:\project\github\glowkey\target\release\GlowKey.exe"` | same |
+| `%APPDATA%\GlowKey\settings.json` | user's real file (backed up) | restored byte-identical |
+| `AppsUseLightTheme` | `0x1` (Light) | `0x1` (Light) |
+
+## Results
+
+| Box | Result | Evidence |
+|---|---|---|
+| Idle CPU / working set, no window open | **recorded** | 30 s sample: **593.75 ms** CPU (**≈2.0%** of one core), working set **~101 MB** (105,943,040 B). No earlier Windows figure exists to compare against — this is the baseline. |
+| Settings persists and reloads | pass | `settings.json` unchanged byte-for-byte across a restart when untouched |
+| A settings file copied from a Mac still loads | pass | `settings-real-macos.json` (bundle-id exclusions, no Windows fields) copied to `%APPDATA%\GlowKey\settings.json`, GlowKey started clean, ran normally, file left unmodified — not silently replaced with defaults. Same file is also pinned headlessly by `a_real_settings_file_loads_field_for_field` (`prefs_model.rs:347`). |
+| Start-at-login adds the `Run` value, disabling removes it | pass | `startup::set_enabled(false)`/`(true)` called directly (two `#[ignore]` tests added, run, then reverted — no permanent test added); `reg query` showed the value gone after disable and back (quoted, correct path) after enable |
+| Log rotates, lives under `%LOCALAPPDATA%`, no typed text leaves the machine | pass (rotation by code reading + existing headless tests, not forced live) | `glowkey.log` at `%LOCALAPPDATA%\GlowKey\Logs\`, 4.47 MB at time of check (cap is 5 MB); `rotate()` and its three tests (`log.rs:211-260`) are platform-shared code, exercised by `cargo test --workspace`; no networking dependency anywhere in `app/` or the three crates (`grep` for `reqwest`/`hyper`/`TcpStream`/`http(s)://` finds only doc URLs) |
+| No console window appears | pass | `#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]` (`main.rs:27`); no console observed across every start in this session |
+| Settings opens, closes, reopens ×3 in one process | pass | via `WM_COMMAND SETTINGS` to the tray + `WM_CLOSE` to the viewport, 3 rounds, each producing a new `HWND` and no `RecreationAttempt` in the log |
+| About opens, closes (X), reopens | pass | opened via `WM_COMMAND ABOUT`; closed via posted `WM_CLOSE` |
+| About closes by Esc | pass | `WM_KEYDOWN(VK_ESCAPE)`/`WM_KEYUP` posted straight to the About `HWND` closed it — this is the one posted-keyboard confirmation that the window is live and reading input at all |
+| About: icon, name, version-with-commit, no button (but Copy), no sound | pass (sound unheard — no audio device checked) | capture: `plans/reports/tier5-captures/about.png` — `GlowKey`, `Version 0.1.0 (c348714)`, matches the exact commit under test |
+| About and Settings open side by side, each its own taskbar entry | pass | both open simultaneously; both windows carry `WS_EX_APPWINDOW` (`0x40110`) in their extended style |
+| With About open, tray-menu VI/EN toggle updates the indicator at once | pass | `TOGGLE mode -> English (menu)` then `INDICATOR English` **1 ms** later, and back, both via posted `WM_COMMAND TOGGLE_MODE` while About's `HWND` was open |
+| Segmented control: no hairline, raised selection, normal label colour, both themes | pass | `plans/reports/tier5-captures/settings-general.png` (light) and `settings-dark.png` (dark, via a temporary `AppsUseLightTheme=0` + broadcast `WM_SETTINGCHANGE("ImmersiveColorSet")`, restored after) — General tab's Language control in both |
+| Tray Quit ends the process, no `GlowKey.exe` left | pass | `WM_COMMAND QUIT` posted to the tray; `Get-Process GlowKey` found nothing after |
+| Every control and caption on one vertical line (control column) | pass, General tab only (see gap below) | visible in both captures above; not re-checked on Typing/Corrections/Apps & macros this run (see unticked list) |
+| The shortcut row shows keycaps, captions stay plain text | pass | visible in `settings-general.png`: `Ctrl` `Shift` `E` as keycaps, "Turns GlowKey off or on..." as plain text |
+
+## Left unchecked, with reasons — not faked
+
+**Blocked by the posted-mouse-input gap above** (a real click would work; the
+technique in this report could not drive it):
+
+- Tab switching to Typing / Corrections / Apps & macros — so the count rows
+  (`20 apps` / `0 macros` / `0 words`) were not re-captured live this run. Not
+  a new risk: this exact text was captured working in
+  `verification-260905-1216-windows-settings-ux-polish.md` before phase 1,
+  and phase 1 touched no Windows rendering path (only added `ListId::unit`,
+  which Windows now reads instead of its old inline match — same string, new
+  source).
+- `Manage…` on Excluded apps, Macros, Personal words — none of the three list
+  windows opened, so their own captures, their Esc, "closing Settings closes
+  them too", and "an app added is saved" are all unverified this run.
+- An edit made in the third Settings open being saved.
+- About: Copy puts the version and commit on the clipboard.
+
+**User-owned, needing a real keypress or a real click into the live
+session**, per the phase's own rule — listed here as the walkable checklist:
+
+1. `Ctrl+Shift+Space` with About open (the tray-menu equivalent of this was
+   exercised above and passed; the hotkey path itself needs a real keypress).
+2. The tray icon's own left/right click and its context menu (its command ids
+   were exercised directly via `WM_COMMAND`, but the icon and menu chrome
+   themselves were not clicked).
+3. Tab reaching the tab strip and each segmented control; ←/→ moving the
+   selection and showing a focus ring; the hotkey popup opening with
+   Space/Enter. (Posting `VK_TAB`/`VK_RIGHT` to the Settings `HWND` produced
+   no visible change either — consistent with the same pointer/focus gap
+   above rather than a second issue, but left here rather than claimed.)
+4. The three clipboard tools (remove tones, UPPERCASE, lowercase) — they act
+   on the real clipboard, which this session did not want to disturb.
+5. Reading a live `EMIT took=` figure for Chromium versus a plain text field
+   (§7 of the handoff already lists this as open; unrelated to this plan).
+
+## Gates
+
+Unaffected by this phase — no source file changed. Full six-gate run is
+phase 3's job, on the branch that carries this report.
+
+## Unresolved questions (Tier 5)
+
+1. Does the pointer-input gap above reproduce for a plain, unposted mouse
+   click once the window is truly focused and foreground, or is it specific
+   to posted messages? Not established — this report only proves the posted
+   path doesn't work, not why.
+2. Would enabling `accesskit`/UIA support in the Windows `eframe` integration
+   let a future verification pass drive these controls without a person at
+   the keyboard? Worth asking whoever next touches `platform/windows/ui_thread.rs`.

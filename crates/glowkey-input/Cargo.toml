@@ -1,9 +1,16 @@
 [package]
 name = "glowkey-input"
 version = "0.1.0"
-description = "Platform-free input policy for GlowKey — the decision ladder and hotkey matching"
+description = "GlowKey's keyboard policy: the decision ladder, hotkey matching, and the Platform port a shell implements."
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/hong4rc/glowkey"
+homepage = "https://github.com/hong4rc/glowkey"
+documentation = "https://docs.rs/glowkey-input"
+readme = "README.md"
+keywords = ["vietnamese", "telex", "vni", "ime", "input-method"]
+categories = ["text-processing", "internationalization"]
+rust-version = "1.96"
 
 # Deliberately the session crate (which brings the engine) and nothing else.
 # This crate is the policy every platform runs, so a dependency on an OS crate
@@ -11,7 +18,7 @@ license = "MIT"
 # split exists to prevent. CI compiles and tests it on ubuntu-latest with
 # `-D warnings` for that reason.
 [dependencies]
-glowkey-session = { path = "../glowkey-session" }
+glowkey-session = { path = "../glowkey-session", version = "0.1.0" }
 # Only for the settings file that names a hotkey preset; a consumer that does
 # not persist presets does not pay for it.
 serde = { version = "1", features = ["derive"], optional = true }

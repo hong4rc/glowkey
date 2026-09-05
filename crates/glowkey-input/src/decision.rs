@@ -9,6 +9,7 @@ use glowkey_session::{InputMode, KeyResponse};
 /// `EmitThenReplayKey` in particular is load-bearing: it is the difference
 /// between `ddc`␣ typing `đc ` and typing `đddc`.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Decision {
     /// Let the original keystroke through unchanged.
     Passthrough,

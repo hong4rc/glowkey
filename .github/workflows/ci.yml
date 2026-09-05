@@ -24,12 +24,45 @@ jobs:
       - run: cargo test -p glowkey-engine -p glowkey-session -p glowkey-input
       # The optional `serde` features compile too, both ways.
       - run: cargo check -p glowkey-engine -p glowkey-session -p glowkey-input --features serde
+      # The example in the engine's README is a program; keep it running.
+      - run: cargo run -p glowkey-engine --example type_a_word
+      # Documentation builds clean: a broken intra-doc link is a build failure.
+      - run: cargo doc --no-deps -p glowkey-engine -p glowkey-session -p glowkey-input
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # What a consumer downloads is what builds. Only the engine can be checked
+      # this way today: `cargo package` resolves path dependencies against
+      # crates.io, so the session and input crates cannot be packaged until the
+      # engine is published. Add them here at that point.
+      - run: cargo publish --dry-run -p glowkey-engine
       # The app crate claims to build as a stub off macOS, and nothing was
       # checking it: this job only ever named `-p glowkey-engine`, so a module
       # declared without its `#[cfg(target_os = "macos")]` compiled fine on the
       # macOS job and broke every other platform silently. That is exactly the
       # breakage the Windows port would inherit, so prove the stub here.
       - run: cargo check -p glowkey
+
+  # The three library crates build on the oldest Rust they claim to
+  # (`rust-version` in their manifests). `vi` sets the floor.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - run: cargo check -p glowkey-engine -p glowkey-session -p glowkey-input --all-targets --all-features
+
+  # A public API change that needs a major version bump fails here. There is no
+  # published baseline yet, so the step may fail without failing the build;
+  # drop `continue-on-error` at the first tag.
+  semver:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          package: glowkey-engine,glowkey-session,glowkey-input
 
   # The Windows shell: a WH_KEYBOARD_LL hook and SendInput, linked and its tests
   # run. This job is worth more than it looks — it is the first place Windows

@@ -1,7 +1,7 @@
 ---
 title: "Engine split and layering: a Vietnamese engine anyone can take, a product built on it"
 description: "Carve glowkey-engine into a reusable text-transform core, a session/policy layer with injected defaults, and explicit platform ports; move GlowKey's own preferences out of the engine; make the core publishable."
-status: pending
+status: completed
 priority: P1
 effort: "3-4 days"
 tags: [glowkey, architecture, engine, crates, refactor, api]
@@ -87,7 +87,7 @@ value), a plugin registry (one product).
 | 2 | [Unbundle product preferences](./phase-02-unbundle-product-preferences.md) | completed | 1 |
 | 3 | [Session crate and injected defaults](./phase-03-session-crate-and-injected-defaults.md) | completed | 2 |
 | 4 | [Ports for platforms](./phase-04-ports-for-platforms.md) | completed | 3 |
-| 5 | [Publish readiness](./phase-05-publish-readiness.md) | pending | 1 |
+| 5 | [Publish readiness](./phase-05-publish-readiness.md) | completed | 1 |
 
 ## Acceptance criteria
 

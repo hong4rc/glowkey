@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// mask and key code through [`resolve`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum HotkeyPreset {
     /// ⌃⇧Space — the default.
     #[default]

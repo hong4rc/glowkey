@@ -89,6 +89,7 @@ fn type_through(tap: &mut Tap, input: &str) -> String {
                 apply(&mut screen, &r);
                 screen.push(ch); // the boundary key still types
             }
+            other => panic!("a decision this harness does not apply: {other:?}"),
         }
     }
     screen
@@ -124,6 +125,7 @@ fn type_with_deletes(tap: &mut Tap, input: &str) -> String {
                 apply(&mut screen, &r);
                 screen.push(ch);
             }
+            other => panic!("a decision this harness does not apply: {other:?}"),
         }
     }
     screen

@@ -55,6 +55,13 @@ scripts/verify-windows-*.ps1  Windows verification harnesses (type into Notepad,
 docs/                       Handoff (start here), decision records, manual verification, UI design.
 ```
 
+Which crate to take: `glowkey-engine` for Vietnamese typing alone;
+`glowkey-session` for an input method's behaviour (it re-exports the engine);
+`glowkey-input` for GlowKey's whole keyboard policy behind a `Platform` trait a
+shell implements. Each has its own README, and
+[`docs/decisions/0012`](docs/decisions/0012-engine-layering-and-ports.md)
+records the layering.
+
 ## Install
 
 ### macOS

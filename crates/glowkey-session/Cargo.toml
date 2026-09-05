@@ -4,13 +4,20 @@ version = "0.1.0"
 description = "Typing policy over the GlowKey engine: VN/EN mode, per-application exclusions, auto-fix, macros and word overrides"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/hong4rc/glowkey"
+homepage = "https://github.com/hong4rc/glowkey"
+documentation = "https://docs.rs/glowkey-session"
+readme = "README.md"
+keywords = ["vietnamese", "telex", "vni", "ime", "input-method"]
+categories = ["text-processing", "internationalization"]
+rust-version = "1.96"
 
 # The engine and nothing else. This crate is where a *product's* decisions live
 # (which applications to leave alone, whether to undo a bad transformation at a
 # word boundary), but it still knows no operating system: what an application
 # is called, and which ones ship excluded, are handed in by the shell.
 [dependencies]
-glowkey-engine = { path = "../glowkey-engine" }
+glowkey-engine = { path = "../glowkey-engine", version = "0.1.0" }
 # Only for persisting macros and word overrides; a consumer with its own
 # storage does not pay for it. The `serde` feature also turns on the engine's,
 # so `InputMethod` and `PlacementStyle` round-trip alongside.

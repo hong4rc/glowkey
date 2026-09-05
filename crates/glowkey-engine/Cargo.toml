@@ -1,9 +1,16 @@
 [package]
 name = "glowkey-engine"
 version = "0.1.0"
-description = "Platform-free Vietnamese Telex transformation engine for GlowKey"
+description = "Vietnamese Telex and VNI transformation: raw keystrokes in, a minimal edit out. The core of GlowKey."
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/hong4rc/glowkey"
+homepage = "https://github.com/hong4rc/glowkey"
+documentation = "https://docs.rs/glowkey-engine"
+readme = "README.md"
+keywords = ["vietnamese", "telex", "vni", "ime", "input-method"]
+categories = ["text-processing", "internationalization"]
+rust-version = "1.96"
 
 [dependencies]
 # vi 0.8.0 is MIT (LICENSE file is verbatim MIT text; crates.io shows

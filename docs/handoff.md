@@ -600,8 +600,8 @@ mean "saved settings" and send the next person debugging a latency report at the
 wrong subsystem.
 
 The engine is not a suspect either way: 2 µs per keystroke in release, 9 µs in
-the test profile, pinned by `crates/glowkey-engine/tests/latency.rs` and measured
-per word by `cargo bench -p glowkey-engine`. So a large `EMIT took=` means the AX
+the test profile, pinned by `crates/glowkey-session/tests/latency.rs` and measured
+per word by `cargo bench -p glowkey-session`. So a large `EMIT took=` means the AX
 guard or `CGEventPost`, never Vietnamese logic.
 
 **`TAP disabled by timeout` is the line to grep for first in any freeze report.**
@@ -627,7 +627,7 @@ reading it needs a granted build and someone typing in Chrome.
 ```bash
 cargo test --workspace         # 194 tests, all green; the headless proof
 cargo clippy --workspace --all-targets   # must be 0 warnings
-cargo bench -p glowkey-engine  # keystroke latency numbers (criterion)
+cargo bench -p glowkey-session  # keystroke latency numbers (criterion)
 bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch
 bash scripts/dev-run.sh                  # build+run "GlowKey Dev" w/ GLOWKEY_DEBUG=1
 bash scripts/build-app.sh [release|dev] [release|debug]   # bundle only, no install

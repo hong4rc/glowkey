@@ -14,6 +14,7 @@
 /// guess about a platform that has not been written yet. Adding one when Windows
 /// or Linux genuinely needs it is cheap; carrying seventy speculative ones is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Key {
     /// Backspace (macOS calls it Delete, virtual key code 51).
     Backspace,

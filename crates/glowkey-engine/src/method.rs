@@ -9,6 +9,7 @@ use super::*;
 /// shell's type surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum PlacementStyle {
     /// Modern orthography — the software default.
     #[default]
@@ -40,6 +41,7 @@ impl From<PlacementStyle> for AccentStyle {
 /// keys (`aa`→â, `f`→huyền); VNI uses digits (`a6`→â, `2`→huyền).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum InputMethod {
     /// Telex — the software default.
     #[default]

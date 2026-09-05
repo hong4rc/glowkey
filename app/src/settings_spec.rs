@@ -499,6 +499,14 @@ pub fn hotkey_display(preset: HotkeyPreset) -> String {
             key_char,
             ..
         } => (control, option, shift, key_char),
+        // A preset this build does not know (the enum is `#[non_exhaustive]`):
+        // shown as the default it will behave as, and said so in the log.
+        other => {
+            crate::log::log(&format!(
+                "HOTKEY unknown preset {other:?} shown as the default"
+            ));
+            (true, false, true, ' ')
+        }
     };
     let mut parts: Vec<&str> = Vec::with_capacity(4);
     if control {

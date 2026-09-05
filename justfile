@@ -34,7 +34,7 @@ test:
 test-hard:
     # Worth running before trusting any change to the engine's diff or restore
     # paths; the default 4096 cases have twice passed over a real corruption.
-    PROPTEST_CASES=60000 cargo test -p glowkey-engine --release --test properties
+    PROPTEST_CASES=60000 cargo test -p glowkey-session --release --test properties
 
 # Lint. Must be silent — this project treats a warning as a failure.
 lint:
@@ -44,7 +44,7 @@ lint:
 bench:
     # The engine is about 2 µs per key. This is how you find out when that
     # stops being true.
-    cargo bench -p glowkey-engine
+    cargo bench -p glowkey-session
 
 # Everything CI checks, in the order that fails fastest.
 check: lint test

@@ -13,7 +13,7 @@
 //! the accessibility help each control carries.
 
 use objc2::rc::Retained;
-use objc2::runtime::Sel;
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont,
@@ -35,8 +35,16 @@ const WINDOW_SIZE: (f64, f64) = (460.0, 540.0);
 const PANE_INSET: f64 = 18.0;
 /// How far a dependent row sits under its parent: a checkbox glyph plus its gap.
 const DEPENDENT_INDENT: f64 = 20.0;
-/// Larger gap before a section header.
-const SECTION_GAP: f64 = 22.0;
+/// Gap between the label column and the control column.
+const COLUMN_GAP: f64 = 8.0;
+/// The width a checkbox's box takes before its title, so a caption under a
+/// checkbox starts under the title rather than under the box.
+const CHECK_GLYPH: f64 = 18.0;
+/// Vertical rhythm, measured edge to edge: between a control and its caption
+/// (the stack's own spacing), between one row and the next, and before a
+/// section header. The same three figures the Windows window is built on.
+const ROW_GAP: f64 = 10.0;
+const GROUP_GAP: f64 = 18.0;
 /// The label on the recorder segment. macOS only — Windows has no recorder —
 /// so it is a detail of this renderer rather than of the spec.
 const CUSTOM_HOTKEY: Text = Text::new("Custom…", "Tùy chọn…");
@@ -98,17 +106,27 @@ impl PrefsController {
         mtm: MainThreadMarker,
     ) -> Retained<NSStackView> {
         let stack = self.tab_stack(mtm);
+        // The stack's own spacing is the control-to-caption gap and nothing
+        // else; every other gap is set on the view it follows. A row's gap
+        // therefore lands on whichever view closed the row — its caption when
+        // it has one, its control when it does not — and a section header
+        // overwrites that row gap with the larger one. The later call wins, so
+        // the header gap is set after the row gap, not before it.
         let mut last: Option<Retained<NSView>> = None;
         for section in tab.sections {
             if let Some(previous) = &last {
                 unsafe {
                     let _: () =
-                        msg_send![&stack, setCustomSpacing: SECTION_GAP, afterView: &**previous];
+                        msg_send![&stack, setCustomSpacing: GROUP_GAP, afterView: &**previous];
                 }
             }
             stack.addArrangedSubview(&self.section_header(section.title.get(), mtm));
             for row in section.rows {
-                last = Some(self.add_row(&stack, row, label_width, mtm));
+                let view = self.add_row(&stack, row, label_width, mtm);
+                unsafe {
+                    let _: () = msg_send![&stack, setCustomSpacing: ROW_GAP, afterView: &*view];
+                }
+                last = Some(view);
             }
         }
         stack
@@ -151,7 +169,7 @@ impl PrefsController {
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        label_width + 8.0,
+                        label_width + COLUMN_GAP,
                     )
                 }
                 Control::InputMethod(options) => {
@@ -167,7 +185,7 @@ impl PrefsController {
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        label_width + 8.0,
+                        label_width + COLUMN_GAP,
                     )
                 }
                 Control::ToneMarks(options) => {
@@ -183,7 +201,7 @@ impl PrefsController {
                     (
                         stack_view(row_view),
                         Some(control_view(seg)),
-                        label_width + 8.0,
+                        label_width + COLUMN_GAP,
                     )
                 }
                 Control::Checkbox(toggle) => {
@@ -206,12 +224,19 @@ impl PrefsController {
                             .borrow_mut()
                             .push((parent, checkbox.clone()));
                     }
-                    let view = if indent > 0.0 {
-                        stack_view(self.indented(&checkbox, indent, mtm))
-                    } else {
-                        control_view(checkbox.clone())
-                    };
-                    (view, Some(control_view(checkbox)), DEPENDENT_INDENT)
+                    // A checkbox is a control like any other, so it starts
+                    // where every other control starts. Its title is its own
+                    // label, which leaves the label column empty and the row a
+                    // single indented control — one axis for the eye to follow
+                    // rather than form rows on one and checkboxes on another.
+                    let inset = label_width + COLUMN_GAP + indent;
+                    self.fit_checkbox(&checkbox, inset);
+                    let view = stack_view(self.indented(&checkbox, inset, mtm));
+                    (
+                        view,
+                        Some(control_view(checkbox)),
+                        label_width + COLUMN_GAP + CHECK_GLYPH,
+                    )
                 }
                 Control::ToggleHotkey => {
                     // Presets plus "Custom…", which arms the recorder (the tap
@@ -229,7 +254,7 @@ impl PrefsController {
                     // row's view so the common path adds it in order.
                     stack.addArrangedSubview(&row_view);
                     let status = self.caption("", mtm);
-                    let status_row = self.caption_row(&status, label_width + 8.0, mtm);
+                    let status_row = self.caption_row(&status, label_width + COLUMN_GAP, mtm);
                     *self.ivars().hotkey_seg.borrow_mut() = Some(seg);
                     *self.ivars().hotkey_label.borrow_mut() = Some(status);
                     (stack_view(status_row), None, 0.0)
@@ -242,7 +267,7 @@ impl PrefsController {
                     (
                         stack_view(row_view),
                         Some(control_view(value)),
-                        label_width + 8.0,
+                        label_width + COLUMN_GAP,
                     )
                 }
                 Control::List(list) => {
@@ -266,7 +291,7 @@ impl PrefsController {
                     (
                         stack_view(row_view),
                         Some(control_view(button)),
-                        label_width + 8.0,
+                        label_width + COLUMN_GAP,
                     )
                 }
             };
@@ -317,6 +342,37 @@ impl PrefsController {
             seg.setSelectedSegment(index as isize);
         }
         seg
+    }
+
+    /// Lets a checkbox's title wrap, but only if it would otherwise run past
+    /// the pane's right edge.
+    ///
+    /// An `NSButton` title is one line and does not truncate gracefully. In the
+    /// control column a title has the label column's width less room than it had
+    /// at the pane margin, and the longest — "Tự động khôi phục từ không phải
+    /// tiếng Việt" — is close enough to the edge that only AppKit's own
+    /// measurement can settle it. So it is asked: a title that fits keeps its
+    /// single line, and one that does not wraps rather than being pushed back
+    /// out of the column.
+    fn fit_checkbox(&self, checkbox: &NSButton, inset: f64) {
+        let available = WINDOW_SIZE.0 - 2.0 * PANE_INSET - inset;
+        if checkbox.intrinsicContentSize().width <= available {
+            return;
+        }
+        // SAFETY: an NSButton's cell is an NSButtonCell, which responds to
+        // `setWraps:` with one BOOL argument.
+        unsafe {
+            let cell: Option<Retained<AnyObject>> = msg_send![checkbox, cell];
+            if let Some(cell) = cell {
+                let _: () = msg_send![&cell, setWraps: true];
+            }
+        }
+        // Pin the width, so the height AppKit computes is for the width it
+        // actually lays out at — the same pairing `wrapping_caption` needs.
+        checkbox
+            .widthAnchor()
+            .constraintEqualToConstant(available)
+            .setActive(true);
     }
 
     /// The label column: the widest label in the window, in this language, and
@@ -434,7 +490,8 @@ impl PrefsController {
                 ListId::Macros => state.macros().len(),
                 ListId::PersonalWords => state.word_overrides().len(),
             };
-            label.setStringValue(&NSString::from_str(&count.to_string()));
+            let text = format!("{count} {}", list.unit().get());
+            label.setStringValue(&NSString::from_str(&text));
         }
     }
 }
@@ -476,3 +533,4 @@ where
 fn stack_view(stack: Retained<NSStackView>) -> Retained<NSView> {
     stack.into_super()
 }
+

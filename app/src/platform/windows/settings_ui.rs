@@ -966,11 +966,7 @@ impl SettingsApp {
                     ListId::Macros => self.draft.macros.len(),
                     ListId::PersonalWords => self.draft.word_overrides.len(),
                 };
-                let unit = match list {
-                    ListId::ExcludedApps => t("apps", "ứng dụng"),
-                    ListId::Macros => t("macros", "gõ tắt"),
-                    ListId::PersonalWords => t("words", "từ"),
-                };
+                let unit = list.unit().get();
                 let mut open = false;
                 control_row(ui, self.column, label, caption_text, |ui| {
                     let color = secondary_color(ui);

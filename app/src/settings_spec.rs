@@ -169,6 +169,20 @@ impl ListId {
     /// Every list, for the renderer that asks for each open list's window.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub const ALL: [Self; 3] = [Self::ExcludedApps, Self::Macros, Self::PersonalWords];
+
+    /// The unit a count is spoken in: "20 apps", "0 macros", "0 words".
+    ///
+    /// Both windows show a count beside "Manage…", and a bare number between a
+    /// label and a button says nothing. The noun is row content like every
+    /// other word on the row, so it lives here rather than in one shell.
+    #[must_use]
+    pub const fn unit(self) -> Text {
+        match self {
+            Self::ExcludedApps => Text::new("apps", "ứng dụng"),
+            Self::Macros => Text::new("macros", "gõ tắt"),
+            Self::PersonalWords => Text::new("words", "từ"),
+        }
+    }
 }
 
 /// What a row is.
@@ -629,6 +643,24 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// Both windows write "{count} {unit}" from this one table, so a missing
+    /// or swapped noun would read wrong on both at once.
+    #[test]
+    fn every_list_counts_in_its_own_unit() {
+        let units = [
+            (ListId::ExcludedApps, "apps", "ứng dụng"),
+            (ListId::Macros, "macros", "gõ tắt"),
+            (ListId::PersonalWords, "words", "từ"),
+        ];
+        for (list, en, vi) in units {
+            assert_eq!(list.unit().en, en, "{list:?} English unit");
+            assert_eq!(list.unit().vi, vi, "{list:?} Vietnamese unit");
+        }
+        for list in ListId::ALL {
+            assert!(!list.unit().en.is_empty() && !list.unit().vi.is_empty());
+        }
     }
 
     /// A row that depends on a toggle sits after it, in the same section, so

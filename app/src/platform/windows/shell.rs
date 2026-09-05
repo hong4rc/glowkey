@@ -10,6 +10,8 @@
 //! lock: the two can never run at once. It is also why nothing here may be called
 //! from anywhere else.
 
+use std::sync::Mutex;
+
 use glowkey_engine::{ExclusionToggle, InputMode};
 
 use super::indicator::{self, Indicator};
@@ -141,16 +143,60 @@ pub fn reveal_log() {
     let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
 }
 
-/// Opens the settings window, then applies whatever came back.
+/// Asks the UI thread for the settings window, on a snapshot of the session.
 ///
-/// Blocking is correct here: the window owns the interaction while it is open,
-/// and the hook keeps running because it is driven by the system rather than by
-/// this thread's own loop.
+/// Returns at once. The window lives on the UI thread (`decisions/0011`); when
+/// the user closes it, the UI thread hands the result to
+/// [`deliver_settings_result`] and the main loop applies it in
+/// [`apply_settings`].
 pub fn open_settings() {
     let Some(current) = hook::with_session(|session| session.snapshot()) else {
         return;
     };
-    let Some(updated) = super::settings_ui::show(current.clone()) else {
+    super::ui_thread::open_settings(current);
+}
+
+/// Shows the About window. From the tray menu, next to Settings — which is
+/// where macOS has it (`menu_bar.rs`), and where a user who has the Mac app
+/// will look for it. A window, not a message box: a message box is modal, plays
+/// the system sound, and its nested loop held this thread's queue so the
+/// hotkey's indicator refresh never ran while it was up.
+pub fn show_about() {
+    super::ui_thread::open_about();
+}
+
+/// A settings result waiting for the main thread: the baseline the window was
+/// opened on, and `None` for "closed without changes" or `Some` for the edit.
+type SettingsResult = (glowkey_engine::Settings, Option<glowkey_engine::Settings>);
+
+static PENDING_SETTINGS: Mutex<Option<SettingsResult>> = Mutex::new(None);
+
+/// Called on the UI thread when the settings window has decided. Stores the
+/// result and wakes the main loop, which owns the session and the file.
+pub fn deliver_settings_result(
+    baseline: glowkey_engine::Settings,
+    updated: Option<glowkey_engine::Settings>,
+) {
+    *PENDING_SETTINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((baseline, updated));
+    hook::wake_main_loop();
+}
+
+/// The main loop's side of [`deliver_settings_result`].
+pub fn take_pending_settings_result() -> Option<SettingsResult> {
+    PENDING_SETTINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
+
+/// Applies what the settings window handed back. Main thread only.
+pub fn apply_settings(
+    current: &glowkey_engine::Settings,
+    updated: Option<glowkey_engine::Settings>,
+) {
+    let Some(updated) = updated else {
         return; // nothing changed
     };
 
@@ -168,7 +214,7 @@ pub fn open_settings() {
     // given, on top of whatever the session looks like now. Only fields the user
     // actually changed move.
     let live = hook::with_session(|session| session.snapshot()).unwrap_or_else(|| current.clone());
-    let merged = merge_settings(&current, &updated, live);
+    let merged = merge_settings(current, &updated, live);
 
     crate::settings_store::save(&merged);
 
@@ -189,65 +235,6 @@ pub fn open_settings() {
     });
     crate::log::log("SETTINGS applied from the settings window");
     refresh_indicator();
-}
-
-/// Shows the About box.
-///
-/// From the tray menu, next to Settings — which is where macOS has it
-/// (`menu_bar.rs`: "About GlowKey" / "Giới thiệu GlowKey"), and where a user who
-/// has the Mac app will look for it. It was briefly a button inside the settings
-/// window, which is neither.
-///
-/// A native `MessageBoxW` rather than another `eframe` window, for a reason
-/// beyond taste: **winit permits one event loop per process**, so a second
-/// toolkit window cannot open once the settings window has been. A message box
-/// needs no event loop, appears instantly, and already looks like the system —
-/// which is what `docs/ui-design.md` asks for.
-pub fn show_about() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
-
-    // The commit is stamped by `build.rs` and may be empty in a source build, so
-    // the version line carries it only when there is one. It is the thing a bug
-    // report actually needs — "0.1.0" names a dozen builds.
-    let version = match option_env!("GLOWKEY_COMMIT") {
-        Some(commit) if !commit.is_empty() => {
-            format!("{} ({commit})", env!("CARGO_PKG_VERSION"))
-        }
-        _ => env!("CARGO_PKG_VERSION").to_string(),
-    };
-
-    let body = format!(
-        "{}\n\n{}\n\n{}",
-        crate::strings::t(
-            "GlowKey — Vietnamese input for Windows",
-            "GlowKey — bộ gõ tiếng Việt cho Windows",
-        ),
-        crate::strings::t("Version", "Phiên bản").to_string() + " " + &version,
-        crate::strings::t(
-            "GlowKey cannot type into windows that run as administrator. \
-             Windows blocks input from ordinary programs into elevated windows.",
-            "GlowKey không gõ được vào cửa sổ chạy với quyền quản trị. \
-             Windows chặn nhập liệu từ chương trình thường vào những cửa sổ đó.",
-        ),
-    );
-
-    let text = wide(&body);
-    let title = wide(crate::strings::t("About GlowKey", "Giới thiệu GlowKey"));
-    // SAFETY: both strings are NUL-terminated and outlive the call. A null owner
-    // is correct for a process with no window of its own.
-    unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            text.as_ptr(),
-            title.as_ptr(),
-            MB_OK | MB_ICONINFORMATION,
-        );
-    }
-}
-
-/// A NUL-terminated UTF-16 string, which is what every `…W` entry point takes.
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Reinstalls the keyboard hook after Windows removed it.

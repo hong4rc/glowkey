@@ -137,6 +137,30 @@ pub fn uninstall() {
 /// Seeds the state. Called once, before the loop starts.
 pub fn set_state(settings: &glowkey_engine::Settings) {
     STATE.with(|s| *s.borrow_mut() = Some(HookState::new(settings)));
+    // The thread that owns the session and runs the loop, so another thread
+    // can wake it (`wake_main_loop`).
+    MAIN_THREAD.store(
+        unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() },
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The id of the thread running [`run_message_loop`], recorded by [`set_state`].
+static MAIN_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Wakes the main loop from another thread so it looks at its pending slots
+/// (`shell::take_pending_settings_result`). Non-blocking; a no-op before the
+/// session exists.
+pub fn wake_main_loop() {
+    let tid = MAIN_THREAD.load(std::sync::atomic::Ordering::Relaxed);
+    if tid == 0 {
+        return;
+    }
+    // SAFETY: posting a message to a thread of this process. It enqueues and
+    // returns without waiting for the receiver.
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW(tid, WM_GLOWKEY_SAVE, 0, 0);
+    }
 }
 
 /// Whether the hook is currently installed.
@@ -221,6 +245,11 @@ pub fn run_message_loop() {
         }
         if take_pending_refresh() {
             super::shell::refresh_indicator();
+        }
+        // The settings window lives on the UI thread; its result is applied
+        // here, on the thread that owns the session and the file.
+        if let Some((baseline, updated)) = super::shell::take_pending_settings_result() {
+            super::shell::apply_settings(&baseline, updated);
         }
     }
     // Once more after the loop. `WM_QUIT` ends it without running the body, so a

@@ -48,6 +48,10 @@ objc2-service-management = "0.3"
 # of the privacy claim in PRIVACY.md, not a build detail — the macOS side keeps
 # its objc2 feature lists narrow for the same reason.
 [target.'cfg(target_os = "windows")'.dependencies]
+# For `EventLoopBuilderExtWindows::with_any_thread`, so the one eframe event
+# loop can live on its own thread (docs/decisions/0011). Already in the tree
+# through eframe; named here only for the trait.
+winit = { version = "0.30", default-features = false }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     # The hook itself, its message loop, and the foreground-window query.

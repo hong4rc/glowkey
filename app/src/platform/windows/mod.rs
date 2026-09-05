@@ -39,6 +39,7 @@
 //! **behaviour is unverified until Phase 6** — nothing here has been shown to
 //! type Vietnamese into a real application by any automated check.
 
+pub mod about_ui;
 pub mod adapt;
 pub mod clipboard;
 pub mod elevation;
@@ -55,6 +56,7 @@ pub mod single_instance;
 pub mod startup;
 pub mod theme;
 pub mod tray;
+pub mod ui_thread;
 
 /// Starts the hook and runs until the process exits.
 pub fn run() {
@@ -78,6 +80,10 @@ pub fn run() {
     hook_log::start();
 
     hook::set_state(&settings);
+
+    // The one eframe event loop, on its own thread, for the life of the process
+    // (`docs/decisions/0011`). Started before any window is asked for.
+    ui_thread::start();
 
     // Before the keyboard hook: it is delivered on this thread's message queue
     // too, and the bootstrap query inside it must happen while nothing is being
@@ -112,6 +118,12 @@ pub fn run() {
     // bootstrap above pushed it in — which is what keeps this from painting the
     // fail-closed "unknown application" state at launch.
     shell::refresh_indicator();
+
+    // On by default so a new user finds the controls. Honoured here, not on
+    // the UI thread: this is the thread that owns the session snapshot.
+    if settings.open_settings_at_launch {
+        shell::open_settings();
+    }
 
     hook::run_message_loop();
     tray::remove();

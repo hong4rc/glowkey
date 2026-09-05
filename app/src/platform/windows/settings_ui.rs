@@ -31,9 +31,6 @@
 //! its fallback is dark — which is how a light-themed machine got a black
 //! window.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use eframe::egui;
 
 use glowkey_engine::{ExclusionList, HotkeyPreset, Macro, Settings, WordOverride, WordPreference};
@@ -44,72 +41,20 @@ use crate::settings_spec::{
 };
 use crate::strings::t;
 
-/// Opens the settings window and blocks until the user closes it.
-///
-/// `initial` is the settings to edit. Returns the edited settings if anything
-/// changed, or `None` if the user closed the window without changing
-/// anything (including if the window failed to open at all — there is nothing
-/// to persist either way). The caller is responsible for writing the result to
-/// disk; this function only ever returns a value.
-#[must_use]
-pub fn show(initial: Settings) -> Option<Settings> {
-    // `Some(None)` once the app has decided "closing, nothing to save";
-    // `Some(Some(settings))` once it has decided "closing, save this".
-    // `None` means the loop never got that far (e.g. `run_native` itself
-    // failed before a frame was drawn), which is also "nothing to persist".
-    let result_slot: Rc<RefCell<Option<Option<Settings>>>> = Rc::new(RefCell::new(None));
-    let slot_for_app = Rc::clone(&result_slot);
-
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(WINDOW_TITLE.get())
-            // The macOS window's content size, to the point
-            // (`app/src/prefs/tabs.rs`): a settings window for a background
-            // utility is a small window, and this one had grown to nearly twice
-            // that. Points, not pixels — winit reports the monitor's scale
-            // factor and egui multiplies by it, so this is the same apparent
-            // size at 100% and at 150%.
-            .with_inner_size([460.0, 540.0])
-            // Resizable, but not down to where the four tab titles stop fitting
-            // on one row.
-            .with_min_inner_size([420.0, 420.0])
-            .with_resizable(true)
-            .with_icon(window_icon()),
-        ..Default::default()
-    };
-
-    let run_result = eframe::run_native(
-        "GlowKey Settings",
-        native_options,
-        Box::new(move |cc| {
-            install_system_font(&cc.egui_ctx);
-            apply_style(&cc.egui_ctx);
-            Ok(Box::new(SettingsApp::new(initial, slot_for_app)))
-        }),
-    );
-
-    if let Err(err) = run_result {
-        // To the log, not to `eprintln!`. GlowKey builds with
-        // `windows_subsystem = "windows"` and has no console, so a message
-        // printed here goes nowhere at all — and a menu item that does nothing
-        // and says nothing is the defect `docs/decisions/0007` is about.
-        //
-        // The expected error is `RecreationAttempt`. **winit permits exactly one
-        // event loop per process**, and there is no reset outside its web
-        // backend — so the second time a user picks Settings in a process that
-        // has been up for days, this is where they land. That is a real
-        // limitation of running the window in-process and it is named here
-        // rather than left as a mystery; the fix is a design decision (a
-        // separate process, or a dedicated long-lived UI thread), not a patch.
-        crate::log::log(&format!(
-            "SETTINGS window could not run: {err}. If this says RecreationAttempt, \
-             the window has already been opened once this run — restart GlowKey to \
-             open it again."
-        ));
-    }
-
-    let mut slot = result_slot.borrow_mut();
-    slot.take().flatten()
+/// The settings viewport, before it opens. Opened by `ui_thread` as a deferred
+/// viewport, which is what lets it close and open again in one process.
+pub fn viewport_builder() -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(WINDOW_TITLE.get())
+        // The macOS window's content size, to the point (`app/src/prefs/tabs.rs`):
+        // a settings window for a background utility is a small window. Points,
+        // not pixels — winit reports the monitor's scale factor and egui
+        // multiplies by it, so this is the same apparent size at 100% and 150%.
+        .with_inner_size([460.0, 540.0])
+        // Resizable, but not down to where the four tab titles stop fitting.
+        .with_min_inner_size([420.0, 420.0])
+        .with_resizable(true)
+        .with_icon(window_icon())
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +93,7 @@ const WORDS_SIZE: [f32; 2] = [396.0, 340.0];
 /// stock Windows application sheet even though the executable carries the icon
 /// (`build.rs`). The PNG is a 64-pixel render of the same `AppIcon.ico`; the
 /// decoder is the one eframe already ships for exactly this.
-fn window_icon() -> egui::IconData {
+pub(super) fn window_icon() -> egui::IconData {
     eframe::icon_data::from_png_bytes(include_bytes!("../../../Resources/AppIcon.png"))
         .unwrap_or_default()
 }
@@ -166,7 +111,7 @@ fn window_icon() -> egui::IconData {
 /// a machine where the file cannot be read gets the old rendering rather than no
 /// window. Returns whether the proportional font was installed — which is
 /// exactly what the window's ability to draw Vietnamese depends on.
-fn install_system_font(ctx: &egui::Context) -> bool {
+pub(super) fn install_system_font(ctx: &egui::Context) -> bool {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
     let mut fonts = egui::FontDefinitions::default();
 
@@ -205,7 +150,7 @@ fn install_system_font(ctx: &egui::Context) -> bool {
 /// switch: egui keeps one `Style` per theme and swaps them when the system
 /// preference changes, so anything written to only one of them is lost the
 /// moment the user turns on dark mode.
-fn apply_style(ctx: &egui::Context) {
+pub(super) fn apply_style(ctx: &egui::Context) {
     ctx.all_styles_mut(|style| {
         use egui::FontFamily::{Monospace, Proportional};
         use egui::{FontId, TextStyle};
@@ -306,7 +251,7 @@ fn segmented<T: PartialEq + Copy>(
 /// Called every frame, not once: the user can switch theme while the window is
 /// open, and a registry read on a repaint costs nothing. Nothing on the hook's
 /// path calls this.
-fn apply_theme(ctx: &egui::Context) {
+pub(super) fn apply_theme(ctx: &egui::Context) {
     let light = crate::platform::windows::theme::apps_are_light();
     // Once per window, not per frame: this runs every frame and a line per frame
     // is not a diagnostic, it is a way of hiding one.
@@ -499,14 +444,17 @@ impl Tab {
     }
 }
 
-struct SettingsApp {
+pub(super) struct SettingsApp {
     /// The value passed in, kept verbatim so the final draft can be compared
     /// against it — the only way to know whether to return `None`.
     initial: Settings,
     /// The value being edited. Every control writes here directly.
     draft: Settings,
     tab: Tab,
-    result_slot: Rc<RefCell<Option<Option<Settings>>>>,
+    /// `Some(None)` once the window has decided "closing, nothing to save";
+    /// `Some(Some(settings))` once it has decided "closing, save this". Read
+    /// once by the root through [`SettingsApp::take_result`].
+    result: Option<Option<Settings>>,
 
     // ----- The list-editor windows, open or not -----
     excluded_open: bool,
@@ -539,13 +487,13 @@ struct SettingsApp {
 }
 
 impl SettingsApp {
-    fn new(initial: Settings, result_slot: Rc<RefCell<Option<Option<Settings>>>>) -> Self {
+    pub(super) fn new(initial: Settings) -> Self {
         let exclusion_list = initial.exclusion_list();
         Self {
             draft: initial.clone(),
             initial,
             tab: Tab::General,
-            result_slot,
+            result: None,
             excluded_open: false,
             macros_open: false,
             words_open: false,
@@ -564,8 +512,8 @@ impl SettingsApp {
     /// Decides what to hand back to [`show`] and records it. Idempotent, so
     /// it is safe to call from both the window-close event and the explicit
     /// Close button without double-deciding.
-    fn finalize(&mut self) {
-        if self.result_slot.borrow().is_some() {
+    pub(super) fn finalize(&mut self) {
+        if self.result.is_some() {
             return;
         }
 
@@ -593,7 +541,18 @@ impl SettingsApp {
         } else {
             Some(draft)
         };
-        *self.result_slot.borrow_mut() = Some(outcome);
+        self.result = Some(outcome);
+    }
+
+    /// The decision, once made. `Some(None)` is "closed, nothing changed".
+    pub(super) fn take_result(&mut self) -> Option<Option<Settings>> {
+        self.result.take()
+    }
+
+    /// The settings the window was opened on: the baseline every edit is a
+    /// diff against when the main thread merges it into the live session.
+    pub(super) fn baseline(&self) -> &Settings {
+        &self.initial
     }
 
     // ----- Tabs -------------------------------------------------------------
@@ -1156,7 +1115,8 @@ impl SettingsApp {
     /// bare [`egui::Context`] with no window, no GPU and no event loop — which
     /// is how the tabs are smoke-tested. `eframe::Frame` is not used here and
     /// there is nothing else to keep the two together.
-    fn ui(&mut self, ctx: &egui::Context) {
+    /// One frame of the window.
+    pub(super) fn draw(&mut self, ctx: &egui::Context) {
         // Before anything is laid out, so a theme the user switched while the
         // window was open takes effect on this frame rather than the next one.
         apply_theme(ctx);
@@ -1207,23 +1167,6 @@ impl SettingsApp {
             });
 
         self.show_aux_windows(ctx);
-    }
-}
-
-impl eframe::App for SettingsApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.ui(ctx);
-    }
-
-    /// The colour behind everything.
-    ///
-    /// **eframe's default ignores the theme.** It returns a hardcoded
-    /// `rgba(12, 12, 12, 180)` — near-black — whatever the visuals say, and every
-    /// panel that does not paint its own background shows it. That is how a
-    /// window whose theme had already been corrected still came up black: the
-    /// theme was right and the surface underneath it was not.
-    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        visuals.window_fill().to_normalized_gamma_f32()
     }
 }
 
@@ -1518,18 +1461,17 @@ mod tests {
             },
             ..Settings::default()
         };
-        let slot = Rc::new(RefCell::new(None));
-        let mut app = SettingsApp::new(settings.clone(), Rc::clone(&slot));
+        let mut app = SettingsApp::new(settings.clone());
         for tab in [Tab::General, Tab::Corrections] {
             app.tab = tab;
             for _ in 0..2 {
-                let _ = ctx.run(egui::RawInput::default(), |ctx| app.ui(ctx));
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.draw(ctx));
             }
         }
         // Rendering must not have edited anything: the foreign hotkey is shown,
         // not replaced.
         assert_eq!(app.draft, settings);
-        assert!(slot.borrow().is_none());
+        assert!(app.take_result().is_none());
     }
 
     /// A light system gets a light window.
@@ -1626,8 +1568,7 @@ mod tests {
             keys: "cats".into(),
             prefer: WordPreference::Vietnamese,
         });
-        let slot = Rc::new(RefCell::new(None));
-        let mut app = SettingsApp::new(settings, Rc::clone(&slot));
+        let mut app = SettingsApp::new(settings);
         // Every auxiliary window open at once, so all four are built.
         app.excluded_open = true;
         app.macros_open = true;
@@ -1643,7 +1584,7 @@ mod tests {
             // Twice: the second frame is the one where widgets see the ids and
             // state the first frame stored.
             for _ in 0..2 {
-                let _ = ctx.run(egui::RawInput::default(), |ctx| app.ui(ctx));
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.draw(ctx));
             }
         }
 
@@ -1652,7 +1593,7 @@ mod tests {
             "an auxiliary window closed itself"
         );
         assert!(
-            slot.borrow().is_none(),
+            app.take_result().is_none(),
             "building a pane must not decide the window is closing"
         );
     }

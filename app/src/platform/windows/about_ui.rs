@@ -17,7 +17,7 @@ use crate::strings::t;
 pub fn viewport_builder() -> egui::ViewportBuilder {
     egui::ViewportBuilder::default()
         .with_title(t("About GlowKey", "Giới thiệu GlowKey"))
-        .with_inner_size([360.0, 250.0])
+        .with_inner_size([360.0, 280.0])
         .with_resizable(false)
         .with_maximize_button(false)
         .with_minimize_button(false)
@@ -56,12 +56,18 @@ pub fn draw(ctx: &egui::Context) {
                 }
                 ui.label(egui::RichText::new("GlowKey").strong().size(22.0));
                 ui.add_space(2.0);
-                // Selectable: the one string a user is ever asked to quote back.
+                // The one string a user is ever asked to quote back: selectable,
+                // and a Copy beside it so retyping a commit hash is never asked.
                 let version = t("Version {}", "Phiên bản {}").replace("{}", &build_string());
-                ui.add(
-                    egui::Label::new(egui::RichText::new(version).small().color(secondary(ui)))
-                        .selectable(true),
-                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(version).small().color(secondary(ui)))
+                            .selectable(true),
+                    );
+                    if ui.small_button(t("Copy", "Chép")).clicked() {
+                        ctx.copy_text(build_string());
+                    }
+                });
                 ui.add_space(10.0);
                 ui.label(t(
                     "Vietnamese input for Windows.",

@@ -34,8 +34,8 @@ use eframe::egui;
 use glowkey_engine::{ExclusionList, HotkeyPreset, Macro, Settings, WordOverride, WordPreference};
 
 use crate::settings_spec::{
-    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, TabSpec, Toggle,
-    HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
+    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, Shortcut, TabSpec,
+    Toggle, HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
 };
 use crate::strings::t;
 
@@ -81,11 +81,19 @@ const ROW_HEIGHT: f32 = 24.0;
 /// its controls on one edge (`prefs/widgets.rs`'s `LABEL_COLUMN_WIDTH`) and so
 /// does this one.
 const LABEL_COLUMN: f32 = 92.0; // a floor; see `label_column_width`
-/// How far a caption is inset under the control it explains — roughly a checkbox
-/// plus its gap, so the text starts under the label, not under the box.
-const INDENT: f32 = 22.0;
-/// Gap between one group of settings and the next.
-const GROUP_GAP: f32 = 14.0;
+/// The width egui's checkbox glyph takes before its text, so a caption under a
+/// checkbox starts under the text rather than under the box.
+const CHECK_GLYPH: f32 = 18.0;
+/// How far a dependent row sits inside the control column, under its parent.
+const DEPENDENT_INDENT: f32 = 20.0;
+/// Gap between the label column and the control column.
+const COLUMN_GAP: f32 = 8.0;
+/// Vertical rhythm, measured edge to edge: between a control and its caption,
+/// between one row and the next, and before a section header. egui's own item
+/// spacing is part of each figure, not added to it.
+const CAPTION_GAP: f32 = 6.0;
+const ROW_GAP: f32 = 10.0;
+const GROUP_GAP: f32 = 18.0;
 
 /// The application icon, for the title bar and the taskbar.
 ///
@@ -230,6 +238,22 @@ fn raise_controls(
         w.bg_fill = fill;
         w.bg_stroke = stroke;
     }
+}
+
+/// The hotkeys the popup offers: the presets, minus Alt+Space (the system-menu
+/// key on Windows; whether the hook wins that race is unverified), plus the
+/// saved value when it is not among them — a combination recorded on a Mac
+/// (there is no recorder here) or Alt+Space itself. The saved choice is shown,
+/// never silently replaced by a preset.
+fn hotkey_choices(current: HotkeyPreset) -> Vec<HotkeyPreset> {
+    let mut offered: Vec<HotkeyPreset> = HOTKEY_PRESETS
+        .into_iter()
+        .filter(|p| *p != HotkeyPreset::OptionSpace)
+        .collect();
+    if !offered.contains(&current) {
+        offered.push(current);
+    }
+    offered
 }
 
 /// A segmented control: one choice, every option visible, the chosen one raised.
@@ -382,40 +406,114 @@ fn secondary_color(ui: &egui::Ui) -> egui::Color32 {
 /// The secondary line under a control whose label cannot carry its meaning — the
 /// macOS window's `caption`. The text comes from the engine's own documentation
 /// of what the option does and why its default is what it is.
-fn caption(ui: &mut egui::Ui, text: &str) {
-    caption_inset(ui, text, INDENT);
+/// A caption under a control, starting at `x` from the row's left edge — the
+/// control column for a form row, the checkbox text for a checkbox row. Any
+/// shortcut named in it is drawn as keycaps.
+fn caption_at(ui: &mut egui::Ui, text: &str, x: f32) {
+    egui::Frame::none()
+        .inner_margin(egui::Margin {
+            left: x,
+            right: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+        })
+        .show(ui, |ui| caption_rich(ui, text));
 }
 
 /// A caption with no inset: the introductory line at the top of a pane, which
 /// explains the pane rather than a single control.
 fn intro(ui: &mut egui::Ui, text: &str) {
-    caption_inset(ui, text, 0.0);
+    caption_rich(ui, text);
 }
 
-fn caption_inset(ui: &mut egui::Ui, text: &str, inset: f32) {
+/// Caption text with the platform's shortcut spellings rendered as keycaps
+/// inline, so "Press Ctrl+Shift+W right after…" scans as keys, not as words.
+fn caption_rich(ui: &mut egui::Ui, text: &str) {
     let color = secondary_color(ui);
-    egui::Frame::none()
-        .inner_margin(egui::Margin {
-            left: inset,
-            right: 0.0,
-            top: 0.0,
-            bottom: 0.0,
-        })
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).small().color(color));
-        });
+    let shortcuts = [Shortcut::ToggleApp, Shortcut::FixWord].map(shortcut_display);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let mut rest = text;
+        loop {
+            let next = shortcuts
+                .iter()
+                .filter_map(|sc| rest.find(sc).map(|at| (at, *sc)))
+                .min_by_key(|(at, _)| *at);
+            let Some((at, sc)) = next else {
+                break;
+            };
+            if at > 0 {
+                ui.label(egui::RichText::new(&rest[..at]).small().color(color));
+            }
+            keycaps(ui, sc);
+            rest = &rest[at + sc.len()..];
+        }
+        if !rest.is_empty() {
+            ui.label(egui::RichText::new(rest).small().color(color));
+        }
+    });
+}
+
+/// Splits a shortcut spelling into its keys: "Ctrl+Shift+E" → Ctrl, Shift, E.
+fn split_keys(shortcut: &str) -> Vec<&str> {
+    shortcut.split('+').filter(|k| !k.is_empty()).collect()
+}
+
+/// A shortcut as a row of keycaps: each key in a small raised badge.
+fn keycaps(ui: &mut egui::Ui, shortcut: &str) {
+    let dark = ui.visuals().dark_mode;
+    let (fill, hairline, ink) = if dark {
+        (
+            egui::Color32::from_gray(92),
+            egui::Color32::from_gray(118),
+            egui::Color32::from_gray(230),
+        )
+    } else {
+        (
+            egui::Color32::WHITE,
+            egui::Color32::from_gray(190),
+            egui::Color32::from_gray(40),
+        )
+    };
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        for key in split_keys(shortcut) {
+            egui::Frame::none()
+                .fill(fill)
+                .stroke(egui::Stroke::new(1.0_f32, hairline))
+                .rounding(egui::Rounding::same(4.0))
+                .inner_margin(egui::Margin::symmetric(5.0, 1.0))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(key).small().color(ink));
+                });
+        }
+    });
+}
+
+/// Ends a row: its caption, if any, at `caption_x`, then the gap to the next
+/// row. The figures are edge to edge, so egui's item spacing is subtracted.
+fn finish_row(ui: &mut egui::Ui, help: Option<&str>, caption_x: f32) {
+    let spacing = ui.spacing().item_spacing.y;
+    if let Some(text) = help {
+        ui.add_space((CAPTION_GAP - spacing).max(0.0));
+        caption_at(ui, text, caption_x);
+    }
+    ui.add_space((ROW_GAP - spacing).max(0.0));
 }
 
 /// A checkbox row, optionally with the caption that explains it.
+///
+/// In the control column, as the macOS form puts it: a checkbox is a control
+/// whose label is its own text, so it starts where every other control starts
+/// rather than at the pane's left edge. One axis for the eye to follow.
 fn checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str, help: Option<&str>) {
+    let column = label_column_width(ui) + COLUMN_GAP;
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
+        ui.add_space(column);
         ui.checkbox(value, label);
     });
-    if let Some(text) = help {
-        caption(ui, text);
-    }
-    ui.add_space(4.0);
+    finish_row(ui, help, column + CHECK_GLYPH);
 }
 
 /// A row with its label in a fixed left column and its control beside it, so
@@ -437,12 +535,10 @@ fn control_row(
                 ui.label(label);
             },
         );
+        ui.add_space(COLUMN_GAP - ui.spacing().item_spacing.x);
         add(ui);
     });
-    if let Some(text) = help {
-        caption(ui, text);
-    }
-    ui.add_space(4.0);
+    finish_row(ui, help, column + COLUMN_GAP);
 }
 
 /// The label column's width: wide enough for the longest label in the whole
@@ -483,7 +579,7 @@ fn list_row(ui: &mut egui::Ui, text: &str, buttons: impl FnOnce(&mut egui::Ui)) 
 /// The gap that separates one group of settings from the next, where the macOS
 /// stack uses `setCustomSpacing:`.
 fn group_gap(ui: &mut egui::Ui) {
-    ui.add_space(GROUP_GAP);
+    ui.add_space((GROUP_GAP - ui.spacing().item_spacing.y).max(0.0));
 }
 
 /// A section title, in the macOS settings shape: bold, small, secondary.
@@ -679,7 +775,7 @@ impl SettingsApp {
             .enabled_when
             .is_none_or(|parent| self.toggle_is_on(parent));
         let inset = if row.enabled_when.is_some() {
-            INDENT
+            DEPENDENT_INDENT
         } else {
             0.0
         };
@@ -768,31 +864,29 @@ impl SettingsApp {
                 checkbox_row(ui, value, label, caption_text);
             }
             Control::ToggleHotkey => {
+                // A popup rather than a segmented control: "Ctrl+Shift+Space"
+                // three times over does not fit a 460-point window, and the HIG
+                // reserves segments for a few short labels. macOS keeps its
+                // segmented glyphs; the spec does not care which.
                 control_row(ui, label, caption_text, |ui| {
-                    // Alt+Space is the system-menu key on Windows. Whether the
-                    // hook wins that race is unverified, so it is not offered; a
-                    // settings file that already has it still shows it, as does
-                    // a combination recorded on a Mac (there is no recorder on
-                    // this platform). The saved choice is shown, not silently
-                    // replaced by a preset.
                     let current = self.draft.toggle_hotkey;
-                    let mut offered: Vec<HotkeyPreset> = HOTKEY_PRESETS
-                        .into_iter()
-                        .filter(|p| *p != HotkeyPreset::OptionSpace)
-                        .collect();
-                    if !offered.contains(&current) {
-                        offered.push(current);
-                    }
-                    segmented(
-                        ui,
-                        &mut self.draft.toggle_hotkey,
-                        offered.into_iter().map(|p| (p, hotkey_display(p))),
-                    );
+                    egui::ComboBox::from_id_salt("toggle_hotkey")
+                        .selected_text(hotkey_display(current))
+                        .width(190.0)
+                        .show_ui(ui, |ui| {
+                            for preset in hotkey_choices(current) {
+                                ui.selectable_value(
+                                    &mut self.draft.toggle_hotkey,
+                                    preset,
+                                    hotkey_display(preset),
+                                );
+                            }
+                        });
                 });
             }
             Control::Shortcut(shortcut) => {
                 control_row(ui, label, caption_text, |ui| {
-                    ui.label(shortcut_display(shortcut));
+                    keycaps(ui, shortcut_display(shortcut));
                 });
             }
             Control::List(list) => {
@@ -803,9 +897,15 @@ impl SettingsApp {
                     ListId::Macros => self.draft.macros.len(),
                     ListId::PersonalWords => self.draft.word_overrides.len(),
                 };
+                let unit = match list {
+                    ListId::ExcludedApps => t("apps", "ứng dụng"),
+                    ListId::Macros => t("macros", "gõ tắt"),
+                    ListId::PersonalWords => t("words", "từ"),
+                };
                 let mut open = false;
                 control_row(ui, label, caption_text, |ui| {
-                    ui.label(count.to_string());
+                    let color = secondary_color(ui);
+                    ui.label(egui::RichText::new(format!("{count} {unit}")).color(color));
                     open = ui.button(MANAGE.get()).clicked();
                 });
                 if open {
@@ -1219,7 +1319,7 @@ impl SettingsApp {
                     .inner_margin(egui::Margin {
                         left: 10.0,
                         right: 10.0,
-                        top: 10.0,
+                        top: 12.0,
                         bottom: 4.0,
                     }),
             )
@@ -1622,6 +1722,34 @@ mod tests {
         });
         let _ = ctx.run(release, |ctx| frame(ctx, &mut value, &mut rects));
         assert_eq!(value, 1, "the second segment was clicked");
+    }
+
+    #[test]
+    fn keycaps_split_on_plus() {
+        assert_eq!(split_keys("Ctrl+Shift+E"), vec!["Ctrl", "Shift", "E"]);
+        assert_eq!(
+            split_keys("Ctrl+Shift+Space"),
+            vec!["Ctrl", "Shift", "Space"]
+        );
+    }
+
+    /// The popup never offers Alt+Space, and never hides what the file holds.
+    #[test]
+    fn the_hotkey_popup_offers_presets_and_the_saved_value() {
+        let plain = hotkey_choices(HotkeyPreset::CtrlSpace);
+        assert!(!plain.contains(&HotkeyPreset::OptionSpace));
+        assert_eq!(plain.len(), 3);
+        let saved = hotkey_choices(HotkeyPreset::OptionSpace);
+        assert_eq!(saved.last(), Some(&HotkeyPreset::OptionSpace));
+        let custom = HotkeyPreset::Custom {
+            control: true,
+            shift: false,
+            option: true,
+            key_char: 'k',
+            macos_keycode: None,
+            windows_vk: None,
+        };
+        assert_eq!(hotkey_choices(custom).last(), Some(&custom));
     }
 
     #[test]

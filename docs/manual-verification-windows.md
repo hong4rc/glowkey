@@ -8,6 +8,24 @@ functions. Neither has typed a character into an application.
 This checklist is executed by a person at a real machine. Its output is a
 limitations list, not a green tick.
 
+## Two things about the harnesses, established 2026-09-05
+
+**`verify-windows-isolated.ps1` cannot run a typing harness.** `SendInput`
+returns `ERROR_ACCESS_DENIED` from a process on a created desktop: it injects
+into the *input* desktop's queue and the caller has to be on it. Making the
+created desktop the input desktop means `SwitchDesktop`, which is the visible
+switch the script exists to avoid. So Tier 1 and Tier 2 must be run **directly,
+on the live desktop, with the machine to yourself** — the handoff's "ask first"
+is a real requirement, not caution. The isolated wrapper is still fine for a
+harness that only observes.
+
+**An agent cannot run these for you.** A coding agent's shell lives in a
+non-interactive window station: `GetForegroundWindow()` returns 0 and `SendInput`
+fails with 5, from the shell and from any process it spawns. Launching GlowKey
+that way *does* work (the hook installs and transforms the user's real typing),
+so the log is readable evidence an agent can gather — but the keystrokes have to
+come from a person. Plan the verification session accordingly.
+
 ## Before you start
 
 ```powershell

@@ -1,8 +1,17 @@
 # Tier 1 smoke test: does GlowKey actually transform keystrokes in a real app?
 #
-# Launches Notepad, focuses it, synthesizes keystrokes with SendInput, and reads
-# the edit control's text back. Everything is killed on the way out, including on
-# failure, because the thing under test is a global keyboard hook.
+# Focuses a text field in another process, synthesizes keystrokes with SendInput,
+# and reads the edit control's text back. Everything is killed on the way out,
+# including on failure, because the thing under test is a global keyboard hook.
+#
+# The target is Notepad where Notepad still has a classic `Edit` control, and
+# `verify-windows-target.ps1` where it does not. Windows 11's Notepad is a WinUI
+# application whose text surface is not a window, so `WM_GETTEXT` reads nothing
+# from it and this test silently had no target at all on a current machine —
+# which is how the smoke test that proves the hook transforms anything stopped
+# being runnable. Both targets are a separate process, so the path under test is
+# the cross-process one either way; the fallback is simply one whose result can
+# still be read.
 
 $ErrorActionPreference = 'Stop'
 
@@ -109,6 +118,39 @@ try {
     [void][W]::SetForegroundWindow($pad.MainWindowHandle)
     Start-Sleep -Seconds 2
     $edit = [W]::FindWindowEx($pad.MainWindowHandle, [IntPtr]::Zero, "Edit", $null)
+
+    if ($edit -eq [IntPtr]::Zero) {
+        # Windows 11: no classic edit control to read. Fall back to a target that
+        # answers WM_GETTEXT, and say so, because which host was used changes how
+        # much the result proves.
+        Write-Output "Notepad exposes no Edit control (Windows 11) - using verify-windows-target.ps1"
+        Stop-Process -Id $pad.Id -Force -ErrorAction SilentlyContinue
+        $pad = $null
+
+        $handleFile = Join-Path $env:TEMP ("glowkey-target-{0}.txt" -f [guid]::NewGuid())
+        $targetScript = Join-Path (Get-Location) "scripts/verify-windows-target.ps1"
+        $pad = Start-Process powershell -PassThru -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass',
+            '-File', $targetScript, '-HandlePath', $handleFile
+        )
+
+        # The handle is written from the form's Shown handler, so its appearance
+        # is also the signal that the window exists and can take focus.
+        $waited = 0
+        while (-not (Test-Path $handleFile) -and $waited -lt 200) {
+            Start-Sleep -Milliseconds 100
+            $waited++
+        }
+        if (-not (Test-Path $handleFile)) { Write-Output "target never reported a handle"; exit 1 }
+
+        $edit = [IntPtr][int64](Get-Content $handleFile -Raw).Trim()
+        Remove-Item $handleFile -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        $pad.Refresh()
+        [void][W]::SetForegroundWindow($pad.MainWindowHandle)
+        Start-Sleep -Seconds 2
+    }
+
     if ($edit -eq [IntPtr]::Zero) { Write-Output "no edit control"; exit 1 }
 
     $o_circ_grave = [string][char]0x1ED3   # o with circumflex + grave

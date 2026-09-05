@@ -14,11 +14,25 @@
 # only way to do it. .NET's `ProcessStartInfo` cannot express it, so this
 # P/Invokes `CreateProcessW` rather than pretending.
 #
-# Usage:
+# **This does not work for a harness that synthesizes keystrokes, and cannot.**
+# Established 2026-09-05 by running it: `SendInput` fails with `ERROR_ACCESS_DENIED`
+# (5) from a process on a created desktop, because it injects into the *input*
+# desktop's queue and the caller must be on that desktop. A created desktop only
+# becomes the input desktop through `SwitchDesktop`, which is exactly the "your
+# screen changes" behaviour this script exists to avoid — so the isolation and
+# the input synthesis are mutually exclusive, not merely unimplemented.
+#
+# It remains usable for a harness that only *observes* (reads a log, inspects a
+# window, checks a registry round-trip). For Tier 1 and Tier 2, which type, run
+# the harness directly on the live desktop with the machine to yourself:
+#
+#   .\scripts\verify-windows-tier1.ps1
+#
+# Usage (observational harnesses only):
 #   .\scripts\verify-windows-isolated.ps1 .\scripts\verify-windows-tier1.ps1
 #
-# Nothing appears on the user's screen. GlowKey is started on the isolated
-# desktop, the harness runs there, and both are torn down afterwards.
+# GlowKey is started on the isolated desktop, the harness runs there, and both
+# are torn down afterwards.
 
 param(
     [Parameter(Mandatory = $true)]

@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Windows UX parity and docs"
-status: in-progress
+status: completed
 priority: P2
 effort: "2h"
 dependencies: [1, 2, 3]
@@ -38,10 +38,14 @@ No new code beyond fixes found in verification.
 5. Journal.
 
 ## Success Criteria
-- [ ] All five `plan.md` acceptance criteria confirmed on the running build,
+Verified 2026-09-05 11:25 by driving the tray window with `WM_COMMAND`/`WM_CLOSE`
+(`plans/reports/verification-260905-1119-windows-ui-thread-desktop.md`).
+Still for the user: hotkey with About open, Esc, sound, segment look, taskbar
+button for the shim, Quit.
+- [x] All five `plan.md` acceptance criteria confirmed on the running build,
       with the log lines that show it quoted in the phase report.
-- [ ] Docs updated; `plans/reports/windows-handoff-260905.md` defect 2 marked closed.
-- [ ] Gates green on both targets.
+- [x] Docs updated; `plans/reports/windows-handoff-260905.md` defect 2 marked closed.
+- [x] Gates green on both targets.
 
 ## Risk Assessment
 - Manual steps need the user's hands for tray clicks (no synthetic input into the

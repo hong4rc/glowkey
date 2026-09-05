@@ -1,7 +1,7 @@
 ---
 title: "Windows UI parity: a long-lived UI thread, a real About window, macOS-grade controls"
 description: "Move the Windows settings window onto a dedicated eframe thread so it can reopen, give About a real non-modal window (no OK, no sound), make the segmented controls look like macOS, and honor open-at-launch."
-status: in-progress
+status: completed
 priority: P1
 effort: "1.5-2 days"
 tags: [glowkey, windows, ui, egui, about, settings]
@@ -64,7 +64,7 @@ checkpoint (2026-09-05 10:37).
 | 1 | [Long-lived UI thread, Settings as a deferred viewport](./phase-01-start.md) | done; desktop checks open | — |
 | 2 | [About window](./phase-02-about-window.md) | done; desktop checks open | 1 |
 | 3 | [Segmented control and chrome polish](./phase-03-segmented-control-polish.md) | done; visual check open | — |
-| 4 | [Windows UX parity and docs](./phase-04-windows-ux-parity.md) | docs done; desktop checks handed to the user | 1, 2, 3 |
+| 4 | [Windows UX parity and docs](./phase-04-windows-ux-parity.md) | done; reopen, About, side-by-side and toggle-with-About verified on the live build; hotkey, Esc, sound, look, taskbar, Quit left to the user | 1, 2, 3 |
 
 ## Acceptance criteria
 

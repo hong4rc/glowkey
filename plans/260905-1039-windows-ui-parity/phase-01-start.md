@@ -94,7 +94,7 @@ main thread (hook + tray loop)            glowkey-ui thread
 Unticked items need a hand on the desktop (no synthetic input into the live
 session); the code and headless tests are in place. `open_settings_at_launch`
 was seen working in the log on 2026-09-05 10:45.
-- [ ] Settings opens, closes, reopens three times in one process (log shows no
+- [x] Settings opens, closes, reopens three times in one process (log shows no
       `RecreationAttempt`).
 - [ ] An edit made in the second open is saved and applied.
 - [ ] Typing Vietnamese in Notepad works while Settings is open.

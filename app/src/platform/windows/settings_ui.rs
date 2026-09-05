@@ -9,14 +9,17 @@
 //! no global state, only values passed in and a value passed back.
 //!
 //! Mirrors the panes of the macOS settings window
-//! (`app/src/platform/macos/prefs/tabs.rs`): General/Typing, Excluded apps,
-//! Macros, Personal words, About.
+//! (`app/src/platform/macos/prefs/tabs.rs`): General, Typing, Corrections,
+//! Excluded apps, Macros, Personal words, About — behind a left sidebar rather
+//! than a row of tab buttons, because the list of panes is the navigation and a
+//! settings window on this desktop is expected to look like the system's own.
 //!
-//! **The labels here are English only.** `crate::strings::t` is now portable and
-//! the tray already uses it, so this is a mechanical pass over roughly forty
-//! labels rather than anything blocked — but it is not done, and a Vietnamese
-//! interface that stops at the tray is half an interface. Tracked as remaining
-//! Phase 5 work.
+//! Two things about the presentation are not decoration and are commented where
+//! they happen: the interface font is taken from the system (`docs/ui-design.md`
+//! asks for "looks like it came with the system", and egui's bundled font has no
+//! Vietnamese glyphs at all), and every label goes through
+//! [`crate::strings::t`], because the users are Vietnamese and an input method
+//! is the last place to make someone read a second language.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,6 +30,8 @@ use glowkey_engine::{
     ExclusionList, InputMethod, Language, Macro, PlacementStyle, Settings, WordOverride,
     WordPreference,
 };
+
+use crate::strings::t;
 
 /// Opens the settings window and blocks until the user closes it.
 ///
@@ -46,8 +51,14 @@ pub fn show(initial: Settings) -> Option<Settings> {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("GlowKey Settings")
-            .with_inner_size([560.0, 640.0])
+            .with_title(t("GlowKey Settings", "Cài đặt GlowKey"))
+            // Sized in points, not pixels: winit reports the monitor's scale
+            // factor and egui multiplies by it, so this is the same apparent
+            // size at 100% and at 150%. The minimum is what the widest pane
+            // (Macros: two fields, three buttons) needs before it starts
+            // wrapping into an unreadable shape.
+            .with_inner_size([860.0, 600.0])
+            .with_min_inner_size([680.0, 460.0])
             .with_resizable(true),
         ..Default::default()
     };
@@ -55,7 +66,11 @@ pub fn show(initial: Settings) -> Option<Settings> {
     let run_result = eframe::run_native(
         "GlowKey Settings",
         native_options,
-        Box::new(move |_cc| Ok(Box::new(SettingsApp::new(initial, slot_for_app)))),
+        Box::new(move |cc| {
+            install_system_font(&cc.egui_ctx);
+            apply_style(&cc.egui_ctx);
+            Ok(Box::new(SettingsApp::new(initial, slot_for_app)))
+        }),
     );
 
     if let Err(err) = run_result {
@@ -82,14 +97,282 @@ pub fn show(initial: Settings) -> Option<Settings> {
     slot.take().flatten()
 }
 
-/// Which pane is currently shown. Mirrors the macOS tab titles.
+// ---------------------------------------------------------------------------
+// Look and feel
+// ---------------------------------------------------------------------------
+
+/// Width of the navigation sidebar, in points.
+const SIDEBAR_WIDTH: f32 = 200.0;
+/// Height a single settings row occupies, so checkboxes, pickers and list rows
+/// all sit on the same rhythm instead of each taking its content's height.
+const ROW_HEIGHT: f32 = 28.0;
+/// Width of the label column in a label + control row.
+const LABEL_COLUMN: f32 = 140.0;
+/// How far a description line is inset under the control it explains — roughly
+/// a checkbox plus its gap, so the text starts under the label, not the box.
+const INDENT: f32 = 24.0;
+/// Corner radius of a settings group.
+const CARD_ROUNDING: f32 = 8.0;
+/// Vertical gap above a section header.
+const SECTION_GAP: f32 = 18.0;
+
+/// Loads the system UI font into egui.
+///
+/// Not cosmetic: **egui's bundled proportional font has no Vietnamese glyphs.**
+/// `Ubuntu-Light` covers Latin-1 and Latin Extended-A, and Vietnamese needs
+/// Latin Extended Additional (`ế ộ ữ ậ …`), so a Vietnamese interface drawn in
+/// the default font is a wall of missing-glyph boxes — the one failure mode this
+/// window cannot ship with. Segoe UI (the Windows 11 UI font) covers it, and
+/// makes the window look like the system's own besides.
+///
+/// Best effort by design: the egui defaults stay in the family as fallbacks, so
+/// a machine where the file cannot be read gets the old rendering rather than no
+/// window.
+fn install_system_font(ctx: &egui::Context) {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let mut fonts = egui::FontDefinitions::default();
+
+    let mut load = |name: &str, file: &str, family: egui::FontFamily| {
+        let Ok(bytes) = std::fs::read(format!("{root}\\Fonts\\{file}")) else {
+            return;
+        };
+        fonts
+            .font_data
+            .insert(name.to_owned(), egui::FontData::from_owned(bytes));
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, name.to_owned());
+    };
+
+    load("Segoe UI", "segoeui.ttf", egui::FontFamily::Proportional);
+    // Consolas covers Vietnamese too, which matters here: the macro import box
+    // is monospaced and the expansions people paste into it are Vietnamese.
+    load("Consolas", "consola.ttf", egui::FontFamily::Monospace);
+
+    ctx.set_fonts(fonts);
+}
+
+/// Type scale, spacing and control metrics.
+///
+/// Applied through [`egui::Context::all_styles_mut`] so it survives a light/dark
+/// switch: egui keeps one `Style` per theme and swaps them when the system
+/// preference changes, so anything written to only one of them is lost the
+/// moment the user turns on dark mode.
+fn apply_style(ctx: &egui::Context) {
+    // The default already is "follow the system"; saying so is cheap and makes
+    // the intent visible next to the rest of the theming.
+    ctx.set_theme(egui::ThemePreference::System);
+
+    ctx.all_styles_mut(|style| {
+        use egui::FontFamily::{Monospace, Proportional};
+        use egui::{FontId, TextStyle};
+
+        style.text_styles = [
+            (TextStyle::Heading, FontId::new(20.0, Proportional)),
+            (TextStyle::Body, FontId::new(14.5, Proportional)),
+            (TextStyle::Button, FontId::new(14.5, Proportional)),
+            (TextStyle::Monospace, FontId::new(13.5, Monospace)),
+            (TextStyle::Small, FontId::new(12.5, Proportional)),
+        ]
+        .into();
+
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(10.0, 5.0);
+        style.spacing.interact_size.y = 24.0;
+        style.spacing.menu_margin = egui::Margin::same(6.0);
+        style.visuals.widgets.noninteractive.rounding = egui::Rounding::same(6.0);
+        style.visuals.widgets.inactive.rounding = egui::Rounding::same(6.0);
+        style.visuals.widgets.hovered.rounding = egui::Rounding::same(6.0);
+        style.visuals.widgets.active.rounding = egui::Rounding::same(6.0);
+    });
+}
+
+/// A section: a quiet header, then a rounded group holding its rows. The
+/// grouping is the whole point — a settings window that is one flat column of
+/// checkboxes gives the reader nothing to navigate by.
+fn section<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let color = ui.visuals().strong_text_color();
+    ui.add_space(SECTION_GAP);
+    ui.label(egui::RichText::new(title).strong().color(color));
+    ui.add_space(6.0);
+    card(ui, add)
+}
+
+/// The rounded, faintly filled container a section's rows sit in.
+fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let fill = ui.visuals().faint_bg_color;
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    egui::Frame::none()
+        .fill(fill)
+        .stroke(stroke)
+        .rounding(CARD_ROUNDING)
+        .inner_margin(egui::Margin::symmetric(14.0, 12.0))
+        .show(ui, add)
+        .inner
+}
+
+/// The explanation under a control whose label cannot carry it. The text comes
+/// from the engine's own documentation of what the option does and why its
+/// default is what it is — the reason a user can act on, not a restatement of
+/// the label.
+fn description(ui: &mut egui::Ui, text: &str) {
+    let color = ui.visuals().weak_text_color();
+    egui::Frame::none()
+        .inner_margin(egui::Margin {
+            left: INDENT,
+            right: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+        })
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).small().color(color));
+        });
+}
+
+/// A checkbox row, optionally with a description under it.
+fn checkbox_row(ui: &mut egui::Ui, value: &mut bool, label: &str, help: Option<&str>) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
+        ui.checkbox(value, label);
+    });
+    if let Some(text) = help {
+        description(ui, text);
+    }
+    ui.add_space(4.0);
+}
+
+/// A row with a left-aligned label in a fixed column and its control beside it,
+/// so every picker in the window lines up on the same edge.
+fn control_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    help: Option<&str>,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
+        ui.allocate_ui_with_layout(
+            egui::vec2(LABEL_COLUMN, ROW_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(label);
+            },
+        );
+        add(ui);
+    });
+    if let Some(text) = help {
+        description(ui, text);
+    }
+    ui.add_space(4.0);
+}
+
+/// A list row: text on the left, its buttons flush to the right edge, on the
+/// same row height as everything else.
+fn list_row(ui: &mut egui::Ui, text: &str, buttons: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
+        ui.label(text);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), buttons);
+    });
+}
+
+/// One entry in the sidebar. Drawn rather than composed from a `SelectableLabel`
+/// so the highlight spans the full row and the text stays left-aligned, which is
+/// what a system settings sidebar looks like.
+fn nav_item(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+
+    let visuals = ui.visuals();
+    let (fill, text_color) = if selected {
+        (visuals.selection.bg_fill, visuals.selection.stroke.color)
+    } else if response.hovered() {
+        (
+            visuals.widgets.hovered.weak_bg_fill,
+            visuals.widgets.hovered.text_color(),
+        )
+    } else {
+        (egui::Color32::TRANSPARENT, visuals.text_color())
+    };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+
+    ui.painter().rect_filled(rect, 6.0, fill);
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        text_color,
+    );
+    response
+}
+
+// ---------------------------------------------------------------------------
+// The app
+// ---------------------------------------------------------------------------
+
+/// Which pane is currently shown. Mirrors the macOS tab titles, split the same
+/// way: one pane per question, short enough to read without scrolling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     General,
+    Typing,
+    Corrections,
     Apps,
     Macros,
     Words,
     About,
+}
+
+impl Tab {
+    /// The sidebar entries, in order.
+    fn all() -> [(Self, &'static str); 7] {
+        [
+            (Self::General, t("General", "Chung")),
+            (Self::Typing, t("Typing", "Gõ phím")),
+            (Self::Corrections, t("Corrections", "Sửa lỗi")),
+            (Self::Apps, t("Excluded apps", "Ứng dụng loại trừ")),
+            (Self::Macros, t("Macros", "Gõ tắt")),
+            (Self::Words, t("Personal words", "Từ riêng")),
+            (Self::About, t("About", "Giới thiệu")),
+        ]
+    }
+
+    /// The one-line explanation under the pane title.
+    fn subtitle(self) -> &'static str {
+        match self {
+            Self::General => t(
+                "Interface language and what happens at launch.",
+                "Ngôn ngữ giao diện và những gì xảy ra khi khởi động.",
+            ),
+            Self::Typing => t(
+                "How keys become Vietnamese.",
+                "Cách các phím trở thành tiếng Việt.",
+            ),
+            Self::Corrections => t(
+                "What GlowKey does when a word isn't Vietnamese.",
+                "GlowKey làm gì khi một từ không phải tiếng Việt.",
+            ),
+            Self::Apps => t(
+                "Apps where GlowKey stays off, so it never mangles a command.",
+                "Những ứng dụng GlowKey luôn tắt, để không làm hỏng câu lệnh.",
+            ),
+            Self::Macros => t(
+                "Type a shortcut then a space to expand it.",
+                "Gõ chữ viết tắt rồi dấu cách để bung ra.",
+            ),
+            Self::Words => t(
+                "Decide a single word once and it stays decided.",
+                "Quyết định một từ một lần và nó được giữ nguyên.",
+            ),
+            Self::About => t(
+                "Version and known limits.",
+                "Phiên bản và giới hạn đã biết.",
+            ),
+        }
+    }
 }
 
 struct SettingsApp {
@@ -182,138 +465,223 @@ impl SettingsApp {
     }
 
     fn show_general_tab(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Typing");
+        section(ui, t("Interface", "Giao diện"), |ui| {
+            // The picker applies immediately rather than at save, so the window
+            // is in the chosen language before the user has to decide whether
+            // they chose right. `set_language` is the same call the app makes at
+            // startup; the value is returned and persisted like any other edit.
+            let before = self.draft.language;
+            control_row(
+                ui,
+                t("Language", "Ngôn ngữ"),
+                Some(t(
+                    "\"System\" follows the language Windows is set to.",
+                    "“Hệ thống” đi theo ngôn ngữ của Windows.",
+                )),
+                |ui| {
+                    ui.radio_value(
+                        &mut self.draft.language,
+                        Language::System,
+                        t("System", "Hệ thống"),
+                    );
+                    ui.radio_value(&mut self.draft.language, Language::Vietnamese, "Tiếng Việt");
+                    ui.radio_value(&mut self.draft.language, Language::English, "English");
+                },
+            );
+            if self.draft.language != before {
+                crate::strings::set_language(self.draft.language);
+            }
+        });
 
-        ui.label("Input method:");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut self.draft.input_method, InputMethod::Telex, "Telex");
-            ui.radio_value(&mut self.draft.input_method, InputMethod::Vni, "VNI");
-            ui.radio_value(
-                &mut self.draft.input_method,
-                InputMethod::SimpleTelex,
-                "Simple Telex",
+        section(ui, t("At launch", "Khi khởi động"), |ui| {
+            checkbox_row(
+                ui,
+                &mut self.draft.open_settings_at_launch,
+                t(
+                    "Open this window at launch",
+                    "Mở cửa sổ này khi khởi động máy",
+                ),
+                Some(t(
+                    "On by default, so a new user sees the controls. GlowKey keeps \
+                     running in the notification area either way.",
+                    "Mặc định bật, để người dùng mới thấy được các tuỳ chọn. Dù bật hay \
+                     tắt, GlowKey vẫn chạy dưới khay hệ thống.",
+                )),
             );
         });
+    }
 
-        ui.label("Tone marks:");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut self.draft.style, PlacementStyle::New, "Modern (hoà)");
-            ui.radio_value(&mut self.draft.style, PlacementStyle::Old, "Classic (hòa)");
+    fn show_typing_tab(&mut self, ui: &mut egui::Ui) {
+        section(ui, t("Input method", "Kiểu gõ"), |ui| {
+            control_row(ui, t("Input method", "Kiểu gõ"), None, |ui| {
+                ui.radio_value(&mut self.draft.input_method, InputMethod::Telex, "Telex");
+                ui.radio_value(&mut self.draft.input_method, InputMethod::Vni, "VNI");
+                ui.radio_value(
+                    &mut self.draft.input_method,
+                    InputMethod::SimpleTelex,
+                    t("Simple Telex", "Telex đơn giản"),
+                );
+            });
+
+            control_row(ui, t("Tone marks", "Dấu thanh"), None, |ui| {
+                ui.radio_value(
+                    &mut self.draft.style,
+                    PlacementStyle::New,
+                    t("Modern  hoà", "Kiểu mới  hoà"),
+                );
+                ui.radio_value(
+                    &mut self.draft.style,
+                    PlacementStyle::Old,
+                    t("Classic  hòa", "Kiểu cũ  hòa"),
+                );
+            });
         });
 
-        ui.separator();
+        section(ui, t("Shortcuts", "Phím tắt khi gõ"), |ui| {
+            checkbox_row(
+                ui,
+                &mut self.draft.quick_telex,
+                t("Quick Telex", "Gõ tắt phụ âm"),
+                Some(t(
+                    "A doubled consonant at the start of a syllable types its digraph: \
+                     cc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư. Off by \
+                     default: it changes what plain consonant pairs mean.",
+                    "Phụ âm gõ đôi ở đầu âm tiết cho ra phụ âm ghép: cc→ch, gg→gi, kk→kh, \
+                     nn→ng, pp→ph, qq→qu, tt→th, uu→ư. Mặc định tắt vì nó thay đổi ý nghĩa \
+                     của các cặp phụ âm thường.",
+                )),
+            );
 
-        ui.checkbox(
-            &mut self.draft.quick_telex,
-            "Quick Telex (doubled consonant shortcuts)",
-        );
-        ui.label(
-            "A doubled consonant at the start of a syllable types its digraph: \
-             cc→ch, gg→gi, kk→kh, nn→ng, pp→ph, qq→qu, tt→th, uu→ư.",
+            checkbox_row(
+                ui,
+                &mut self.draft.telex_brackets,
+                t("Telex bracket shortcuts", "Phím ngoặc kiểu Telex"),
+                Some(t(
+                    "[ → ơ, ] → ư, { → Ơ, } → Ư while typing Telex. These four keys stop \
+                     reaching the app entirely, including where they are shortcuts.",
+                    "[ → ơ, ] → ư, { → Ơ, } → Ư khi gõ Telex. Bốn phím này sẽ không đến \
+                     ứng dụng nữa, kể cả khi chúng là phím tắt.",
+                )),
+            );
+        });
+    }
+
+    fn show_corrections_tab(&mut self, ui: &mut egui::Ui) {
+        section(
+            ui,
+            t("Non-Vietnamese words", "Từ không phải tiếng Việt"),
+            |ui| {
+                checkbox_row(
+                    ui,
+                    &mut self.draft.auto_fix,
+                    t(
+                        "Auto-fix non-Vietnamese words",
+                        "Tự động khôi phục từ không phải tiếng Việt",
+                    ),
+                    Some(t(
+                        "Restores the raw keys at the space when the result isn't valid \
+                     Vietnamese — types \"exit\", not \"eĩt\".",
+                        "Khôi phục phím gốc ở dấu cách khi kết quả không phải tiếng Việt — \
+                     gõ ra “exit”, không phải “eĩt”.",
+                    )),
+                );
+
+                checkbox_row(
+                    ui,
+                    &mut self.draft.strict_spell_check,
+                    t(
+                        "Fix as I type, not at the space",
+                        "Sửa ngay khi gõ, không đợi dấu cách",
+                    ),
+                    Some(t(
+                        "Restores the raw keys the moment a word stops being possible \
+                     Vietnamese — \"exit\" repairs at the x, not at the space.",
+                        "Khôi phục phím gốc ngay khi từ không còn là tiếng Việt hợp lệ — \
+                     “exit” được sửa ngay ở chữ x, không đợi dấu cách.",
+                    )),
+                );
+
+                checkbox_row(
+                    ui,
+                    &mut self.draft.restore_english_words,
+                    t(
+                        "Restore common English words",
+                        "Khôi phục từ tiếng Anh thông dụng",
+                    ),
+                    Some(t(
+                        "Off by default: \"was\" stays \"was\", but every syllable sharing keys \
+                     with a listed word (á→as, í→is, cát→cats, cả→car, hải→hair) then needs \
+                     a different key order. Personal words decides one word at a time \
+                     instead, and wins over this.",
+                        "Mặc định tắt: “was” giữ nguyên “was”, nhưng mọi âm tiết trùng phím với \
+                     từ trong danh sách (á→as, í→is, cát→cats, cả→car, hải→hair) sẽ phải gõ \
+                     theo thứ tự khác. “Từ riêng” quyết định từng từ một, và được ưu tiên hơn.",
+                    )),
+                );
+            },
         );
 
-        ui.checkbox(
-            &mut self.draft.telex_brackets,
-            "Telex bracket shortcuts ([ → ơ, ] → ư, { → Ơ, } → Ư)",
-        );
-        ui.label(
-            "Turning this on stops [ and ] (and { and }) reaching the app at \
-             all while typing Telex — including where they are shortcuts.",
-        );
-
-        ui.separator();
-
-        ui.checkbox(
-            &mut self.draft.auto_fix,
-            "Auto-fix non-Vietnamese words at the space",
-        );
-        ui.label(
-            "Restores the raw keys at the space when the result isn't valid \
-             Vietnamese — types \"exit\", not \"eĩt\".",
-        );
-
-        ui.checkbox(
-            &mut self.draft.strict_spell_check,
-            "Fix as I type, not at the space",
-        );
-        ui.label(
-            "Restores the raw keys the moment a word stops being possible \
-             Vietnamese — \"exit\" repairs at the x, not at the space.",
-        );
-
-        ui.checkbox(
-            &mut self.draft.auto_capitalize,
-            "Auto-capitalize first letter of each sentence",
-        );
-
-        ui.checkbox(
-            &mut self.draft.restore_english_words,
-            "Restore common English words",
-        );
-        ui.label(
-            "Off by default: it inverts the ambiguity for Vietnamese words \
-             typed with a trailing tone key (cats→cát). Personal Words below \
-             decides one word at a time instead, and wins over this.",
-        );
-
-        ui.separator();
-
-        ui.checkbox(
-            &mut self.draft.always_macro,
-            "Expand macros even when Vietnamese is off",
-        );
-        ui.label("Never applies in an excluded app.");
-
-        ui.separator();
-        ui.heading("General");
-
-        ui.checkbox(
-            &mut self.draft.open_settings_at_launch,
-            "Open this window at launch",
-        );
-
-        ui.label("Interface language:");
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut self.draft.language, Language::System, "System");
-            ui.radio_value(&mut self.draft.language, Language::Vietnamese, "Tiếng Việt");
-            ui.radio_value(&mut self.draft.language, Language::English, "English");
+        section(ui, t("Capitalization", "Viết hoa"), |ui| {
+            checkbox_row(
+                ui,
+                &mut self.draft.auto_capitalize,
+                t(
+                    "Auto-capitalize first letter of each sentence",
+                    "Tự động viết hoa chữ đầu câu",
+                ),
+                None,
+            );
         });
     }
 
     fn show_apps_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            "Apps where GlowKey stays off, identified by executable name \
-             (e.g. code.exe, cmd.exe) rather than a bundle id.",
-        );
-
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.new_exclusion);
-            if ui.button("Add").clicked() {
-                if let Some(name) = normalize_exe_name(&self.new_exclusion) {
-                    self.exclusion_list.add(name);
-                    self.new_exclusion.clear();
-                }
-            }
+        section(ui, t("Add an app", "Thêm ứng dụng"), |ui| {
+            control_row(
+                ui,
+                t("Program name", "Tên chương trình"),
+                Some(t(
+                    "The executable's own name, as Task Manager shows it — code.exe, \
+                     cmd.exe, WindowsTerminal.exe.",
+                    "Tên tệp chạy của chương trình, như trong Task Manager — code.exe, \
+                     cmd.exe, WindowsTerminal.exe.",
+                )),
+                |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_exclusion)
+                            .desired_width(220.0)
+                            .hint_text("code.exe"),
+                    );
+                    if ui.button(t("Add", "Thêm")).clicked() {
+                        if let Some(name) = normalize_exe_name(&self.new_exclusion) {
+                            self.exclusion_list.add(name);
+                            self.new_exclusion.clear();
+                        }
+                    }
+                },
+            );
         });
-
-        ui.separator();
 
         let mut ids: Vec<String> = self.exclusion_list.ids().map(str::to_string).collect();
         ids.sort();
         let mut to_remove: Option<String> = None;
-        egui::ScrollArea::vertical()
-            .id_salt("exclusion_list")
-            .max_height(200.0)
-            .show(ui, |ui| {
-                for id in &ids {
-                    ui.horizontal(|ui| {
-                        ui.label(id);
-                        if ui.small_button("Remove").clicked() {
-                            to_remove = Some(id.clone());
-                        }
-                    });
-                }
-            });
+        section(ui, t("Excluded apps", "Ứng dụng loại trừ"), |ui| {
+            if ids.is_empty() {
+                description(ui, t("No apps excluded.", "Chưa có ứng dụng nào."));
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("exclusion_list")
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for id in &ids {
+                        list_row(ui, id, |ui| {
+                            if ui.button(t("Remove", "Xóa")).clicked() {
+                                to_remove = Some(id.clone());
+                            }
+                        });
+                    }
+                });
+        });
         if let Some(id) = to_remove {
             // Removing a shipped default is recorded as a tombstone by
             // `ExclusionList::remove` itself, so a later release does not
@@ -326,84 +694,119 @@ impl SettingsApp {
             .removed_default_ids()
             .map(str::to_string)
             .collect();
-        if !tombstones.is_empty() {
-            tombstones.sort();
-            ui.separator();
-            ui.label(
-                "Shipped defaults you deliberately removed. They will not come \
-                 back on their own, even in a future release that adds them:",
-            );
-            let mut to_restore: Option<String> = None;
-            for id in &tombstones {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{id}  (removed default)"));
-                    if ui.small_button("Restore default").clicked() {
-                        to_restore = Some(id.clone());
-                    }
-                });
-            }
-            if let Some(id) = to_restore {
-                // Re-adding makes the id explicitly excluded again; the
-                // tombstone record itself is harmless once the id is present,
-                // since presence always wins over it.
-                self.exclusion_list.add(id);
-            }
+        if tombstones.is_empty() {
+            return;
+        }
+        tombstones.sort();
+        let mut to_restore: Option<String> = None;
+        section(
+            ui,
+            t("Defaults you removed", "Mặc định bạn đã bỏ"),
+            |ui| {
+                description(
+                    ui,
+                    t(
+                        "These will not come back on their own, even in a future release \
+                         that ships them again.",
+                        "Những mục này sẽ không tự quay lại, kể cả ở bản cập nhật sau có \
+                         kèm chúng.",
+                    ),
+                );
+                ui.add_space(4.0);
+                for id in &tombstones {
+                    list_row(ui, id, |ui| {
+                        if ui.button(t("Restore", "Khôi phục")).clicked() {
+                            to_restore = Some(id.clone());
+                        }
+                    });
+                }
+            },
+        );
+        if let Some(id) = to_restore {
+            // Re-adding makes the id explicitly excluded again; the tombstone
+            // record itself is harmless once the id is present, since presence
+            // always wins over it.
+            self.exclusion_list.add(id);
         }
     }
 
     fn show_macros_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label("Text expansion (gõ tắt): type a shortcut then a space to expand it.");
-
-        ui.horizontal(|ui| {
-            ui.label("Shortcut:");
-            ui.text_edit_singleline(&mut self.macro_shortcut);
-            ui.label("Expansion:");
-            ui.text_edit_singleline(&mut self.macro_expansion);
-            let label = if self.macro_edit_index.is_some() {
-                "Save"
+        let editing = self.macro_edit_index.is_some();
+        section(
+            ui,
+            if editing {
+                t("Edit macro", "Sửa gõ tắt")
             } else {
-                "Add"
-            };
-            if ui.button(label).clicked() {
-                if let Some((shortcut, expansion)) =
-                    validate_macro(&self.macro_shortcut, &self.macro_expansion)
-                {
-                    upsert_macro(
-                        &mut self.draft.macros,
-                        shortcut,
-                        expansion,
-                        self.macro_edit_index.take(),
+                t("Add a macro", "Thêm gõ tắt")
+            },
+            |ui| {
+                control_row(ui, t("Shortcut", "Viết tắt"), None, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.macro_shortcut)
+                            .desired_width(140.0)
+                            .hint_text("vn"),
                     );
-                    self.macro_shortcut.clear();
-                    self.macro_expansion.clear();
-                }
-            }
-            if self.macro_edit_index.is_some() && ui.button("Cancel edit").clicked() {
-                self.macro_edit_index = None;
-                self.macro_shortcut.clear();
-                self.macro_expansion.clear();
-            }
-        });
-
-        ui.separator();
+                });
+                control_row(ui, t("Expands to", "Nội dung"), None, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.macro_expansion)
+                            .desired_width(320.0)
+                            .hint_text("Việt Nam"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.set_min_height(ROW_HEIGHT);
+                    ui.add_space(LABEL_COLUMN);
+                    let label = if editing {
+                        t("Save", "Lưu")
+                    } else {
+                        t("Add", "Thêm")
+                    };
+                    if ui.button(label).clicked() {
+                        if let Some((shortcut, expansion)) =
+                            validate_macro(&self.macro_shortcut, &self.macro_expansion)
+                        {
+                            upsert_macro(
+                                &mut self.draft.macros,
+                                shortcut,
+                                expansion,
+                                self.macro_edit_index.take(),
+                            );
+                            self.macro_shortcut.clear();
+                            self.macro_expansion.clear();
+                        }
+                    }
+                    if editing && ui.button(t("Cancel", "Huỷ")).clicked() {
+                        self.macro_edit_index = None;
+                        self.macro_shortcut.clear();
+                        self.macro_expansion.clear();
+                    }
+                });
+            },
+        );
 
         let mut action: Option<(usize, bool)> = None;
-        egui::ScrollArea::vertical()
-            .id_salt("macro_list")
-            .max_height(160.0)
-            .show(ui, |ui| {
-                for (i, m) in self.draft.macros.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{} → {}", m.shortcut, m.expansion));
-                        if ui.small_button("Edit").clicked() {
-                            action = Some((i, true));
-                        }
-                        if ui.small_button("Remove").clicked() {
-                            action = Some((i, false));
-                        }
-                    });
-                }
-            });
+        section(ui, t("Your macros", "Danh sách gõ tắt"), |ui| {
+            if self.draft.macros.is_empty() {
+                description(ui, t("No macros yet.", "Chưa có gõ tắt nào."));
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("macro_list")
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    for (i, m) in self.draft.macros.iter().enumerate() {
+                        list_row(ui, &format!("{}  →  {}", m.shortcut, m.expansion), |ui| {
+                            if ui.button(t("Remove", "Xóa")).clicked() {
+                                action = Some((i, false));
+                            }
+                            if ui.button(t("Edit", "Sửa")).clicked() {
+                                action = Some((i, true));
+                            }
+                        });
+                    }
+                });
+        });
         if let Some((i, edit)) = action {
             if edit {
                 self.macro_shortcut = self.draft.macros[i].shortcut.clone();
@@ -417,94 +820,161 @@ impl SettingsApp {
             }
         }
 
-        ui.separator();
-        ui.label(
-            "Import or export a table in the UniKey/EVKey format \
-             (shortcut:expansion per line) — the main way a curated list \
-             arrives.",
-        );
-        ui.add(
-            egui::TextEdit::multiline(&mut self.macro_table_text)
-                .desired_rows(6)
-                .font(egui::TextStyle::Monospace),
-        );
-        ui.horizontal(|ui| {
-            if ui.button("Import (merge into list above)").clicked() {
-                for m in Macro::parse_table(&self.macro_table_text) {
-                    upsert_macro(&mut self.draft.macros, m.shortcut, m.expansion, None);
+        section(ui, t("Import and export", "Nhập và xuất"), |ui| {
+            description(
+                ui,
+                t(
+                    "A table in the UniKey/EVKey format, one shortcut:expansion per line — \
+                     the main way a curated list arrives.",
+                    "Bảng theo định dạng UniKey/EVKey, mỗi dòng một mục viết tắt:nội dung — \
+                     cách phổ biến nhất để mang một danh sách có sẵn sang.",
+                ),
+            );
+            ui.add_space(6.0);
+            ui.add(
+                egui::TextEdit::multiline(&mut self.macro_table_text)
+                    .desired_rows(6)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.set_min_height(ROW_HEIGHT);
+                if ui
+                    .button(t("Import into list", "Nhập vào danh sách"))
+                    .clicked()
+                {
+                    for m in Macro::parse_table(&self.macro_table_text) {
+                        upsert_macro(&mut self.draft.macros, m.shortcut, m.expansion, None);
+                    }
                 }
-            }
-            if ui.button("Export list above into this box").clicked() {
-                self.macro_table_text = Macro::format_table(&self.draft.macros);
-            }
+                if ui
+                    .button(t("Export list here", "Xuất danh sách ra đây"))
+                    .clicked()
+                {
+                    self.macro_table_text = Macro::format_table(&self.draft.macros);
+                }
+            });
         });
+
+        section(
+            ui,
+            t("While Vietnamese is off", "Khi đã tắt tiếng Việt"),
+            |ui| {
+                checkbox_row(
+                    ui,
+                    &mut self.draft.always_macro,
+                    t(
+                        "Expand macros even when Vietnamese is off",
+                        "Bung gõ tắt cả khi đã tắt tiếng Việt",
+                    ),
+                    Some(t(
+                        "Never applies in an excluded app.",
+                        "Không áp dụng trong ứng dụng đã loại trừ.",
+                    )),
+                );
+            },
+        );
     }
 
     fn show_words_tab(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            "Per-word decisions about the English/Telex ambiguity. A word \
-             decided here stays decided, and wins over \"Restore common \
-             English words\" on the General tab.",
-        );
-
-        ui.horizontal(|ui| {
-            ui.label("Keys:");
-            ui.text_edit_singleline(&mut self.word_keys);
-            egui::ComboBox::from_id_salt("word_prefer")
-                .selected_text(preference_label(self.word_prefer))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.word_prefer,
-                        WordPreference::Raw,
-                        preference_label(WordPreference::Raw),
-                    );
-                    ui.selectable_value(
-                        &mut self.word_prefer,
-                        WordPreference::Vietnamese,
-                        preference_label(WordPreference::Vietnamese),
+        let editing = self.word_edit_index.is_some();
+        section(
+            ui,
+            if editing {
+                t("Edit word", "Sửa từ")
+            } else {
+                t("Add a word", "Thêm từ")
+            },
+            |ui| {
+                description(
+                    ui,
+                    t(
+                        "Per-word decisions about the English/Telex ambiguity. A word decided \
+                         here stays decided, and wins over \"Restore common English words\" \
+                         under Corrections.",
+                        "Quyết định từng từ một cho những trường hợp trùng phím giữa tiếng Anh \
+                         và Telex. Từ đã quyết định ở đây sẽ được giữ nguyên, và được ưu tiên \
+                         hơn “Khôi phục từ tiếng Anh thông dụng” ở mục Sửa lỗi.",
+                    ),
+                );
+                ui.add_space(6.0);
+                control_row(ui, t("Word as typed", "Từ như đã gõ"), None, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.word_keys)
+                            .desired_width(180.0)
+                            .hint_text("cats"),
                     );
                 });
-            let label = if self.word_edit_index.is_some() {
-                "Save"
-            } else {
-                "Add"
-            };
-            if ui.button(label).clicked() {
-                if let Some(keys) = normalize_word_keys(&self.word_keys) {
-                    upsert_word_override(
-                        &mut self.draft.word_overrides,
-                        keys,
-                        self.word_prefer,
-                        self.word_edit_index.take(),
-                    );
-                    self.word_keys.clear();
-                }
-            }
-            if self.word_edit_index.is_some() && ui.button("Cancel edit").clicked() {
-                self.word_edit_index = None;
-                self.word_keys.clear();
-            }
-        });
-
-        ui.separator();
+                control_row(ui, t("Keep it as", "Giữ thành"), None, |ui| {
+                    egui::ComboBox::from_id_salt("word_prefer")
+                        .selected_text(preference_label(self.word_prefer))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.word_prefer,
+                                WordPreference::Raw,
+                                preference_label(WordPreference::Raw),
+                            );
+                            ui.selectable_value(
+                                &mut self.word_prefer,
+                                WordPreference::Vietnamese,
+                                preference_label(WordPreference::Vietnamese),
+                            );
+                        });
+                });
+                ui.horizontal(|ui| {
+                    ui.set_min_height(ROW_HEIGHT);
+                    ui.add_space(LABEL_COLUMN);
+                    let label = if editing {
+                        t("Save", "Lưu")
+                    } else {
+                        t("Add", "Thêm")
+                    };
+                    if ui.button(label).clicked() {
+                        if let Some(keys) = normalize_word_keys(&self.word_keys) {
+                            upsert_word_override(
+                                &mut self.draft.word_overrides,
+                                keys,
+                                self.word_prefer,
+                                self.word_edit_index.take(),
+                            );
+                            self.word_keys.clear();
+                        }
+                    }
+                    if editing && ui.button(t("Cancel", "Huỷ")).clicked() {
+                        self.word_edit_index = None;
+                        self.word_keys.clear();
+                    }
+                });
+            },
+        );
 
         let mut action: Option<(usize, bool)> = None;
-        egui::ScrollArea::vertical()
-            .id_salt("word_override_list")
-            .max_height(200.0)
-            .show(ui, |ui| {
-                for (i, w) in self.draft.word_overrides.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}  →  {}", w.keys, preference_label(w.prefer)));
-                        if ui.small_button("Edit").clicked() {
-                            action = Some((i, true));
-                        }
-                        if ui.small_button("Remove").clicked() {
-                            action = Some((i, false));
-                        }
-                    });
-                }
-            });
+        section(ui, t("Your words", "Danh sách từ riêng"), |ui| {
+            if self.draft.word_overrides.is_empty() {
+                description(ui, t("No words yet.", "Chưa có từ nào."));
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("word_override_list")
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    for (i, w) in self.draft.word_overrides.iter().enumerate() {
+                        list_row(
+                            ui,
+                            &format!("{}  →  {}", w.keys, preference_label(w.prefer)),
+                            |ui| {
+                                if ui.button(t("Remove", "Xóa")).clicked() {
+                                    action = Some((i, false));
+                                }
+                                if ui.button(t("Edit", "Sửa")).clicked() {
+                                    action = Some((i, true));
+                                }
+                            },
+                        );
+                    }
+                });
+        });
         if let Some((i, edit)) = action {
             if edit {
                 self.word_keys = self.draft.word_overrides[i].keys.clone();
@@ -520,25 +990,51 @@ impl SettingsApp {
     }
 
     fn show_about_tab(&self, ui: &mut egui::Ui) {
-        ui.heading("GlowKey");
-        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-        // Set by the build; may be empty (a source build outside CI, or a
-        // build where `git` isn't available) rather than absent, so this
-        // never fails to compile — it just has nothing to show.
-        let commit = option_env!("GLOWKEY_COMMIT").unwrap_or("");
-        if !commit.is_empty() {
-            ui.label(format!("Commit {commit}"));
-        }
+        section(ui, t("Version", "Phiên bản"), |ui| {
+            list_row(ui, t("GlowKey", "GlowKey"), |ui| {
+                ui.label(env!("CARGO_PKG_VERSION"));
+            });
+            // Set by the build; may be empty (a source build outside CI, or a
+            // build where `git` isn't available) rather than absent, so this
+            // never fails to compile — it just has nothing to show.
+            let commit = option_env!("GLOWKEY_COMMIT").unwrap_or("");
+            if !commit.is_empty() {
+                list_row(ui, t("Build", "Bản dựng"), |ui| {
+                    ui.label(commit);
+                });
+            }
+        });
 
-        ui.separator();
-        ui.label(
-            "Windows limitation: Windows blocks synthetic input across \
-             integrity levels. If this settings window is running elevated \
-             (\"Run as administrator\") while GlowKey's keyboard hook is not, \
-             or the other way around, the elevated process cannot receive \
-             keystrokes the other one injects. Run GlowKey and this window at \
-             the same elevation.",
-        );
+        section(ui, t("Known limit", "Giới hạn đã biết"), |ui| {
+            description(
+                ui,
+                t(
+                    "Windows blocks synthetic input across integrity levels. If this \
+                     settings window is running elevated (\"Run as administrator\") while \
+                     GlowKey's keyboard hook is not, or the other way around, the elevated \
+                     program cannot receive the keystrokes the other one injects. Run \
+                     GlowKey and that program at the same elevation.",
+                    "Windows chặn phím giả lập giữa hai mức toàn vẹn khác nhau. Nếu cửa sổ \
+                     này chạy với quyền quản trị (“Run as administrator”) còn móc bàn phím \
+                     của GlowKey thì không, hoặc ngược lại, chương trình chạy quyền cao hơn \
+                     sẽ không nhận được phím do bên kia gửi. Hãy chạy GlowKey và chương \
+                     trình đó ở cùng một mức quyền.",
+                ),
+            );
+        });
+    }
+
+    /// Dispatches to the pane's builder.
+    fn show_tab(&mut self, ui: &mut egui::Ui) {
+        match self.tab {
+            Tab::General => self.show_general_tab(ui),
+            Tab::Typing => self.show_typing_tab(ui),
+            Tab::Corrections => self.show_corrections_tab(ui),
+            Tab::Apps => self.show_apps_tab(ui),
+            Tab::Macros => self.show_macros_tab(ui),
+            Tab::Words => self.show_words_tab(ui),
+            Tab::About => self.show_about_tab(ui),
+        }
     }
 }
 
@@ -550,40 +1046,89 @@ impl eframe::App for SettingsApp {
             self.finalize();
         }
 
-        egui::TopBottomPanel::top("glowkey_settings_tabs").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                for (tab, title) in [
-                    (Tab::General, "General"),
-                    (Tab::Apps, "Excluded apps"),
-                    (Tab::Macros, "Macros"),
-                    (Tab::Words, "Personal words"),
-                    (Tab::About, "About"),
-                ] {
-                    ui.selectable_value(&mut self.tab, tab, title);
-                }
-            });
-        });
-
-        egui::TopBottomPanel::bottom("glowkey_settings_bottom").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Close").clicked() {
-                    self.finalize();
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                }
-            });
-        });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("glowkey_settings_body")
-                .show(ui, |ui| match self.tab {
-                    Tab::General => self.show_general_tab(ui),
-                    Tab::Apps => self.show_apps_tab(ui),
-                    Tab::Macros => self.show_macros_tab(ui),
-                    Tab::Words => self.show_words_tab(ui),
-                    Tab::About => self.show_about_tab(ui),
+        egui::SidePanel::left("glowkey_settings_nav")
+            .exact_width(SIDEBAR_WIDTH)
+            .resizable(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(ctx.style().visuals.panel_fill)
+                    .inner_margin(egui::Margin::symmetric(10.0, 14.0)),
+            )
+            .show(ctx, |ui| {
+                let color = ui.visuals().weak_text_color();
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("GlowKey").strong());
                 });
-        });
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    ui.label(
+                        egui::RichText::new(t("Vietnamese input", "Bộ gõ tiếng Việt"))
+                            .small()
+                            .color(color),
+                    );
+                });
+                ui.add_space(14.0);
+
+                for (tab, title) in Tab::all() {
+                    if nav_item(ui, self.tab == tab, title).clicked() {
+                        self.tab = tab;
+                    }
+                    ui.add_space(2.0);
+                }
+            });
+
+        egui::TopBottomPanel::bottom("glowkey_settings_bottom")
+            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(20.0, 12.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(ROW_HEIGHT);
+                    let color = ui.visuals().weak_text_color();
+                    ui.label(
+                        egui::RichText::new(t(
+                            "Changes are saved when you close this window.",
+                            "Thay đổi được lưu khi bạn đóng cửa sổ này.",
+                        ))
+                        .small()
+                        .color(color),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t("Done", "Xong")).clicked() {
+                            self.finalize();
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    });
+                });
+            });
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(ctx.style().visuals.window_fill)
+                    .inner_margin(egui::Margin::symmetric(24.0, 18.0)),
+            )
+            .show(ctx, |ui| {
+                let title = Tab::all()
+                    .into_iter()
+                    .find(|(tab, _)| *tab == self.tab)
+                    .map_or("", |(_, title)| title);
+                let color = ui.visuals().weak_text_color();
+                ui.heading(title);
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(self.tab.subtitle())
+                        .small()
+                        .color(color),
+                );
+
+                egui::ScrollArea::vertical()
+                    .id_salt("glowkey_settings_body")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.show_tab(ui);
+                        ui.add_space(SECTION_GAP);
+                    });
+            });
     }
 }
 
@@ -604,11 +1149,12 @@ fn normalize_exclusions(settings: &Settings) -> Settings {
 }
 
 /// Human label for a [`WordPreference`], matching how the personal-words list
-/// is explained to the user.
+/// is explained to the user — and matching the macOS window's wording, so the
+/// same decision is not named two different things on two platforms.
 fn preference_label(pref: WordPreference) -> &'static str {
     match pref {
-        WordPreference::Raw => "Keep as typed",
-        WordPreference::Vietnamese => "Keep Vietnamese",
+        WordPreference::Raw => t("Keep as typed", "Giữ như gõ"),
+        WordPreference::Vietnamese => t("Keep Vietnamese", "Giữ tiếng Việt"),
     }
 }
 
@@ -835,5 +1381,52 @@ mod tests {
         draft.removed_default_exclusions = removed;
 
         assert_eq!(draft, normalize_exclusions(&initial));
+    }
+
+    /// Every pane must be reachable from the sidebar: the navigation *is* the
+    /// list of panes now, so a pane missing from it is a pane with no way in.
+    #[test]
+    fn every_pane_has_a_sidebar_entry() {
+        let tabs: Vec<Tab> = Tab::all().into_iter().map(|(tab, _)| tab).collect();
+        for expected in [
+            Tab::General,
+            Tab::Typing,
+            Tab::Corrections,
+            Tab::Apps,
+            Tab::Macros,
+            Tab::Words,
+            Tab::About,
+        ] {
+            assert!(
+                tabs.contains(&expected),
+                "{expected:?} is not in the sidebar"
+            );
+        }
+        assert_eq!(tabs.len(), 7, "an entry was added without a pane");
+    }
+
+    /// Nothing in the sidebar may be blank, in either language: an empty row is
+    /// a pane the user cannot name.
+    #[test]
+    fn sidebar_titles_and_subtitles_are_present() {
+        for (tab, title) in Tab::all() {
+            assert!(!title.trim().is_empty(), "{tab:?} has no title");
+            assert!(!tab.subtitle().trim().is_empty(), "{tab:?} has no subtitle");
+        }
+    }
+}
+
+#[cfg(test)]
+mod visual_smoke {
+    use super::*;
+
+    #[test]
+    #[ignore = "temporary: opens a real window"]
+    fn open_window_in_vietnamese() {
+        crate::strings::set_language(Language::Vietnamese);
+        let mut s = Settings::default();
+        s.language = Language::Vietnamese;
+        s.macros.push(Macro { shortcut: "vn".into(), expansion: "Việt Nam".into() });
+        let _ = show(s);
     }
 }

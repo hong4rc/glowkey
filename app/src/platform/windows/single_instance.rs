@@ -80,28 +80,35 @@ pub fn claim() -> Option<InstanceGuard> {
 mod tests {
     use super::*;
 
-    /// The first claim succeeds and the second, while the first is held, does not.
+    /// Claim, refuse, release, re-claim — as **one** test.
     ///
-    /// This is the whole contract, and it is checkable in-process because the
-    /// mutex is per-session rather than per-process.
+    /// Deliberately not split into two. The mutex is session-wide, which is the
+    /// entire point of it, so two tests exercising it are two processes' worth of
+    /// contention inside one process: cargo runs tests on parallel threads, both
+    /// call [`claim`], and whichever loses the race sees the `None` the other one
+    /// caused. That produced a suite that failed roughly one run in three and
+    /// named a different test each time — a flake manufactured by the test, not
+    /// found by it.
+    ///
+    /// Shared global state cannot be tested by independent parallel tests. One
+    /// test that owns the resource for its whole body can.
     #[test]
-    fn a_second_claim_is_refused_while_the_first_is_held() {
-        let first = claim().expect("nothing else holds it in a test run");
+    fn the_slot_admits_one_holder_and_is_reusable() {
+        // Nothing else holds it: the claim succeeds.
+        let first = claim().expect("nothing else holds the slot in a test run");
+
+        // A second claim, while the first is held, is refused. This is the
+        // property the whole module exists for — two GlowKeys is two hooks, two
+        // trays and two injectors sharing one log.
         assert!(
             claim().is_none(),
             "a second instance must not be allowed to start"
         );
-        drop(first);
-    }
 
-    /// Dropping the guard releases the slot, so a restart works.
-    ///
-    /// Without this a crash would lock the user out of their own input method
-    /// until they logged out — which is the failure mode a lock *file* has and
-    /// this is chosen to avoid.
-    #[test]
-    fn releasing_the_guard_frees_the_slot() {
-        let first = claim().expect("free at the start of this test");
+        // Releasing frees it, so a restart works. Without this a crash would lock
+        // the user out of their own input method until they logged out — the
+        // failure mode a lock *file* has, and the reason a kernel object was
+        // chosen over one.
         drop(first);
         let second = claim().expect("the slot must be free again after a drop");
         drop(second);

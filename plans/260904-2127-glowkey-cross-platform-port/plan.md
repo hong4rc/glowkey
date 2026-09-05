@@ -6,6 +6,7 @@ priority: P1
 effort: "15-22 days"
 tags: [glowkey, cross-platform, windows, linux, architecture, port]
 created: 2026-09-04
+blockedBy: [260905-1039-windows-ui-parity]
 ---
 
 # GlowKey — cross-platform: macOS, Windows, then Linux

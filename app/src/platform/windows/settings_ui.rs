@@ -889,6 +889,10 @@ impl SettingsApp {
                 });
                 if open {
                     self.set_list_open(list, true);
+                    // Only the root asks for windows, and this runs inside the
+                    // settings viewport: without a root repaint the flag would sit
+                    // unread until something else happened to wake it.
+                    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                 }
             }
         }

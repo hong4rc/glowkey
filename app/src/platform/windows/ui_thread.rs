@@ -142,6 +142,10 @@ struct UiHost {
     /// deferred viewport's closure runs from the integration, not from here.
     settings: Option<Arc<Mutex<SettingsApp>>>,
     about_open: Arc<Mutex<bool>>,
+    /// The viewports asked for in the last frame. Headless egui embeds child
+    /// viewports, so their ids never reach the output; the tests read this.
+    #[cfg(test)]
+    asked_for: Vec<egui::ViewportId>,
 }
 
 impl UiHost {
@@ -150,6 +154,8 @@ impl UiHost {
             rx,
             settings: None,
             about_open: Arc::new(Mutex::new(false)),
+            #[cfg(test)]
+            asked_for: Vec::new(),
         }
     }
 
@@ -197,9 +203,13 @@ impl UiHost {
         }
 
         self.drain(ctx);
+        #[cfg(test)]
+        self.asked_for.clear();
 
         if let Some(app) = &self.settings {
             let app = Arc::clone(app);
+            #[cfg(test)]
+            self.asked_for.push(settings_id());
             ctx.show_viewport_deferred(
                 settings_id(),
                 settings_ui::viewport_builder(),
@@ -222,6 +232,8 @@ impl UiHost {
                     continue;
                 }
                 let app = Arc::clone(app);
+                #[cfg(test)]
+                self.asked_for.push(list_id(list));
                 ctx.show_viewport_deferred(
                     list_id(list),
                     settings_ui::list_viewport_builder(list),
@@ -240,6 +252,8 @@ impl UiHost {
 
         if *lock(&self.about_open) {
             let open = Arc::clone(&self.about_open);
+            #[cfg(test)]
+            self.asked_for.push(about_id());
             ctx.show_viewport_deferred(
                 about_id(),
                 about_ui::viewport_builder(),
@@ -353,6 +367,26 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, second), "the old window was reused");
         assert!(lock(second).baseline().auto_capitalize);
         let _ = super::super::shell::take_pending_settings_result();
+    }
+
+    /// A list the settings window opened is asked for by the root as its own
+    /// viewport, and released when the flag clears.
+    #[test]
+    fn an_open_list_gets_its_own_viewport() {
+        let ctx = egui::Context::default();
+        let mut host = host_with(vec![UiCommand::OpenSettings(Settings::default())]);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
+        lock(host.settings.as_ref().unwrap()).set_list_open(ListId::Macros, true);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
+        assert!(host.asked_for.contains(&settings_id()));
+        assert!(
+            host.asked_for.contains(&list_id(ListId::Macros)),
+            "{:?}",
+            host.asked_for
+        );
+        lock(host.settings.as_ref().unwrap()).set_list_open(ListId::Macros, false);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| host.frame(ctx));
+        assert!(!host.asked_for.contains(&list_id(ListId::Macros)));
     }
 
     /// The root shim refuses to close: it carries the event loop.

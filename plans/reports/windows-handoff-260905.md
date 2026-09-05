@@ -93,6 +93,16 @@ cause is outside egui's theme (e.g. a panel painting an explicit dark colour).
 
 ### 2. The settings window opens once per process
 
+**Update 2026-09-05 10:30.** Because of this, "Open this window at launch" is
+**not honored on Windows** (`platform/windows/mod.rs::run` never calls
+`shell::open_settings`), although the checkbox is shown there by the shared
+spec. Honoring it would spend the process's one window at startup and leave the
+tray's Settings item dead. Fix both together: a long-lived UI thread or a
+separate process, then call `open_settings` at startup when the setting is on.
+
+Also closed today: defect 1. The log line read `SETTINGS theme:
+apps_are_light=true -> Light` on the previous build.
+
 winit permits one event loop per process and there is no reset outside its web
 backend. The second time a user picks Settings in a long-running GlowKey, it
 returns `RecreationAttempt`, which is now logged rather than silent. Fixing it

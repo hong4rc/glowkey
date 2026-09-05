@@ -22,6 +22,7 @@ jobs:
       - run: cargo fmt -p glowkey-engine -p glowkey-session -p glowkey-input -- --check
       - run: cargo clippy -p glowkey-engine -p glowkey-session -p glowkey-input --all-targets -- -D warnings
       - run: cargo test -p glowkey-engine -p glowkey-session -p glowkey-input
+      - run: cargo test -p glowkey-engine -p glowkey-session -p glowkey-input --features serde
       # The optional `serde` features compile too, both ways.
       - run: cargo check -p glowkey-engine -p glowkey-session -p glowkey-input --features serde
       # The example in the engine's README is a program; keep it running.

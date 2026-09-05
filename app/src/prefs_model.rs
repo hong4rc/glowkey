@@ -277,7 +277,11 @@ mod tests {
             },
             ..Settings::default()
         };
-        let restored = Settings::from_json(&settings.to_json());
+        let json = settings.to_json();
+        // The shape this build writes. A downgrade to a build that only knows
+        // the old field names would fall back to matching by character.
+        assert!(json.contains("\"raw_code\": 40"), "{json}");
+        let restored = Settings::from_json(&json);
         assert_eq!(settings, restored);
     }
 

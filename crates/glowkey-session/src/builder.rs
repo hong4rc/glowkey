@@ -9,6 +9,11 @@ use super::*;
 /// expression instead of a `let mut` followed by a dozen calls. Defaults are the
 /// session's own: Telex, new-style placement, no exclusions, auto-fix on,
 /// everything else off.
+///
+/// "No exclusions" means an [`ExclusionList::new()`] with no shipped defaults
+/// behind it: nothing tombstones and nothing counts as a terminal. A product
+/// passes [`ExclusionList::with_defaults`] (or `from_saved`) through
+/// [`exclusions`](Self::exclusions); that is where the terminal rule comes from.
 #[must_use = "a builder does nothing until `build` is called"]
 pub struct SessionBuilder {
     session: Session,

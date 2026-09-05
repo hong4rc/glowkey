@@ -40,6 +40,14 @@ struct Deferred {
     edits: Vec<KeyResponse>,
     replay: bool,
     refresh_glyph: bool,
+    /// Text for the on-screen HUD, if any. Deferred with the rest because the
+    /// HUD is AppKit, and AppKit may pump the run loop: a re-entrant tap
+    /// callback while the session is borrowed would pass its key through.
+    hud: Option<String>,
+    /// The Personal Words window must reload. Deferred because its refresh
+    /// reads the session, which the policy holds until it returns; reloading
+    /// inside the borrow emptied the list and zeroed the counters.
+    personal_words_changed: bool,
 }
 
 /// The macOS side of the port, alive for one key.
@@ -99,18 +107,21 @@ impl Platform for TapPort<'_> {
                 eprintln!("GlowKey: {mode:?} mode");
                 crate::log::log(&format!("TOGGLE mode -> {mode:?}"));
                 // Brief on-screen confirmation for the hotkey (no menu is open).
-                crate::hud::flash(if matches!(mode, InputMode::Vietnamese) {
-                    "VI"
-                } else {
-                    "EN"
-                });
+                self.deferred.hud = Some(
+                    if matches!(mode, InputMode::Vietnamese) {
+                        "VI"
+                    } else {
+                        "EN"
+                    }
+                    .to_string(),
+                );
             }
-            Notice::PersonalWordsChanged => crate::prefs::personal_words_changed(),
+            Notice::PersonalWordsChanged => self.deferred.personal_words_changed = true,
             Notice::Corrected { was, becomes } => {
                 crate::log::log(&format!(
                     "CORRECT {was:?} -> {becomes:?} — swapped and remembered"
                 ));
-                crate::hud::flash(&format!("{was} → {becomes}"));
+                self.deferred.hud = Some(format!("{was} → {becomes}"));
             }
             Notice::AppToggled { app, outcome } => {
                 let name = self.app_name.clone().unwrap_or_else(|| app.to_string());
@@ -128,11 +139,14 @@ impl Platform for TapPort<'_> {
                 crate::log::log(&format!("TOGGLE app {name:?} -> {described}"));
                 // Brief on-screen confirmation for the hotkey (no menu is open);
                 // the warning variant marks the risky terminal case.
-                crate::hud::flash(match outcome {
-                    ExclusionToggle::Excluded => "EN",
-                    ExclusionToggle::Enabled => "VI",
-                    ExclusionToggle::EnabledSessionOnly => "VI ⚠",
-                });
+                self.deferred.hud = Some(
+                    match outcome {
+                        ExclusionToggle::Excluded => "EN",
+                        ExclusionToggle::Enabled => "VI",
+                        ExclusionToggle::EnabledSessionOnly => "VI ⚠",
+                    }
+                    .to_string(),
+                );
             }
             _ => {}
         }
@@ -166,6 +180,12 @@ impl TapState {
         }
         if deferred.refresh_glyph {
             crate::menu_bar::refresh_glyph();
+        }
+        if deferred.personal_words_changed {
+            crate::prefs::personal_words_changed();
+        }
+        if let Some(text) = &deferred.hud {
+            crate::hud::flash(text);
         }
         // A finished hotkey recording changed the hotkey; persist it here rather
         // than in decide(), which stays free of disk side effects.

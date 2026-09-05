@@ -685,10 +685,13 @@ stop both variants first.
   `260904-0955-...` (unescape on backspace),
   `260904-1121-glowkey-recomposition-survives-editing` (the committed-word
   history, and its double-boundary follow-up).
-- Decisions: `docs/decisions/0001`–`0008` — all-Rust objc2; CGEventTap wrap;
+- Decisions: `docs/decisions/0001`–`0012` — all-Rust objc2; CGEventTap wrap;
   omnibox AX guard; terminal exclusion hardening; opt-in English restore; stable
   signing identity; tap health monitor (amended); **nothing blocks the tap
-  callback**. `0008` is the one to read before touching anything in `tap/`.
+  callback**; Windows low-level hook; shared settings spec; Windows UI thread;
+  **engine layering and the `Platform` port** (`0012`, 2026-09-05, with the plan
+  `260905-1333-engine-split-and-layering`). `0008` is the one to read before
+  touching anything under `platform/`.
 - Reports: `plans/reports/`. UI design: `docs/ui-design.md`. Checkpoint:
   superseded pointer only.
 

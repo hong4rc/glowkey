@@ -500,11 +500,9 @@ pub fn hotkey_display(preset: HotkeyPreset) -> String {
             ..
         } => (control, option, shift, key_char),
         // A preset this build does not know (the enum is `#[non_exhaustive]`):
-        // shown as the default it will behave as, and said so in the log.
+        // shown as ⌃⇧Space so the row is not blank, and said so in the log.
         other => {
-            crate::log::log(&format!(
-                "HOTKEY unknown preset {other:?} shown as the default"
-            ));
+            crate::log::log(&format!("HOTKEY unknown preset {other:?} shown as ⌃⇧Space"));
             (true, false, true, ' ')
         }
     };

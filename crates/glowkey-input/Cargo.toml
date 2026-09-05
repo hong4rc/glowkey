@@ -24,4 +24,4 @@ glowkey-session = { path = "../glowkey-session", version = "0.1.0" }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
-serde = ["dep:serde"]
+serde = ["dep:serde", "glowkey-session/serde"]

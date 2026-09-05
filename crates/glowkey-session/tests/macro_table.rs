@@ -40,6 +40,8 @@ fn round_trips_through_the_line_format() {
     assert_eq!(Macro::parse_table(&Macro::format_table(&table)), table);
 }
 
+// The JSON fallback exists only with the `serde` feature.
+#[cfg(feature = "serde")]
 #[test]
 fn falls_back_to_json_when_a_line_cannot_carry_the_macro() {
     // A multi-line expansion has no line-format representation, so the whole
@@ -60,6 +62,8 @@ fn an_empty_table_is_empty_both_ways() {
     assert!(Macro::parse_table("   \n\n").is_empty());
 }
 
+// The JSON fallback exists only with the `serde` feature.
+#[cfg(feature = "serde")]
 #[test]
 fn round_trips_macros_the_line_format_would_mangle() {
     // Each of these is altered or dropped by the line reader, so format_table

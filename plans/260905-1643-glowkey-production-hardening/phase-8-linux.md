@@ -1,10 +1,23 @@
 # Phase 8 — Linux
 
-**Gated by:** decision B26, and phases 1–6 closing first.
-**Blocked on:** a Linux machine (~5 of ~20 engineer-days cannot be done without
-one).
-**Status:** architecture proposed, key facts unverified. Do not start on the
-strength of this document alone.
+**Status: NOT SCHEDULED — skipped by decision, 2026-09-05.**
+
+Kept as a written-up option rather than deleted, because the research behind it
+is the expensive part and it does not go stale quickly. Read
+[`decisions.md`](decisions.md) §9 for why it was skipped: the per-app ignore
+list — the reason GlowKey exists — is partial on GNOME Wayland and absent for
+Electron apps there, and buying that costs a breaking `0.2.0` across three
+crates plus a Linux machine nobody has.
+
+Nothing else in the plan depends on this, and nothing in the plan forecloses it.
+The three library crates are already platform-free and CI keeps them so; what is
+missing is a shell.
+
+**Before restarting this, verify one fact first** (§3 below): that IBus
+`focus_in_id` really carries usable client names. If it does not, the whole
+ignore-list story on GNOME collapses and the answer changes.
+
+**Blocked on:** a Linux machine (~5 of ~20 engineer-days).
 
 ## The decision: an IBus engine, not a global hook
 

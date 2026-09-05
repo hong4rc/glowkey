@@ -1,7 +1,8 @@
 # Decisions
 
 **Answered 2026-09-05** — 1 (disable the guard), 2 (redact by default,
-opt-in verbose), 3 (stay developer-audience and say so). The rest remain open.
+opt-in verbose), 3 (stay developer-audience and say so), 9 (**no Linux for now**).
+The rest remain open.
 
 Nine forks that an engineer must not settle alone. Each has a recommended
 default and what would flip it. Arbiter IDs in brackets.
@@ -133,9 +134,15 @@ Two consequences you should accept explicitly before any code is written:
   `Backspaces { utf16, chars }` change across all three library crates — a
   `0.2.0` while only `glowkey-engine` is published.
 
-- **Recommended: not until phases 1–6 close.** ~20 engineer-days, ~5 of them
-  needing a Linux machine you do not currently have.
-- *Flips it:* Linux users are the actual target audience.
+- **DECIDED: not now.** Skipped rather than scheduled. ~20 engineer-days, ~5 of
+  them needing a Linux machine that is not available, in exchange for a headline
+  feature that does not fully work on the most common Linux desktop — and a
+  breaking `0.2.0` across three crates to pay for it. The cost is concentrated
+  in exactly the part that would be worth least.
+- *Flips it:* Linux users become the actual target audience, or someone with a
+  Linux machine wants to own the port. Nothing in phases 1–7 forecloses it: the
+  engine, session and input crates are already platform-free and CI keeps them
+  that way, so the work waiting here is a shell, not a rewrite.
 
 Also unverified and load-bearing: that IBus `focus_in_id` really carries usable
 client names (`gtk3-im:firefox`). The whole ignore-list story on GNOME rests on

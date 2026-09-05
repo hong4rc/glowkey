@@ -50,7 +50,7 @@ Shipping more surface on top of a text-eating bug makes the product worse.
 | 5 | [macOS runtime verification](phase-5-macos-runtime.md) | — | **a Mac**; gates every macOS-side change |
 | 6 | [Release and signing](phase-6-release.md) | 1, 2 | decisions A4, A5 |
 | 7 | [Refactor and de-duplication](phase-7-refactor.md) | 5 | 5 for anything macOS-side |
-| 8 | [Linux (IBus engine)](phase-8-linux.md) | 1–6 | decision B26; a Linux machine |
+| 8 | [Linux (IBus engine)](phase-8-linux.md) | — | **SKIPPED** by decision — see `decisions.md` §9 |
 
 ### Done so far
 
@@ -71,7 +71,8 @@ macOS shells and the Linux library check, `cargo doc` with `-D warnings`, and
 `cargo audit`.
 
 Phases 1, 2 and 6 are the "can a stranger use this" path. Phases 3 and 5 are the
-"is it correct" path. 4, 7, 8 are expansion and should not start first.
+"is it correct" path. 4 and 7 are expansion and should not start first. **8 is
+skipped** — the port is written up but not scheduled.
 
 ## Acceptance criteria for the plan as a whole
 

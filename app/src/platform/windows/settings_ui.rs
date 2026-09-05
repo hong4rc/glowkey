@@ -1248,6 +1248,7 @@ impl SettingsApp {
     }
 
     pub(super) fn set_list_open(&mut self, list: ListId, open: bool) {
+        crate::log::log(&format!("SETTINGS list {list:?} open={open}"));
         match list {
             ListId::ExcludedApps => self.excluded_open = open,
             ListId::Macros => self.macros_open = open,

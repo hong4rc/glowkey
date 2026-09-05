@@ -695,6 +695,72 @@ stop both variants first.
 - Reports: `plans/reports/`. UI design: `docs/ui-design.md`. Checkpoint:
   superseded pointer only.
 
+## 10b. Audit and hardening pass (2026-09-05, later that day)
+
+Six parallel audits and an adversarial arbiter pass over `main` @ `ce51ff0`, in
+`plans/reports/orchestrate-260905-1643/` — read `arbiter/result.md` first, it is
+the only one that verified the others and it refutes one of them. The plan that
+came out is `plans/260905-1643-glowkey-production-hardening/`, and its
+`decisions.md` records three answered forks and six still open.
+
+**Dependencies are clean.** `cargo audit`: zero vulnerabilities across 391
+crates. Two unmaintained-only notices, `ttf-parser` (Windows settings-window font
+stack, no fix exists) and `paste` (not compiled at all), ignored with
+justifications in `.cargo/audit.toml`. A CI job now fails on a new advisory.
+
+**What was wrong was the app's own behaviour, and four of them are fixed:**
+
+1. **The Windows Chromium guard was deleting real text.** `needs_omnibox_guard`
+   fired for *any* Chromium application with backspaces to send, with no check
+   that a selection existed — macOS asks accessibility first, Windows asked
+   nothing. `is_chromium_app` matches Electron, so that was Slack, VS Code and
+   Discord as well as Chrome and Edge. The excuse in the code (reaching a
+   mid-field caret needs moving it without flushing) was wrong: a click flushes
+   *and* leaves the caret mid-field. **Now disabled**, which brings back the
+   visible `hoongf` → `hoồng` in the address bar; a silent deletion is worse.
+   `edit_inputs` was split out of `emit_edit` so a test can assert no Chromium
+   edit contains a `VK_DELETE`. The real fix needs focus cached off the hot path
+   (`EVENT_OBJECT_FOCUS` on the existing WinEvent hook) and a machine.
+2. **The log was a keylog with no off switch.** Every key with its character,
+   plus `raw=`/`rendered=` on macOS, in a file with default permissions. **Now
+   redacted by default** — key, app, branch, counts, no text — with Settings →
+   General → Diagnostics to turn the text back on for a reproduction.
+   `Decision::redacted()` in `glowkey-input` is what both shells drop the field
+   through, and `crates/glowkey-input/tests/platform.rs` pins that the redacted
+   rendering contains no typed text.
+3. **A corrupt settings file destroyed its own backup.** `load` fell back to
+   defaults without reporting the parse failure and the next `save` copied the
+   unreadable file over the `.bak` — on macOS automatically, since a lost file
+   means `welcome_shown` is false and the welcome screen saves at launch. `load`
+   now moves it aside as `settings.corrupt-<stamp>.json`, and the write is
+   `sync_all`ed before the rename.
+4. **A foreign process's clipboard buffer was scanned unbounded** for a NUL
+   (`clipboard.rs`), now capped by `GlobalSize`.
+
+Also: a panic hook on both shells (a panic outside the two `catch_unwind`
+callbacks left no trace at all under `windows_subsystem = "windows"`); one shared
+macro validator instead of three that disagreed; `explorer.exe` and the font
+directory from `GetSystemWindowsDirectoryW` rather than a bare name and
+`%SystemRoot%`; `PRIVACY.md` rewritten platform-neutrally (it was macOS-only, and
+its guarantees are **false on Windows** — no secure-field exemption, and settings
+roam); `SECURITY.md` added; README now says the app is unsigned on both platforms
+and that Accessibility must be re-granted after every macOS update.
+
+**The three biggest things still open**, all needing a human at a machine:
+
+- **The Gmail test.** Type Vietnamese mid-paragraph in a Chrome draft and see
+  whether a character vanishes. Thirty seconds, and it settles whether the guard
+  above can ever be re-enabled as it was.
+- **No Windows hook-liveness check exists.** `hook.rs`'s comment claimed one; it
+  was corrected rather than implemented. Windows removes a slow hook silently and
+  the tray goes on saying VI. macOS has `health.rs`; Windows has nothing.
+- **The macOS tap callback still blocks** — a flushed, mutex-guarded log write
+  per keystroke, and the *whole settings file write* on hotkey keys
+  (`dispatch.rs:193,200`), both forbidden by `decisions/0008`. The fix is written
+  and misfiled: `platform/windows/hook_log.rs` is a bounded channel plus writer
+  thread with zero Win32 in it. Not moved yet, because nothing macOS-side can be
+  signed off until §11.1 below is finally run.
+
 ## 11. Suggested next steps for a new session (updated 2026-09-05)
 
 The engine split (`decisions/0012`, plan `260905-1333`) and the shared settings

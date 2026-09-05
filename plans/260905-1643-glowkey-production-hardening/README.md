@@ -1,6 +1,7 @@
 # GlowKey — production hardening, cross-platform completion, UI polish
 
-**Status:** proposed, 2026-09-05. Not started.
+**Status:** in progress, 2026-09-05. Phase 1 done; phases 2 and 3 partly done.
+Branch `hardening/phase-1-safety-fixes`, commits `0fc89ad` and `4d99de4`.
 **Base:** `main` @ `ce51ff0`.
 **Origin:** six parallel audits + an adversarial arbiter pass,
 `plans/reports/orchestrate-260905-1643/` (read `arbiter/result.md` first — it is
@@ -42,14 +43,32 @@ Shipping more surface on top of a text-eating bug makes the product worse.
 
 | # | Phase | Depends on | Blocked by |
 |---|---|---|---|
-| 1 | [Safety fixes](phase-1-safety-fixes.md) — data loss, memory safety, silence | — | nothing |
-| 2 | [Privacy and the log](phase-2-privacy-and-logging.md) | 1 | decision A2 for the toggle |
-| 3 | [Chromium guard and the Windows watchdog](phase-3-correctness.md) | 1 | decision A1; hardware for the full fix |
+| 1 | [Safety fixes](phase-1-safety-fixes.md) — data loss, memory safety, silence | — | **DONE** |
+| 2 | [Privacy and the log](phase-2-privacy-and-logging.md) | 1 | **2.1–2.2, 2.4 done**; 2.3 file permissions open |
+| 3 | [Chromium guard and the Windows watchdog](phase-3-correctness.md) | 1 | **3.1 interim done**; 3.2–3.4 need hardware |
 | 4 | [Windows shell parity](phase-4-windows-parity.md) | 3 (hook.rs contention) | decisions B4, B8 |
 | 5 | [macOS runtime verification](phase-5-macos-runtime.md) | — | **a Mac**; gates every macOS-side change |
 | 6 | [Release and signing](phase-6-release.md) | 1, 2 | decisions A4, A5 |
 | 7 | [Refactor and de-duplication](phase-7-refactor.md) | 5 | 5 for anything macOS-side |
 | 8 | [Linux (IBus engine)](phase-8-linux.md) | 1–6 | decision B26; a Linux machine |
+
+### Done so far
+
+- **Phase 1 in full.** The settings backup survives a corrupt file; the clipboard
+  scan is bounded; panics and save failures reach the log; macros have one
+  validator; `explorer.exe` and the font directory come from the API; `cargo
+  audit` runs in CI with justified ignores; `SECURITY.md` exists.
+- **Phase 3.1 interim.** The Windows Chromium forward-delete is disabled and a
+  test pins that no Chromium edit contains one.
+- **Phase 2.1, 2.2 and 2.4.** `PRIVACY.md` is platform-neutral and accurate; the
+  log no longer records typed text unless the user turns it on in Settings →
+  General → Diagnostics.
+- **Phase 6.1 wording.** README states the app is unsigned on both platforms and
+  what that costs, per decision 3.
+
+Gates green at each commit: 22 test targets, clippy clean on the Windows and
+macOS shells and the Linux library check, `cargo doc` with `-D warnings`, and
+`cargo audit`.
 
 Phases 1, 2 and 6 are the "can a stranger use this" path. Phases 3 and 5 are the
 "is it correct" path. 4, 7, 8 are expansion and should not start first.

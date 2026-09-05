@@ -1,7 +1,7 @@
 ---
 phase: 4
 title: "Ports for platforms"
-status: pending
+status: completed
 priority: P2
 effort: "4h"
 dependencies: [3]
@@ -62,10 +62,10 @@ pub fn handle(session: &mut Session, event: &KeyEvent, ctx: &Ctx, platform: &mut
 5. Gates.
 
 ## Success Criteria
-- [ ] `Platform` has exactly the five methods above (or fewer).
-- [ ] `RecordingPlatform` test covers every `Decision` variant.
-- [ ] Both shells compile against `handle`; Windows tests green; macOS check green.
-- [ ] Decision 0012 written.
+- [x] `Platform` has exactly the five methods above (or fewer).
+- [x] `RecordingPlatform` test covers every `Decision` variant.
+- [x] Both shells compile against `handle`; Windows tests green; macOS check green.
+- [x] Decision 0012 written.
 
 ## Risk Assessment
 - The Windows hook callback must not block (`decisions/0008`); `Platform`
@@ -73,3 +73,17 @@ pub fn handle(session: &mut Session, event: &KeyEvent, ctx: &Ctx, platform: &mut
   must not tempt anyone to do I/O in `request_save`; its doc says so.
 - If the two shells' effect handling differs in a way the trait cannot
   express, that difference is a bug or a platform fact; record which.
+
+## Completion Notes (2026-09-05)
+
+- `Platform` has six methods, not five: `pass_through` was a return value, not
+  an action, so it became `Decision::suppresses()`; `replay_key` is the real
+  action both shells perform after a restore; `notify(Notice)` is the one
+  channel for what a shell shows or logs (log line, HUD, toggle outcome), with
+  a default that does nothing.
+- The macOS adapter queues edits and posts them after `handle` returns, so the
+  tests can keep calling `decide` with real `CGEvent`s without typing into the
+  developer's machine. Recorded in `decisions/0012`.
+- Log order on macOS now matches Windows: `KEY` before `TOGGLE mode`.
+- Fixed while here: `platform/macos/tests.rs` still named `macos_keycode` (a
+  phase 2 miss the macOS `--tests` compile check now covers).

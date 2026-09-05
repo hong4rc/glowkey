@@ -30,32 +30,57 @@ omitted** — every modern macOS app is Unicode NFC, so they add no value.
 
 ## 3. Architecture
 
-Cargo workspace:
-- **`crates/glowkey-engine`** — platform-free Vietnamese logic. Knows nothing
-  about macOS; unit-tested on any OS.
-- **`crates/glowkey-input`** — platform-free **input policy**: the decision
-  ladder and hotkey matching. A `KeyEvent` in, a `Decision` plus a plain-data
-  `Effects` out. No input/output, no `unsafe`, no `cfg(target_os)`, nothing in
-  its dependency list but the engine. CI tests it on Linux with `-D warnings`,
-  which is what keeps it that way (2026-09-04, the cross-platform port).
-- **`app/`** — the macOS binary `GlowKey` (objc2 shell).
+Cargo workspace, four layers, each depending only on the one below
+(`decisions/0012`, 2026-09-05):
+- **`crates/glowkey-engine`** — the pure core: `Engine`, `KeyResponse`,
+  `InputMethod`, `PlacementStyle`, tone removal, the spell check. Depends on
+  `vi` and `phf` only (`serde` is an optional feature). Knows nothing about
+  applications, modes, files or platforms.
+- **`crates/glowkey-session`** — the typing policy over the engine: `Session`
+  (and `Session::builder()`), `ExclusionList` with the shipped defaults
+  *injected* as `ExclusionDefaults`, `AppId`, `Macro`, `WordOverride`.
+  Re-exports the engine, so a consumer names one crate. Knows no OS and no
+  application name.
+- **`crates/glowkey-input`** — the **input policy**: the decision ladder
+  (`decide`), hotkey matching, and the **port**: `trait Platform` plus `handle`,
+  which runs the ladder and carries the `Decision` and `Effects` out through the
+  trait. No input/output, no `unsafe`, no `cfg(target_os)`, nothing in its
+  dependency list but the session crate. CI tests all three library crates on
+  Linux with `-D warnings`, which is what keeps them that way.
+- **`app/`** — the shells and the product: `Settings` and its file
+  (`prefs_model.rs`, `settings_store.rs`), the shipped exclusion tables
+  (`default_exclusions/`), and one `Platform` implementation per shell.
 
 ### Engine (`crates/glowkey-engine/src/`)
-- `lib.rs`: `Engine` keeps the **raw keystroke log** for the current word and
+- `engine.rs`: `Engine` keeps the **raw keystroke log** for the current word and
   **re-derives** the whole rendering each key via the `vi` crate (`vi::TELEX` /
   `vi::VNI`), producing a **`KeyResponse { handled, backspaces, insert }`** diff
-  (backspaces in **UTF-16 code units**). `Session` wraps `Engine` + all state:
-  mode, exclusions, style, auto-fix, auto-capitalize, input method, toggle-hotkey
-  preset, macros, open-settings-at-launch, and the recomposition memory.
-- `config.rs`: `Settings` (serde JSON) — the persisted subset. Tolerant of missing
-  and unknown keys.
-- `exclusion.rs`: `ExclusionList`, `is_terminal`, `is_chromium_app` — the rules,
-  which know nothing about what an application identity *is*.
-- `exclusion_defaults/`: the tables those rules read, selected per platform —
-  bundle identifiers on macOS, lowercased executable names on Windows. **The one
-  module in the engine allowed to see a target OS**, and only because it selects
-  data rather than behaviour. Linux borrows the macOS table until Phase 8 of the
-  port decides what an identity is there.
+  (backspaces in **UTF-16 code units**). `is_invalid_vietnamese` (the spell
+  check, including the stop-coda tone rule `vi` lacks) and `diff` are public
+  here because the layer above needs them too.
+- `method.rs`, `tones.rs`: `InputMethod`, `PlacementStyle`, `remove_tones`.
+
+### Session (`crates/glowkey-session/src/`)
+- `session.rs`: `Session` wraps `Engine` + the policy state: mode, exclusions,
+  the frontmost `AppId`, style, auto-fix, auto-capitalize, input method, macros,
+  word overrides, and the recomposition memory. `builder.rs` configures one in
+  a single expression.
+- `exclusion.rs`: `ExclusionList` and `ExclusionDefaults` — the rules, which
+  know nothing about what an application identity *is*. The defaults (what
+  ships excluded, which of those are terminals) are handed in by the app; the
+  merge rule `saved ∪ (defaults − removed)` and the tombstones live here.
+- `macros.rs`, `overrides.rs`, `english.rs`: text expansion, per-word decisions,
+  the common-English list.
+
+### Product (`app/src/`, platform-neutral part)
+- `prefs_model.rs`: `Settings` (serde JSON) — the persisted file. Tolerant of
+  missing and unknown keys; byte-compatible with files written before the split.
+- `session_adapter.rs`: `session_from(&Settings)` and `settings_from(&Session,
+  &Settings)` — the one place that knows both the file and the session.
+- `default_exclusions/`: the tables, selected per platform — bundle identifiers
+  on macOS, lowercased executable names on Windows — and `is_chromium_app`.
+  Linux borrows the macOS table until a Linux shell decides what an identity is
+  there.
 
 ### Shell (`app/src/`)
 - `platform/` — the backends. Exactly one compiles at a time; Windows and Linux
@@ -63,9 +88,10 @@ Cargo workspace:
 - `platform/macos/` — the `CGEventTap` (was `app/src/tap/` until 2026-09-04):
   `mod.rs` (state, run, the C callback), `adapt.rs` (a `CGEvent` into a neutral
   `KeyEvent` — the virtual key code tables, which are *physical* positions and so
-  survive a layout change), `dispatch.rs` (calls `glowkey_input::decide`, carries
-  out the `Decision` with `CGEventPost`, performs the `Effects`, records the
-  hotkey — was `decide.rs`, minus the ladder), `emit.rs` (everything that writes
+  survive a layout change), `dispatch.rs` (the macOS `Platform`: `TapPort`
+  queues the edits `glowkey_input::handle` asks for and `handle_key_down` posts
+  them with `CGEventPost`; the log line, the HUD, hotkey recording — was
+  `decide.rs`, minus the ladder), `emit.rs` (everything that writes
   to the document, plus the omnibox guard call site and the circuit breaker),
   `settings.rs` (the `*_and_save` accessor wall the UI calls), `health.rs` (the
   tap health monitor, §6.6, which also re-reads the frontmost app on idle ticks —

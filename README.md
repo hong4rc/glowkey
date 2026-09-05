@@ -42,8 +42,9 @@ input method requesting those is a red flag, and correctly so.
 ## Layout
 
 ```
-crates/glowkey-engine/      Vietnamese logic, settings, ignore list. Platform-free, tested.
-crates/glowkey-input/       The decision ladder. No OS in it; every platform runs this copy.
+crates/glowkey-engine/      The Vietnamese transformation. Depends on `vi` and `phf` only.
+crates/glowkey-session/     Typing policy over it: mode, ignore list, auto-fix, macros. No OS.
+crates/glowkey-input/       The decision ladder and the `Platform` port every shell implements.
 app/src/platform/macos/     macOS shell (objc2): event tap, menu bar, Settings, HUD.
 app/src/platform/windows/   Windows shell: WH_KEYBOARD_LL hook, SendInput, tray, settings.
 scripts/build-app.sh        Builds a universal macOS app bundle (release or dev variant).

@@ -16,16 +16,20 @@
 //! # The boundary
 //!
 //! ```text
-//! platform  ──  KeyEvent  ──▶  decide  ──▶  Decision  ──  platform
-//!                                 │
-//!                                 └──▶  Effects  (log, indicator, save)
+//! platform  ──  KeyEvent  ──▶  handle ─┬─▶  decide  ──▶  Decision
+//!                                      │
+//!                                      └─▶  Platform::{inject, replay_key,
+//!                                            app_in_front, request_save,
+//!                                            request_indicator, notify}
 //! ```
 //!
-//! In goes a [`KeyEvent`] — a character, a key identity, some modifiers. Out
-//! comes a [`Decision`] and a plain-data list of [`Effects`] the platform is
-//! expected to carry out. No input/output, no clock, no window server, no
-//! `unsafe`, no `cfg(target_os)`, and no dependency but the engine. CI compiles
-//! and tests it on Linux with `-D warnings`, which is what mechanically keeps it
+//! In goes a [`KeyEvent`]: a character, a key identity, some modifiers. [`decide`]
+//! turns it into a [`Decision`] and a plain-data list of [`Effects`]; [`handle`]
+//! then carries both out through the [`Platform`] port the shell implements.
+//! A shell calls `handle`; a test that wants only the answer calls `decide`.
+//! No input/output, no clock, no window server, no `unsafe`, no
+//! `cfg(target_os)`, and no dependency but the session crate. CI compiles and
+//! tests it on Linux with `-D warnings`, which is what mechanically keeps it
 //! that way.
 
 #![deny(unsafe_code)]
@@ -35,8 +39,10 @@ mod decision;
 mod event;
 pub mod hotkey;
 mod ladder;
+mod platform;
 
 pub use decision::{Decision, Effects};
 pub use event::{Key, KeyEvent, Modifiers};
 pub use hotkey::{Hotkey, HotkeyCapture, HotkeyKey, HotkeyPreset};
 pub use ladder::{decide, Ctx};
+pub use platform::{handle, Notice, Platform};

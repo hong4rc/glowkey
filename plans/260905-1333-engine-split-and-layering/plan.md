@@ -86,7 +86,7 @@ value), a plugin registry (one product).
 | 1 | [Carve the engine into modules, no behaviour change](./phase-01-start.md) | completed | — |
 | 2 | [Unbundle product preferences](./phase-02-unbundle-product-preferences.md) | completed | 1 |
 | 3 | [Session crate and injected defaults](./phase-03-session-crate-and-injected-defaults.md) | completed | 2 |
-| 4 | [Ports for platforms](./phase-04-ports-for-platforms.md) | pending | 3 |
+| 4 | [Ports for platforms](./phase-04-ports-for-platforms.md) | completed | 3 |
 | 5 | [Publish readiness](./phase-05-publish-readiness.md) | pending | 1 |
 
 ## Acceptance criteria

@@ -29,12 +29,12 @@ use std::cell::{Cell, RefCell};
 use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
-use glowkey_session::Session;
+use glowkey_session::{AppId, Session};
 
 use crate::prefs_model::Settings;
 use crate::session_adapter::{session_from, settings_from};
 use glowkey_input::hotkey;
-use glowkey_input::{Ctx, Decision, Effects};
+use glowkey_input::{Ctx, Notice, Platform};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
@@ -430,33 +430,97 @@ fn handle_key(state: &mut HookState, info: &KBDLLHOOKSTRUCT) -> bool {
         );
     }
 
-    let mut effects = Effects::default();
-    let decision = glowkey_input::decide(
-        &mut state.session,
-        &key,
-        &Ctx { toggle_hotkey },
-        &mut effects,
-    );
-
-    hook_log::log(format!(
-        "KEY {:?} vk={} mods={} app={} | {}",
-        key.ch,
-        key.raw_code,
-        adapt::modifier_names(&key.mods),
-        state.last_app.as_deref().unwrap_or(""),
-        describe(&decision),
-    ));
-
-    carry_out_effects(state, effects);
-    carry_out(state, &decision, info)
+    // Disjoint borrows: the policy takes the session, the port takes the rest.
+    let HookState {
+        session,
+        last_app,
+        pending_save,
+        pending_refresh,
+        ..
+    } = state;
+    let mut port = HookPort {
+        app: last_app.as_deref(),
+        pending_save,
+        pending_refresh,
+        vk: info.vkCode as u16,
+    };
+    glowkey_input::handle(session, &key, &Ctx { toggle_hotkey }, &mut port).suppresses()
 }
 
-/// Performs what the policy asked for.
+/// The Windows side of the port: what the hook callback can do for the policy
+/// without blocking.
 ///
-/// Nothing here writes to disk. `save_settings` sets a flag that the shell
-/// consumes after the callback has returned — the whole point of `Effects` being
-/// plain data is that the policy can ask for a file write without the keystroke
-/// path performing one.
+/// Injection goes straight to `SendInput`; everything else sets a flag and
+/// wakes the loop, because a save is a disk write and a tray repaint is a
+/// `SendMessage` to another process, and either inside the callback is a way to
+/// lose the hook (`decisions/0008`).
+struct HookPort<'a> {
+    /// The frontmost application, from the cache the notification fills.
+    app: Option<&'a str>,
+    pending_save: &'a Cell<bool>,
+    pending_refresh: &'a Cell<bool>,
+    /// The virtual key of the key being handled, for the replay.
+    vk: u16,
+}
+
+impl Platform for HookPort<'_> {
+    fn inject(&mut self, backspaces: usize, text: &str) {
+        inject::emit_edit(backspaces, text, self.app);
+    }
+
+    fn replay_key(&mut self) {
+        inject::replay_key(self.vk);
+    }
+
+    fn app_in_front(&mut self) -> Option<AppId> {
+        // Never resolved here: that is a cross-process query and this is the
+        // callback. macOS re-resolves at this point instead.
+        self.app.map(AppId::from)
+    }
+
+    fn request_save(&mut self) {
+        self.pending_save.set(true);
+        wake();
+    }
+
+    fn request_indicator(&mut self) {
+        // The policy says the indicator is now wrong. Without this, toggling the
+        // mode with the hotkey left the tray claiming the old one until something
+        // unrelated repainted it.
+        self.pending_refresh.set(true);
+        wake();
+    }
+
+    fn notify(&mut self, notice: Notice<'_>) {
+        match notice {
+            Notice::Decided {
+                event, decision, ..
+            } => hook_log::log(format!(
+                "KEY {:?} vk={} mods={} app={} | {decision}",
+                event.ch,
+                event.raw_code,
+                adapt::modifier_names(&event.mods),
+                self.app.unwrap_or(""),
+            )),
+            Notice::ModeToggled(mode) => hook_log::log(format!("TOGGLE mode -> {mode:?}")),
+            Notice::Corrected { was, becomes } => hook_log::log(format!(
+                "CORRECT {was:?} -> {becomes:?} — swapped and remembered"
+            )),
+            Notice::AppToggled { app, outcome } => {
+                hook_log::log(format!("TOGGLE app {:?} -> {outcome:?}", app.as_str()));
+            }
+            // The notification has not arrived and nothing has been typed. The
+            // key is still consumed (it is ours), but saying nothing would make
+            // ⌃⇧E look broken rather than early.
+            Notice::NoAppInFront => {
+                hook_log::log("TOGGLE app ignored — no foreground application resolved yet".into())
+            }
+            // No personal-words editor on this platform reloads live.
+            _ => {}
+        }
+    }
+}
+
 /// The message the callback posts to wake the loop when there is a save waiting.
 ///
 /// The hook callback is invoked by the system *during* the thread's message
@@ -469,16 +533,6 @@ fn handle_key(state: &mut HookState, info: &KBDLLHOOKSTRUCT) -> bool {
 /// `PostThreadMessageW` is a non-blocking enqueue — it does not wait on the
 /// receiver — so it is one of the few Win32 calls that may be made from here.
 const WM_GLOWKEY_SAVE: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_APP + 1;
-
-/// Marks the tray out of date and wakes the loop so it gets repainted.
-///
-/// Deferred rather than painted here for the same reason the save is: repainting
-/// calls `Shell_NotifyIcon`, which is a `SendMessage` to the taskbar and waits on
-/// another process. Inside a hook callback that is a way to lose the hook.
-fn request_refresh(state: &HookState) {
-    state.pending_refresh.set(true);
-    wake();
-}
 
 /// Marks the settings dirty and wakes the loop so the write actually happens.
 fn request_save(state: &HookState) {
@@ -497,83 +551,6 @@ fn wake() {
             0,
             0,
         );
-    }
-}
-
-fn carry_out_effects(state: &HookState, effects: Effects) {
-    if let Some(mode) = effects.mode_toggled {
-        hook_log::log(format!("TOGGLE mode -> {mode:?}"));
-    }
-    if let Some((was, becomes)) = effects.corrected {
-        hook_log::log(format!(
-            "CORRECT {was:?} -> {becomes:?} — swapped and remembered"
-        ));
-    }
-    if effects.save_settings {
-        request_save(state);
-    }
-    if effects.refresh_glyph {
-        // The policy says the indicator is now wrong. Without this, toggling the
-        // mode with the hotkey left the tray claiming the old one until something
-        // unrelated repainted it — the menu path refreshed and the hotkey path
-        // did not, which is the indicator lying about the one thing the user just
-        // did deliberately.
-        request_refresh(state);
-    }
-}
-
-/// Carries out a decision. Returns `true` to suppress the original key.
-fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT) -> bool {
-    match decision {
-        Decision::Passthrough => false,
-        Decision::Consume => true,
-        Decision::ToggleApp => {
-            match state.last_app.clone() {
-                Some(app) => {
-                    let outcome = state.session.toggle_app_exclusion(&app);
-                    hook_log::log(format!("TOGGLE app {app:?} -> {outcome:?}"));
-                    if outcome != glowkey_session::ExclusionToggle::EnabledSessionOnly {
-                        request_save(state);
-                    }
-                    // The ladder returns `ToggleApp` without setting
-                    // `refresh_glyph` — it cannot know the platform has an
-                    // indicator — so the repaint is asked for here.
-                    request_refresh(state);
-                }
-                // No application resolved yet — the notification has not arrived
-                // and nothing has been typed. The key is still consumed (it is
-                // ours), but saying nothing would make ⌃⇧E look broken rather
-                // than early. macOS re-resolves at this point instead; here that
-                // would be a cross-process query in the callback, which
-                // `decisions/0008` forbids, so the honest answer is the log line.
-                None => hook_log::log(
-                    "TOGGLE app ignored — no foreground application resolved yet".into(),
-                ),
-            }
-            true
-        }
-        Decision::Emit(response) => {
-            inject::emit_edit(
-                response.backspaces,
-                &response.insert,
-                state.last_app.as_deref(),
-            );
-            true
-        }
-        Decision::EmitThenReplayKey(response) => {
-            inject::emit_edit(
-                response.backspaces,
-                &response.insert,
-                state.last_app.as_deref(),
-            );
-            // Replayed from our own queue rather than passed through. Letting the
-            // original through loses the race: it is the event being dispatched
-            // right now, so the host applies it *before* the backspaces just
-            // queued, and the edit eats the boundary key instead of the word it
-            // meant to replace.
-            inject::replay_key(info.vkCode as u16);
-            true
-        }
     }
 }
 
@@ -622,17 +599,4 @@ fn record_timing(started: Instant) {
             }
         }
     });
-}
-
-/// A decision, for the log.
-fn describe(decision: &Decision) -> String {
-    match decision {
-        Decision::Passthrough => "Passthrough".to_string(),
-        Decision::Consume => "Consume".to_string(),
-        Decision::ToggleApp => "ToggleApp".to_string(),
-        Decision::Emit(r) => format!("Emit bs={} ins={:?}", r.backspaces, r.insert),
-        Decision::EmitThenReplayKey(r) => {
-            format!("EmitThenReplayKey bs={} ins={:?}", r.backspaces, r.insert)
-        }
-    }
 }

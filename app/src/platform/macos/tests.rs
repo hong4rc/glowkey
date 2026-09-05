@@ -417,7 +417,7 @@ fn hotkey_recording_captures_a_custom_combo() {
             control: true,
             shift: false,
             option: true,
-            macos_keycode: Some(40),
+            raw_code: Some(40),
             ..
         }
     ));

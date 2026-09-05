@@ -296,3 +296,17 @@ fn the_stop_coda_rule_leaves_legal_vietnamese_alone() {
         assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
     }
 }
+
+/// `hồngu` is not a Vietnamese syllable, so committing it restores the keys.
+///
+/// Added after a user reported "hồngu does not auto revert" on Windows. It does —
+/// but only at the word boundary, which is what `auto_fix` means. Mid-word the
+/// composition stands, because the next key could still make it a real word.
+/// This pins the distinction so the answer lives in the suite rather than in a
+/// conversation.
+#[test]
+fn an_invalid_syllable_restores_at_the_boundary_not_before() {
+    let mut session = active_session(true);
+    // The boundary is what triggers the check, and it restores the raw keys.
+    assert_eq!(type_then_commit(&mut session, "hoongfu"), "hoongfu");
+}

@@ -127,14 +127,15 @@ const SECTION_GAP: f32 = 18.0;
 ///
 /// Best effort by design: the egui defaults stay in the family as fallbacks, so
 /// a machine where the file cannot be read gets the old rendering rather than no
-/// window.
-fn install_system_font(ctx: &egui::Context) {
+/// window. Returns whether the proportional font was installed — which is
+/// exactly what the window's ability to draw Vietnamese depends on.
+fn install_system_font(ctx: &egui::Context) -> bool {
     let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
     let mut fonts = egui::FontDefinitions::default();
 
     let mut load = |name: &str, file: &str, family: egui::FontFamily| {
         let Ok(bytes) = std::fs::read(format!("{root}\\Fonts\\{file}")) else {
-            return;
+            return false;
         };
         fonts
             .font_data
@@ -144,14 +145,16 @@ fn install_system_font(ctx: &egui::Context) {
             .entry(family)
             .or_default()
             .insert(0, name.to_owned());
+        true
     };
 
-    load("Segoe UI", "segoeui.ttf", egui::FontFamily::Proportional);
+    let proportional = load("Segoe UI", "segoeui.ttf", egui::FontFamily::Proportional);
     // Consolas covers Vietnamese too, which matters here: the macro import box
     // is monospaced and the expansions people paste into it are Vietnamese.
     load("Consolas", "consola.ttf", egui::FontFamily::Monospace);
 
     ctx.set_fonts(fonts);
+    proportional
 }
 
 /// Type scale, spacing and control metrics.
@@ -512,30 +515,34 @@ impl SettingsApp {
     }
 
     fn show_typing_tab(&mut self, ui: &mut egui::Ui) {
-        section(ui, t("Input method", "Kiểu gõ"), |ui| {
-            control_row(ui, t("Input method", "Kiểu gõ"), None, |ui| {
-                ui.radio_value(&mut self.draft.input_method, InputMethod::Telex, "Telex");
-                ui.radio_value(&mut self.draft.input_method, InputMethod::Vni, "VNI");
-                ui.radio_value(
-                    &mut self.draft.input_method,
-                    InputMethod::SimpleTelex,
-                    t("Simple Telex", "Telex đơn giản"),
-                );
-            });
+        section(
+            ui,
+            t("Input method and tone marks", "Kiểu gõ và dấu thanh"),
+            |ui| {
+                control_row(ui, t("Input method", "Kiểu gõ"), None, |ui| {
+                    ui.radio_value(&mut self.draft.input_method, InputMethod::Telex, "Telex");
+                    ui.radio_value(&mut self.draft.input_method, InputMethod::Vni, "VNI");
+                    ui.radio_value(
+                        &mut self.draft.input_method,
+                        InputMethod::SimpleTelex,
+                        t("Simple Telex", "Telex đơn giản"),
+                    );
+                });
 
-            control_row(ui, t("Tone marks", "Dấu thanh"), None, |ui| {
-                ui.radio_value(
-                    &mut self.draft.style,
-                    PlacementStyle::New,
-                    t("Modern  hoà", "Kiểu mới  hoà"),
-                );
-                ui.radio_value(
-                    &mut self.draft.style,
-                    PlacementStyle::Old,
-                    t("Classic  hòa", "Kiểu cũ  hòa"),
-                );
-            });
-        });
+                control_row(ui, t("Tone marks", "Dấu thanh"), None, |ui| {
+                    ui.radio_value(
+                        &mut self.draft.style,
+                        PlacementStyle::New,
+                        t("Modern  hoà", "Kiểu mới  hoà"),
+                    );
+                    ui.radio_value(
+                        &mut self.draft.style,
+                        PlacementStyle::Old,
+                        t("Classic  hòa", "Kiểu cũ  hòa"),
+                    );
+                });
+            },
+        );
 
         section(ui, t("Shortcuts", "Phím tắt khi gõ"), |ui| {
             checkbox_row(
@@ -664,7 +671,7 @@ impl SettingsApp {
         let mut ids: Vec<String> = self.exclusion_list.ids().map(str::to_string).collect();
         ids.sort();
         let mut to_remove: Option<String> = None;
-        section(ui, t("Excluded apps", "Ứng dụng loại trừ"), |ui| {
+        section(ui, t("Current list", "Danh sách hiện có"), |ui| {
             if ids.is_empty() {
                 description(ui, t("No apps excluded.", "Chưa có ứng dụng nào."));
                 return;
@@ -1040,6 +1047,18 @@ impl SettingsApp {
 
 impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ui(ctx);
+    }
+}
+
+impl SettingsApp {
+    /// The whole window, one frame of it.
+    ///
+    /// Separate from [`eframe::App::update`] so a frame can be built against a
+    /// bare [`egui::Context`] with no window, no GPU and no event loop — which
+    /// is how the panes are smoke-tested. `eframe::Frame` is not used here and
+    /// there is nothing else to keep the two together.
+    fn ui(&mut self, ctx: &egui::Context) {
         // The OS/window-manager close (title-bar X, Alt+F4, …) also has to
         // decide what to hand back, exactly like the explicit Close button.
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -1414,19 +1433,75 @@ mod tests {
             assert!(!tab.subtitle().trim().is_empty(), "{tab:?} has no subtitle");
         }
     }
-}
 
-#[cfg(test)]
-mod visual_smoke {
-    use super::*;
-
+    /// The interface font has to be able to *draw* Vietnamese.
+    ///
+    /// egui's bundled proportional font stops at Latin Extended-A, so every
+    /// `ế ộ ữ` in this window would be a missing-glyph box — a Vietnamese
+    /// interface nobody can read. This is the assertion that the substitution in
+    /// [`install_system_font`] actually covers the alphabet, and it needs no
+    /// window: a bare context, one frame, and the font is queryable.
     #[test]
-    #[ignore = "temporary: opens a real window"]
-    fn open_window_in_vietnamese() {
-        crate::strings::set_language(Language::Vietnamese);
-        let mut s = Settings::default();
-        s.language = Language::Vietnamese;
-        s.macros.push(Macro { shortcut: "vn".into(), expansion: "Việt Nam".into() });
-        let _ = show(s);
+    fn the_interface_font_can_draw_vietnamese() {
+        let ctx = egui::Context::default();
+        if !install_system_font(&ctx) {
+            // No Segoe UI on this machine (not a Windows desktop image): there
+            // is no substitution to check, and failing here would only report
+            // the machine.
+            return;
+        }
+        apply_style(&ctx);
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+
+        let body = egui::TextStyle::Body.resolve(&ctx.style());
+        let alphabet = "ăâđêôơư ẹẻẽếệỉịọỏốộớởụủứữựỳỷỹ Gõ tắt, khôi phục, ưu tiên";
+        assert!(
+            ctx.fonts(|f| f.has_glyphs(&body, alphabet)),
+            "the UI font cannot draw Vietnamese"
+        );
+    }
+
+    /// Every pane must survive being built.
+    ///
+    /// A layout mistake in egui — a duplicate id, a widget allocated outside the
+    /// space it was given — panics at build time, not at draw time, so a bare
+    /// context with no window and no GPU is enough to catch it. This is not a
+    /// test of how the window *looks*; it is a test that each pane can be built
+    /// at all, including the ones a user only reaches by clicking through.
+    #[test]
+    fn every_pane_builds() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+
+        let mut settings = Settings::default();
+        settings.macros.push(Macro {
+            shortcut: "vn".into(),
+            expansion: "Việt Nam".into(),
+        });
+        settings.word_overrides.push(WordOverride {
+            keys: "cats".into(),
+            prefer: WordPreference::Vietnamese,
+        });
+        let slot = Rc::new(RefCell::new(None));
+        let mut app = SettingsApp::new(settings, Rc::clone(&slot));
+        // A removed shipped default, so the tombstone section is built too.
+        let removed = app.exclusion_list.ids().next().map(str::to_string);
+        if let Some(id) = removed {
+            app.exclusion_list.remove(&id);
+        }
+
+        for (tab, _) in Tab::all() {
+            app.tab = tab;
+            // Twice: the second frame is the one where widgets see the ids and
+            // state the first frame stored.
+            for _ in 0..2 {
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.ui(ctx));
+            }
+        }
+
+        assert!(
+            slot.borrow().is_none(),
+            "building a pane must not decide the window is closing"
+        );
     }
 }

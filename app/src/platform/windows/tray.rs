@@ -30,7 +30,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyMenu, DestroyWindow, GetCursorPos, PostMessageW, PostQuitMessage, RegisterClassW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
     MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
-    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE,
+    WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::strings::t;
@@ -227,6 +228,29 @@ pub fn refresh(state: Indicator, app: Option<&str>) {
     });
 }
 
+/// Redraws the current state, whether or not it changed.
+///
+/// [`refresh`] deliberately does nothing when the state is the same, which is
+/// right for the common case and wrong here: on a theme change the *state* is
+/// identical and the *colour* is not.
+fn repaint() {
+    let current = TRAY.with(|t| {
+        t.borrow()
+            .as_ref()
+            .map(|tray| (tray.shown, tray.shown_app.clone()))
+    });
+    let Some((state, app)) = current else {
+        return;
+    };
+    // Clearing the remembered state is what makes `refresh` do the work.
+    TRAY.with(|t| {
+        if let Some(tray) = t.borrow_mut().as_mut() {
+            tray.shown_app = Some("\u{0}".to_string());
+        }
+    });
+    refresh(state, app.as_deref());
+}
+
 /// Removes the tray icon. Without this the ghost stays in the notification area
 /// until the user hovers over it.
 pub fn remove() {
@@ -285,6 +309,95 @@ fn tooltip_units(text: &str, capacity: usize) -> Vec<u16> {
     units
 }
 
+/// Whether the taskbar is drawn light.
+///
+/// Read fresh each time rather than cached: the user can change it while GlowKey
+/// is running, and an icon that only matches the theme it started under is the
+/// same class of wrong as an icon that never matched at all. It is a registry
+/// read on a repaint, not on a keystroke.
+///
+/// `SystemUsesLightTheme` is the taskbar and system chrome. **Not**
+/// `AppsUseLightTheme`, which is application windows — the two are set
+/// independently, and it is the taskbar this icon sits on.
+fn taskbar_is_light() -> bool {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
+        REG_VALUE_TYPE,
+    };
+
+    let path = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let name = wide("SystemUsesLightTheme");
+    let mut key: HKEY = std::ptr::null_mut();
+    // SAFETY: `path` is NUL-terminated and `key` is a valid out-pointer.
+    let opened = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key) };
+    if opened != 0 {
+        // Absent on a system that has never had the setting touched. Dark is the
+        // Windows 11 default, so a light glyph is the better guess.
+        return false;
+    }
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let mut kind: REG_VALUE_TYPE = 0;
+    // SAFETY: `value`/`size` describe a matched buffer for a REG_DWORD.
+    let read = unsafe {
+        RegQueryValueExW(
+            key,
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut kind,
+            std::ptr::addr_of_mut!(value).cast(),
+            &mut size,
+        )
+    };
+    // SAFETY: opened above, not used after this.
+    unsafe { RegCloseKey(key) };
+    read == 0 && value == 1
+}
+
+/// The glyph colour for a state, against a light or dark taskbar.
+///
+/// Split from the drawing so the contrast rule can be tested, and because it is
+/// the part that was wrong: the colour used to be a hardcoded near-white with the
+/// comment "for a dark taskbar", which is invisible on a light one. Reported as
+/// "EN is something wrong, cannot see that" — and the reason `VI` seemed fine was
+/// that the excluded state is grey, which happens to show up on both.
+#[must_use]
+fn glyph_colour(state: Indicator, light_taskbar: bool) -> (u8, u8, u8) {
+    match state {
+        // Red on either background. It is the one state that must be noticed, and
+        // a mid-tone red reads against both.
+        Indicator::Broken(_) => {
+            if light_taskbar {
+                (0xC0, 0x1C, 0x1C)
+            } else {
+                (0xFF, 0x5A, 0x5A)
+            }
+        }
+        // Excluded: the same letters as active, with less contrast. "On, but not
+        // here" — so it has to be dimmer than the active glyph *on this
+        // background*, which means a lighter grey on dark and a darker one on
+        // light, not one grey for both.
+        // Asked of the indicator rather than matched on here, so "which state is
+        // the dim one" is stated once. Two places deciding it is how the glyph
+        // and the tooltip come to disagree about the same state.
+        _ if state.dimmed() => {
+            if light_taskbar {
+                (0x8A, 0x8A, 0x8A)
+            } else {
+                (0x80, 0x80, 0x80)
+            }
+        }
+        // Active states: maximum contrast against whatever is behind them.
+        _ => {
+            if light_taskbar {
+                (0x1A, 0x1A, 0x1A)
+            } else {
+                (0xF0, 0xF0, 0xF0)
+            }
+        }
+    }
+}
+
 /// Draws the state's glyph into an icon.
 ///
 /// Two colours only: full ink for an active state, grey for the dimmed
@@ -294,11 +407,7 @@ fn tooltip_units(text: &str, capacity: usize) -> Vec<u16> {
 fn draw_glyph(state: Indicator) -> HICON {
     const SIZE: i32 = 16;
     let text = wide(state.glyph());
-    let (r, g, b) = match state {
-        Indicator::Broken(_) => (0xCCu8, 0x20u8, 0x20u8), // red
-        _ if state.dimmed() => (0x80, 0x80, 0x80),        // grey: on, but not here
-        _ => (0xF0, 0xF0, 0xF0),                          // near-white, for a dark taskbar
-    };
+    let (r, g, b) = glyph_colour(state, taskbar_is_light());
 
     // A 32-bit DIB section with an explicit alpha channel, not a
     // `CreateCompatibleBitmap`.
@@ -466,6 +575,13 @@ fn dispatch_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRE
     if msg == taskbar_created_message() {
         crate::log::log("TRAY the taskbar restarted — re-adding the icon");
         readd();
+        return 0;
+    }
+    // The user switched between the light and dark theme. The glyph is drawn to
+    // contrast with the taskbar, so it has to be redrawn — otherwise it stays the
+    // colour that suited the *old* background and quietly becomes unreadable.
+    if msg == WM_SETTINGCHANGE {
+        repaint();
         return 0;
     }
     match msg {
@@ -728,6 +844,67 @@ fn wide(s: &str) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rough perceived brightness, 0-255.
+    fn luma((r, g, b): (u8, u8, u8)) -> i32 {
+        (i32::from(r) * 299 + i32::from(g) * 587 + i32::from(b) * 114) / 1000
+    }
+
+    /// The glyph must contrast with the taskbar it sits on.
+    ///
+    /// The bug this replaces: a hardcoded near-white, carrying the comment "for a
+    /// dark taskbar", on a machine whose taskbar was light. The icon was
+    /// invisible. It went unreported for a while only because the excluded state
+    /// is grey, which happens to show on both — so `VI` looked fine and `EN` did
+    /// not, which is exactly how it was described.
+    #[test]
+    fn the_glyph_contrasts_with_the_taskbar() {
+        for state in [
+            Indicator::Vietnamese,
+            Indicator::English,
+            Indicator::ExcludedApp,
+            Indicator::Broken(Breakage::HookGone),
+        ] {
+            let on_light = luma(glyph_colour(state, true));
+            let on_dark = luma(glyph_colour(state, false));
+            assert!(
+                on_light < 160,
+                "{state:?} is too pale to see on a light taskbar (luma {on_light})"
+            );
+            assert!(
+                on_dark > 100,
+                "{state:?} is too dark to see on a dark taskbar (luma {on_dark})"
+            );
+        }
+    }
+
+    /// Excluded reads as dimmer than active on the *same* background.
+    ///
+    /// That difference is the entire visual distinction between "on" and "on, but
+    /// not here", so one grey shared across both themes will not do: dimmer means
+    /// lighter on a light taskbar and darker on a dark one.
+    #[test]
+    fn excluded_is_dimmer_than_active_on_both_themes() {
+        for light in [true, false] {
+            let active = luma(glyph_colour(Indicator::Vietnamese, light));
+            let excluded = luma(glyph_colour(Indicator::ExcludedApp, light));
+            assert!(
+                (active - excluded).abs() > 20,
+                "light={light}: excluded must be visibly dimmer than active"
+            );
+            if light {
+                assert!(excluded > active, "on a light taskbar, dimmer is lighter");
+            } else {
+                assert!(excluded < active, "on a dark taskbar, dimmer is darker");
+            }
+        }
+    }
+
+    /// Reading the theme must not panic, and must not disagree with itself.
+    #[test]
+    fn the_theme_probe_is_stable() {
+        assert_eq!(taskbar_is_light(), taskbar_is_light());
+    }
 
     /// Every command id is distinct. They cross a C boundary as plain integers,
     /// so a duplicate would silently wire two menu entries to one action and the

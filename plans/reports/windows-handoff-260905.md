@@ -72,6 +72,25 @@ fine and `ctx.set_theme` is not taking effect; if `false`, the registry read in
 `theme.rs` is wrong. **Do not guess between those — open the window and read the
 log.**
 
+**Update, 2026-09-05 09:50 — verified headlessly, pending one look at the window.**
+The log line was never produced (Settings was not opened in the running process),
+so both halves were checked without a window instead:
+
+- The Rust registry read returns `apps_are_light=true` on this machine (a
+  throwaway test printed it; PowerShell agrees, both values are `1`).
+- egui 0.29.1 resolves `ThemePreference::Light` to the light style with no
+  system-theme input at all (`Options::theme` in `memory/mod.rs`), and eframe
+  0.29.1 never touches `theme_preference`. The existing headless test
+  `caption_colour_contrasts_in_both_themes` already exercises this path.
+- The registry read, `apply_theme`, and the diagnostic all landed in one commit
+  (`40a7e4d`). The running binary was built at 08:57, after that commit, so the
+  "still dark" observation most likely predates the fix.
+
+Every link in `registry → set_theme(Light) → light style` is therefore verified.
+Remaining step: the user opens Settings once. If it is light, close this defect.
+If it is still dark, the log line will say `apps_are_light=true -> Light` and the
+cause is outside egui's theme (e.g. a panel painting an explicit dark colour).
+
 ### 2. The settings window opens once per process
 
 winit permits one event loop per process and there is no reset outside its web

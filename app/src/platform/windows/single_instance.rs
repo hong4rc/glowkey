@@ -49,10 +49,18 @@ impl Drop for InstanceGuard {
 /// the icon twice has not done anything wrong and does not need an error.
 #[must_use]
 pub fn claim() -> Option<InstanceGuard> {
-    let name: Vec<u16> = MUTEX_NAME
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    claim_named(MUTEX_NAME)
+}
+
+/// The claim, against a caller-supplied name.
+///
+/// Exists so the tests can use a name of their own. The obvious test — claim the
+/// real slot and assert a second claim fails — fails whenever GlowKey is actually
+/// running, which on a developer machine is most of the time. That is the guard
+/// working, reported as a broken suite, and a suite that fails for a correct
+/// reason teaches people to ignore it.
+fn claim_named(name: &str) -> Option<InstanceGuard> {
+    let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
     // SAFETY: `name` is NUL-terminated and outlives the call. A default security
     // descriptor is what we want — this is per-session and per-user.
     let handle = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
@@ -94,14 +102,19 @@ mod tests {
     /// test that owns the resource for its whole body can.
     #[test]
     fn the_slot_admits_one_holder_and_is_reusable() {
+        // A name of this test's own, so a GlowKey running on the machine — which
+        // legitimately holds the real slot — does not turn the guard working into
+        // a failing test.
+        let name = r"Local\GlowKey-SingleInstance-test";
+
         // Nothing else holds it: the claim succeeds.
-        let first = claim().expect("nothing else holds the slot in a test run");
+        let first = claim_named(name).expect("nothing else holds the test slot");
 
         // A second claim, while the first is held, is refused. This is the
         // property the whole module exists for — two GlowKeys is two hooks, two
         // trays and two injectors sharing one log.
         assert!(
-            claim().is_none(),
+            claim_named(name).is_none(),
             "a second instance must not be allowed to start"
         );
 
@@ -110,7 +123,7 @@ mod tests {
         // failure mode a lock *file* has, and the reason a kernel object was
         // chosen over one.
         drop(first);
-        let second = claim().expect("the slot must be free again after a drop");
+        let second = claim_named(name).expect("the slot must be free again after a drop");
         drop(second);
     }
 }

@@ -27,10 +27,10 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyMenu, DestroyWindow, GetCursorPos, PostQuitMessage, RegisterClassW,
+    DestroyMenu, DestroyWindow, GetCursorPos, PostMessageW, PostQuitMessage, RegisterClassW,
     RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
-    MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RIGHTALIGN, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
+    MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
+    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::strings::t;
@@ -469,10 +469,22 @@ fn dispatch_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRE
         return 0;
     }
     match msg {
-        WM_TRAY if lparam as u32 == WM_RBUTTONUP => {
-            show_menu(hwnd);
+        // Both buttons open the menu.
+        //
+        // Only the right button did, which is the convention — and it left the
+        // left button, which is what most people try first, doing nothing at all.
+        // A tray icon that ignores a click is indistinguishable from a hung one.
+        WM_TRAY => {
+            let button = lparam as u32;
+            if button == WM_LBUTTONUP || button == WM_RBUTTONUP {
+                show_menu(hwnd);
+            }
             0
         }
+        // Kept for completeness. The menu itself uses `TPM_RETURNCMD` and acts on
+        // the returned id directly, so nothing routes through here in practice —
+        // but a menu that silently did nothing is exactly the bug this file just
+        // had, and leaving the path wired costs one line.
         WM_COMMAND => {
             handle_command(wparam & 0xFFFF);
             0
@@ -509,12 +521,17 @@ fn show_menu(hwnd: HWND) {
     let _guard = Guard;
 
     let Some(snapshot) = super::shell::snapshot() else {
+        // The session was unavailable, so there is nothing truthful to draw. Said
+        // out loud: a menu that does not appear and does not explain itself is
+        // the failure this whole file is supposed to prevent.
+        crate::log::log("TRAY menu not shown — the session was unavailable");
         return;
     };
     // SAFETY: a menu created, shown and destroyed within this function.
     unsafe {
         let menu = CreatePopupMenu();
         if menu.is_null() {
+            crate::log::log("TRAY FAILED to create the popup menu");
             return;
         }
 
@@ -618,12 +635,24 @@ fn show_menu(hwnd: HWND) {
 
         let mut point = POINT { x: 0, y: 0 };
         GetCursorPos(&mut point);
-        // Required before TrackPopupMenu, or the menu does not dismiss when the
-        // user clicks elsewhere — it just sits there.
+        // Required before `TrackPopupMenu`, or the menu does not dismiss when the
+        // user clicks elsewhere — it just sits there. Best-effort: Windows
+        // restricts which processes may take the foreground, and a background
+        // agent is exactly the kind it restricts. The `WM_NULL` below is what
+        // makes the dismissal work even when this call is refused.
         SetForegroundWindow(hwnd);
-        TrackPopupMenu(
+
+        // `TPM_RIGHTBUTTON` so the menu also tracks the right button. Without it
+        // the menu tracks only the left, so opening it with a right-click and
+        // releasing over an item selects nothing — the menu appears and then
+        // does nothing, which is what this looked like.
+        //
+        // `TPM_RETURNCMD` so the chosen id comes back here rather than arriving
+        // later as a `WM_COMMAND`. One less delivery path to go wrong, and the
+        // action runs after the menu has already closed rather than underneath it.
+        let chosen = TrackPopupMenu(
             menu,
-            TPM_RIGHTALIGN | TPM_BOTTOMALIGN,
+            TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
             point.x,
             point.y,
             0,
@@ -631,6 +660,16 @@ fn show_menu(hwnd: HWND) {
             std::ptr::null(),
         );
         DestroyMenu(menu);
+
+        // The documented companion to `SetForegroundWindow` above: without a
+        // message posted to the owner afterwards, the menu can stay on screen
+        // after the user clicks away.
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+
+        if chosen > 0 {
+            crate::log::log(&format!("TRAY menu command {chosen}"));
+            handle_command(chosen as usize);
+        }
     }
 }
 

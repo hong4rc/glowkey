@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK,
+    VK_DELETE,
 };
 
 /// Whether the current run of injection refusals has already been reported.
@@ -63,8 +64,43 @@ pub fn is_own_event(extra_info: usize) -> bool {
 /// One `SendInput` call for the whole batch, never a call per key. The array is
 /// delivered in order and cannot be interleaved with real input midway, which is
 /// the ordering guarantee the blind diff model needs.
-pub fn emit_edit(backspaces: usize, text: &str) {
-    let mut inputs: Vec<INPUT> = Vec::with_capacity(backspaces * 2 + text.len() * 2);
+pub fn emit_edit(backspaces: usize, text: &str, app: Option<&str>) {
+    let mut inputs: Vec<INPUT> = Vec::with_capacity(backspaces * 2 + text.len() * 2 + 2);
+
+    // ── The Chromium address-bar guard ──────────────────────────────────────
+    //
+    // A Chromium omnibox keeps a **trailing inline-autocomplete selection**:
+    // type `hoo` and the field holds `hoo` plus a selected completion. The first
+    // synthetic Backspace then deletes that selection instead of a character, so
+    // the edit lands one character short and every edit after it compounds the
+    // error:
+    //
+    //     hoongf  ->  hoồng     (observed in Edge, 2026-09-05)
+    //
+    // which is the same defect `docs/decisions/0003-omnibox-ax-guard.md` records
+    // on macOS, reproducing here. The port plan listed "does this happen on
+    // Windows?" as an open question; it does.
+    //
+    // A forward-delete first clears the selection. With no selection and the
+    // caret at the end of the text — GlowKey's normal position while composing —
+    // it deletes nothing, so it is a no-op in the ordinary case.
+    //
+    // **The trade-off, stated rather than hidden.** macOS gates this on an
+    // accessibility read of whether a selection actually exists. The Windows
+    // equivalent is a UI Automation call: cross-process, COM, and on the
+    // keystroke path — which `decisions/0008` forbids and `LowLevelHooksTimeout`
+    // punishes by removing the hook. So this fires unconditionally for Chromium
+    // applications instead. The cost is one wasted key event per edit there, and
+    // one real risk: if the caret is mid-field *while composing*, the
+    // forward-delete eats the character after it. Reaching that state requires
+    // moving the caret without flushing, and the ladder flushes on every arrow
+    // key and the mouse hook flushes on every click — so it is narrow, and it is
+    // written down here rather than discovered later.
+    if needs_omnibox_guard(backspaces, app) {
+        inputs.push(key_input(VK_DELETE, false));
+        inputs.push(key_input(VK_DELETE, true));
+    }
+
     for _ in 0..backspaces {
         inputs.push(key_input(VK_BACK, false));
         inputs.push(key_input(VK_BACK, true));
@@ -178,9 +214,52 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
     }
 }
 
+/// Whether an edit into `app` needs the Chromium address-bar guard.
+///
+/// Split out so the rule is testable without injecting anything.
+#[must_use]
+pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>) -> bool {
+    backspaces > 0 && app.is_some_and(glowkey_engine::exclusion::is_chromium_app)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The guard fires for a Chromium browser with backspaces to send, and for
+    /// nothing else.
+    ///
+    /// Both halves matter. Missing it in Edge is the `hoongf` -> `hoồng` bug;
+    /// firing it anywhere else spends a forward-delete on a field that never had
+    /// a selection, which in a normal editor deletes a real character.
+    #[test]
+    fn the_omnibox_guard_fires_only_for_chromium_edits() {
+        assert!(needs_omnibox_guard(1, Some("msedge.exe")));
+        assert!(needs_omnibox_guard(3, Some("chrome.exe")));
+
+        // No backspaces: nothing to protect, and a forward-delete would be pure
+        // risk for no benefit.
+        assert!(!needs_omnibox_guard(0, Some("msedge.exe")));
+
+        // Not a browser.
+        assert!(!needs_omnibox_guard(1, Some("notepad.exe")));
+        assert!(!needs_omnibox_guard(1, Some("code.exe")));
+
+        // Not yet resolved: fail safe, and do not delete anything.
+        assert!(!needs_omnibox_guard(1, None));
+    }
+
+    /// The guard reads the shipped Chromium table rather than its own list, so a
+    /// browser added there is covered without a second edit here.
+    #[test]
+    fn the_guard_uses_the_shipped_chromium_table() {
+        for app in glowkey_engine::exclusion::CHROMIUM_APP_PREFIXES {
+            assert!(
+                needs_omnibox_guard(1, Some(app)),
+                "{app} is in the shipped table and must be guarded"
+            );
+        }
+    }
 
     /// The guard, established without a hook, a window or a keystroke.
     ///

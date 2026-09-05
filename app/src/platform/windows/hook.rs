@@ -164,6 +164,27 @@ pub fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
     })
 }
 
+/// Flushes the composing word, because something moved the caret.
+///
+/// Called from the mouse hook. GlowKey is blind: the engine's belief about what
+/// it rendered is only true while the caret has not moved, and a click moves it
+/// with no keyboard event at all. Without this, typing `hoong`, clicking
+/// elsewhere and typing `f` emits three backspaces against unrelated text and
+/// deletes three characters the user typed themselves.
+///
+/// Touches only in-memory session state — no allocation, no syscall, no lock a
+/// non-hook thread holds — because it runs inside a low-level hook callback,
+/// where `decisions/0008` applies exactly as it does to the keyboard one.
+pub fn flush_session() {
+    STATE.with(|state| {
+        if let Ok(mut borrowed) = state.try_borrow_mut() {
+            if let Some(state) = borrowed.as_mut() {
+                state.session.flush();
+            }
+        }
+    });
+}
+
 /// Marks the settings dirty from outside the callback — a menu toggle, a settings
 /// window save.
 pub fn mark_dirty() {
@@ -454,11 +475,19 @@ fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT)
             true
         }
         Decision::Emit(response) => {
-            inject::emit_edit(response.backspaces, &response.insert);
+            inject::emit_edit(
+                response.backspaces,
+                &response.insert,
+                state.last_app.as_deref(),
+            );
             true
         }
         Decision::EmitThenReplayKey(response) => {
-            inject::emit_edit(response.backspaces, &response.insert);
+            inject::emit_edit(
+                response.backspaces,
+                &response.insert,
+                state.last_app.as_deref(),
+            );
             // Replayed from our own queue rather than passed through. Letting the
             // original through loses the race: it is the event being dispatched
             // right now, so the host applies it *before* the backspaces just

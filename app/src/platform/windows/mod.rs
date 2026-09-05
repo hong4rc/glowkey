@@ -47,14 +47,25 @@ pub mod hook;
 pub mod hook_log;
 pub mod indicator;
 pub mod inject;
+pub mod mouse;
 pub mod paths;
 pub mod settings_ui;
 pub mod shell;
+pub mod single_instance;
 pub mod startup;
 pub mod tray;
 
 /// Starts the hook and runs until the process exits.
 pub fn run() {
+    // Before anything else. Two GlowKeys means two hooks, two trays and two
+    // injectors sharing one log file and one settings file, and every symptom
+    // after that is a function of which hook the system called first. Observed on
+    // a real machine; see `single_instance`.
+    let Some(_instance) = single_instance::claim() else {
+        // Quietly. A user who launches it twice has not done anything wrong.
+        return;
+    };
+
     let settings = crate::settings_store::load();
     // Before anything that can produce a user-visible string. GlowKey's users are
     // Vietnamese and Unikey ships a Vietnamese interface; an input method is the
@@ -79,6 +90,11 @@ pub fn run() {
         crate::log::log("STARTUP no foreground notification — the ignore list will not update");
     }
 
+    // The mouse hook before the keyboard one, so a click can never be missed
+    // while keys are already being handled. Non-fatal on failure: GlowKey still
+    // types correctly, it just stops being safe to click mid-word.
+    mouse::install();
+
     if !hook::install() {
         eprintln!("GlowKey: failed to install the keyboard hook.");
         crate::log::log("STARTUP failed to install the keyboard hook");
@@ -99,4 +115,5 @@ pub fn run() {
     hook::run_message_loop();
     tray::remove();
     hook::uninstall();
+    mouse::uninstall();
 }

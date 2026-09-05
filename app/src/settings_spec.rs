@@ -163,8 +163,9 @@ pub enum ListId {
 }
 
 impl ListId {
-    #[cfg(test)]
-    const ALL: [Self; 3] = [Self::ExcludedApps, Self::Macros, Self::PersonalWords];
+    /// Every list, for the renderer that asks for each open list's window.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub const ALL: [Self; 3] = [Self::ExcludedApps, Self::Macros, Self::PersonalWords];
 }
 
 /// What a row is.

@@ -55,6 +55,21 @@ pub fn viewport_builder() -> egui::ViewportBuilder {
         .with_icon(window_icon())
 }
 
+/// A list editor's viewport, before it opens.
+pub(super) fn list_viewport_builder(list: ListId) -> egui::ViewportBuilder {
+    let (title, size) = match list {
+        ListId::ExcludedApps => (t("Excluded Apps", "Ứng dụng loại trừ"), [380.0, 420.0]),
+        ListId::Macros => (t("Macros", "Gõ tắt"), [420.0, 460.0]),
+        ListId::PersonalWords => (t("Personal Words", "Từ riêng"), [420.0, 420.0]),
+    };
+    egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(size)
+        .with_min_inner_size([320.0, 300.0])
+        .with_resizable(true)
+        .with_icon(window_icon())
+}
+
 // ---------------------------------------------------------------------------
 // Look and feel
 // ---------------------------------------------------------------------------
@@ -71,19 +86,6 @@ const LABEL_COLUMN: f32 = 92.0; // a floor; see `label_column_width`
 const INDENT: f32 = 22.0;
 /// Gap between one group of settings and the next.
 const GROUP_GAP: f32 = 14.0;
-
-/// The size of each list-editor window.
-///
-/// The macOS ones are 420×380 and 460×400 (`prefs/excluded.rs`,
-/// `macros_window.rs`, `personal_words.rs`), and those are *separate* windows
-/// there. Here they are overlays inside a 460×540 frame, so at their macOS
-/// widths they covered it edge to edge with no frame left showing — which reads
-/// as the window having been replaced rather than something having opened on top
-/// of it. Inset to leave a margin of the parent visible on every side; they are
-/// resizable, so the macOS size is still one drag away.
-const EXCLUDED_SIZE: [f32; 2] = [372.0, 320.0];
-const MACROS_SIZE: [f32; 2] = [396.0, 340.0];
-const WORDS_SIZE: [f32; 2] = [396.0, 340.0];
 
 /// The application icon, for the title bar and the taskbar.
 ///
@@ -491,34 +493,6 @@ fn section_header(ui: &mut egui::Ui, title: &str) {
     ui.add_space(2.0);
 }
 
-/// An auxiliary window: the toolkit's nearest equivalent of the separate windows
-/// the macOS build opens for About and the three list editors. Centred on first
-/// open (as `NSWindow::center` does) and draggable after, with the close button
-/// its `open` flag provides.
-fn aux_window(
-    ctx: &egui::Context,
-    id: &str,
-    title: &str,
-    size: [f32; 2],
-    resizable: bool,
-    open: &mut bool,
-    add: impl FnOnce(&mut egui::Ui),
-) {
-    let center = ctx.screen_rect().center();
-    egui::Window::new(title)
-        .id(egui::Id::new(id))
-        .open(open)
-        .collapsible(false)
-        .resizable(resizable)
-        .default_size(size)
-        .pivot(egui::Align2::CENTER_CENTER)
-        .default_pos(center)
-        .show(ctx, |ui| {
-            ui.add_space(2.0);
-            add(ui);
-        });
-}
-
 // ---------------------------------------------------------------------------
 // The app
 // ---------------------------------------------------------------------------
@@ -835,11 +809,7 @@ impl SettingsApp {
                     open = ui.button(MANAGE.get()).clicked();
                 });
                 if open {
-                    match list {
-                        ListId::ExcludedApps => self.excluded_open = true,
-                        ListId::Macros => self.macros_open = true,
-                        ListId::PersonalWords => self.words_open = true,
-                    }
+                    self.set_list_open(list, true);
                 }
             }
         }
@@ -896,7 +866,6 @@ impl SettingsApp {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("exclusion_list")
-                .max_height(200.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for id in &ids {
@@ -1011,7 +980,8 @@ impl SettingsApp {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("macro_list")
-                .max_height(150.0)
+                // Leaves room for the import/export box under the list.
+                .max_height((ui.available_height() - 170.0).max(120.0))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for (i, m) in self.draft.macros.iter().enumerate() {
@@ -1145,7 +1115,6 @@ impl SettingsApp {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("word_override_list")
-                .max_height(200.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for (i, w) in self.draft.word_overrides.iter().enumerate() {
@@ -1185,48 +1154,43 @@ impl SettingsApp {
     }
 
     /// Every auxiliary window, drawn over the tabs.
-    fn show_aux_windows(&mut self, ctx: &egui::Context) {
-        let mut open = self.excluded_open;
-        if open {
-            aux_window(
-                ctx,
-                "glowkey_excluded",
-                t("Excluded Apps", "Ứng dụng loại trừ"),
-                EXCLUDED_SIZE,
-                true,
-                &mut open,
-                |ui| self.excluded_body(ui),
-            );
-            self.excluded_open = open;
+    /// Whether a list editor's window is open. The root asks for the viewport
+    /// while this is true.
+    pub(super) fn list_open(&self, list: ListId) -> bool {
+        match list {
+            ListId::ExcludedApps => self.excluded_open,
+            ListId::Macros => self.macros_open,
+            ListId::PersonalWords => self.words_open,
         }
+    }
 
-        let mut open = self.macros_open;
-        if open {
-            aux_window(
-                ctx,
-                "glowkey_macros",
-                t("Macros", "Gõ tắt"),
-                MACROS_SIZE,
-                true,
-                &mut open,
-                |ui| self.macros_body(ui),
-            );
-            self.macros_open = open;
+    pub(super) fn set_list_open(&mut self, list: ListId, open: bool) {
+        match list {
+            ListId::ExcludedApps => self.excluded_open = open,
+            ListId::Macros => self.macros_open = open,
+            ListId::PersonalWords => self.words_open = open,
         }
+    }
 
-        let mut open = self.words_open;
-        if open {
-            aux_window(
-                ctx,
-                "glowkey_words",
-                t("Personal Words", "Từ riêng"),
-                WORDS_SIZE,
-                true,
-                &mut open,
-                |ui| self.words_body(ui),
-            );
-            self.words_open = open;
+    /// One frame of a list editor's window. Its own viewport, like About: it
+    /// used to be an `egui::Window` overlay inside Settings, which covered the
+    /// tabs, followed the user from tab to tab, and had no taskbar entry.
+    pub(super) fn draw_list(&mut self, list: ListId, ctx: &egui::Context) {
+        apply_theme(ctx);
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(ctx.style().visuals.window_fill)
+                    .inner_margin(egui::Margin::symmetric(16.0, 12.0)),
+            )
+            .show(ctx, |ui| match list {
+                ListId::ExcludedApps => self.excluded_body(ui),
+                ListId::Macros => self.macros_body(ui),
+                ListId::PersonalWords => self.words_body(ui),
+            });
     }
 
     /// The whole window, one frame of it.
@@ -1285,8 +1249,6 @@ impl SettingsApp {
                         self.show_tab(ui);
                     });
             });
-
-        self.show_aux_windows(ctx);
     }
 }
 
@@ -1741,10 +1703,9 @@ mod tests {
             prefer: WordPreference::Vietnamese,
         });
         let mut app = SettingsApp::new(settings);
-        // Every auxiliary window open at once, so all four are built.
-        app.excluded_open = true;
-        app.macros_open = true;
-        app.words_open = true;
+        for list in ListId::ALL {
+            app.set_list_open(list, true);
+        }
         // A removed shipped default, so the tombstone list is built too.
         let removed = app.exclusion_list.ids().next().map(str::to_string);
         if let Some(id) = removed {
@@ -1760,10 +1721,13 @@ mod tests {
             }
         }
 
-        assert!(
-            app.excluded_open && app.macros_open && app.words_open,
-            "an auxiliary window closed itself"
-        );
+        // Each list editor draws in its own window.
+        for list in ListId::ALL {
+            for _ in 0..2 {
+                let _ = ctx.run(egui::RawInput::default(), |ctx| app.draw_list(list, ctx));
+            }
+            assert!(app.list_open(list), "a list window closed itself");
+        }
         assert!(
             app.take_result().is_none(),
             "building a pane must not decide the window is closing"

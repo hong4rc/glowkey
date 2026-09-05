@@ -36,6 +36,7 @@ use glowkey_engine::Settings;
 
 use super::about_ui;
 use super::settings_ui::{self, SettingsApp};
+use crate::settings_spec::ListId;
 
 /// Something the main thread asks the UI thread to do.
 #[derive(Debug)]
@@ -212,6 +213,31 @@ impl UiHost {
             );
         }
 
+        // The three list editors, each its own window while Settings has it
+        // open. They close with Settings: once the app is dropped above, they
+        // are no longer asked for.
+        if let Some(app) = &self.settings {
+            for list in ListId::ALL {
+                if !lock(app).list_open(list) {
+                    continue;
+                }
+                let app = Arc::clone(app);
+                ctx.show_viewport_deferred(
+                    list_id(list),
+                    settings_ui::list_viewport_builder(list),
+                    move |ctx, _class| {
+                        let mut app = lock(&app);
+                        app.draw_list(list, ctx);
+                        if ctx.input(|i| i.viewport().close_requested()) {
+                            app.set_list_open(list, false);
+                            drop(app);
+                            ctx.request_repaint_of(egui::ViewportId::ROOT);
+                        }
+                    },
+                );
+            }
+        }
+
         if *lock(&self.about_open) {
             let open = Arc::clone(&self.about_open);
             ctx.show_viewport_deferred(
@@ -247,6 +273,10 @@ fn settings_id() -> egui::ViewportId {
 
 fn about_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of(ABOUT_VIEWPORT)
+}
+
+fn list_id(list: ListId) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("glowkey_list", list))
 }
 
 /// A lock that survives a poisoned mutex: the UI is the last thing that should

@@ -533,4 +533,3 @@ where
 fn stack_view(stack: Retained<NSStackView>) -> Retained<NSView> {
     stack.into_super()
 }
-

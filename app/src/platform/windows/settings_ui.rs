@@ -34,8 +34,8 @@ use eframe::egui;
 use glowkey_engine::{ExclusionList, HotkeyPreset, Macro, Settings, WordOverride, WordPreference};
 
 use crate::settings_spec::{
-    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, Shortcut, TabSpec,
-    Toggle, HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
+    expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, TabSpec, Toggle,
+    HOTKEY_PRESETS, MANAGE, TABS, WINDOW_TITLE,
 };
 use crate::strings::t;
 
@@ -407,8 +407,7 @@ fn secondary_color(ui: &egui::Ui) -> egui::Color32 {
 /// macOS window's `caption`. The text comes from the engine's own documentation
 /// of what the option does and why its default is what it is.
 /// A caption under a control, starting at `x` from the row's left edge — the
-/// control column for a form row, the checkbox text for a checkbox row. Any
-/// shortcut named in it is drawn as keycaps.
+/// control column for a form row, the checkbox text for a checkbox row.
 fn caption_at(ui: &mut egui::Ui, text: &str, x: f32) {
     egui::Frame::none()
         .inner_margin(egui::Margin {
@@ -426,32 +425,12 @@ fn intro(ui: &mut egui::Ui, text: &str) {
     caption_rich(ui, text);
 }
 
-/// Caption text with the platform's shortcut spellings rendered as keycaps
-/// inline, so "Press Ctrl+Shift+W right after…" scans as keys, not as words.
+/// Caption text: small, secondary, wrapping. Shortcuts stay as words here;
+/// keycaps inside running text inflate the line and break it oddly, so they are
+/// reserved for the shortcut row.
 fn caption_rich(ui: &mut egui::Ui, text: &str) {
     let color = secondary_color(ui);
-    let shortcuts = [Shortcut::ToggleApp, Shortcut::FixWord].map(shortcut_display);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        let mut rest = text;
-        loop {
-            let next = shortcuts
-                .iter()
-                .filter_map(|sc| rest.find(sc).map(|at| (at, *sc)))
-                .min_by_key(|(at, _)| *at);
-            let Some((at, sc)) = next else {
-                break;
-            };
-            if at > 0 {
-                ui.label(egui::RichText::new(&rest[..at]).small().color(color));
-            }
-            keycaps(ui, sc);
-            rest = &rest[at + sc.len()..];
-        }
-        if !rest.is_empty() {
-            ui.label(egui::RichText::new(rest).small().color(color));
-        }
-    });
+    ui.label(egui::RichText::new(text).small().color(color));
 }
 
 /// Splits a shortcut spelling into its keys: "Ctrl+Shift+E" → Ctrl, Shift, E.

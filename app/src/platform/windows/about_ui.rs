@@ -59,15 +59,13 @@ pub fn draw(ctx: &egui::Context) {
                 // The one string a user is ever asked to quote back: selectable,
                 // and a Copy beside it so retyping a commit hash is never asked.
                 let version = t("Version {}", "Phiên bản {}").replace("{}", &build_string());
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(version).small().color(secondary(ui)))
-                            .selectable(true),
-                    );
-                    if ui.small_button(t("Copy", "Chép")).clicked() {
-                        ctx.copy_text(build_string());
-                    }
-                });
+                ui.add(
+                    egui::Label::new(egui::RichText::new(version).small().color(secondary(ui)))
+                        .selectable(true),
+                );
+                if ui.small_button(t("Copy", "Chép")).clicked() {
+                    ctx.copy_text(build_string());
+                }
                 ui.add_space(10.0);
                 ui.label(t(
                     "Vietnamese input for Windows.",

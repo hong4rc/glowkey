@@ -12,7 +12,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use glowkey_engine::Language;
+use crate::prefs_model::Language;
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSLocale, NSString};
 

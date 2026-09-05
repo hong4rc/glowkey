@@ -130,15 +130,11 @@ pub struct Session {
     /// back through, and the cap is really about bounding how far a wrong
     /// assumption about the caret could reach.
     committed: VecDeque<Behind>,
-    /// Persisted preference: open the Settings window on launch.
-    open_settings_at_launch: bool,
     /// Capitalize the first letter of each sentence.
     auto_capitalize: bool,
     /// True when the next typed letter starts a sentence (document start, or after
     /// `.`/`!`/`?`). Consumed by the first letter of the following word.
     pending_capital: bool,
-    /// The hotkey preset for the global Vietnamese/English toggle.
-    toggle_hotkey: HotkeyPreset,
     /// Text-expansion macros (shortcut → expansion).
     macros: Vec<Macro>,
     /// Opt-in: at a boundary, restore a committed word to its raw keys when those
@@ -148,8 +144,6 @@ pub struct Session {
     restore_english_words: bool,
     /// UniKey's `alwaysMacro`: expand macros even while Vietnamese is off.
     always_macro: bool,
-    /// Whether the one-time welcome has been shown (persisted).
-    welcome_shown: bool,
     /// The word just committed, for the correction hotkey. One-shot: cleared by
     /// the correction itself and by anything that could move the caret.
     correctable: Option<CorrectableWord>,
@@ -157,9 +151,6 @@ pub struct Session {
     /// form is a `Vec<WordOverride>` in `Settings` — stable and diffable, like
     /// `macros`; this map is the index over it, rebuilt on load.
     word_overrides: HashMap<String, WordPreference>,
-    /// Language of the user interface. The engine never renders text; this rides
-    /// along so the one settings file stays the single persisted surface.
-    language: Language,
 }
 
 impl Session {
@@ -174,78 +165,13 @@ impl Session {
             auto_fix: true,
             current_bundle_id: None,
             committed: VecDeque::new(),
-            open_settings_at_launch: true,
             auto_capitalize: false,
             pending_capital: true,
-            toggle_hotkey: HotkeyPreset::default(),
             macros: Vec::new(),
             restore_english_words: false,
-            language: Language::default(),
             always_macro: false,
-            welcome_shown: false,
             correctable: None,
             word_overrides: HashMap::new(),
-        }
-    }
-
-    /// Builds a session from persisted [`Settings`].
-    #[must_use]
-    pub fn from_settings(settings: &Settings) -> Self {
-        // Mode is deliberately NOT restored: GlowKey always launches in Vietnamese
-        // (the point of the app). ⌃⇧Space is a session-only toggle, so an accidental
-        // toggle can never leave the app launching disabled. Only the ignore list,
-        // auto-fix, tone style, and input method persist.
-        let mut session = Self::new(settings.style, settings.exclusion_list());
-        session.auto_fix = settings.auto_fix;
-        session.open_settings_at_launch = settings.open_settings_at_launch;
-        session.auto_capitalize = settings.auto_capitalize;
-        session.toggle_hotkey = settings.toggle_hotkey;
-        session.macros = settings.macros.clone();
-        session.restore_english_words = settings.restore_english_words;
-        session.language = settings.language;
-        session.always_macro = settings.always_macro;
-        session.welcome_shown = settings.welcome_shown;
-        session.word_overrides = settings
-            .word_overrides
-            .iter()
-            .map(|o| (o.keys.to_ascii_lowercase(), o.prefer))
-            .collect();
-        session.engine.set_quick_telex(settings.quick_telex);
-        session.engine.set_telex_brackets(settings.telex_brackets);
-        session
-            .engine
-            .set_strict_spell_check(settings.strict_spell_check);
-        session.engine.set_method(settings.input_method);
-        session
-    }
-
-    /// Snapshots the user-controlled state back into [`Settings`] for saving.
-    /// A session-suspended terminal is still in `exclusions` (by design — the
-    /// suspension must not survive a restart).
-    #[must_use]
-    pub fn snapshot(&self) -> Settings {
-        Settings {
-            exclusions: self.exclusions.ids().map(String::from).collect(),
-            removed_default_exclusions: self
-                .exclusions
-                .removed_default_ids()
-                .map(String::from)
-                .collect(),
-            auto_fix: self.auto_fix,
-            style: self.style,
-            open_settings_at_launch: self.open_settings_at_launch,
-            input_method: self.engine.method(),
-            auto_capitalize: self.auto_capitalize,
-            toggle_hotkey: self.toggle_hotkey,
-            macros: self.macros.clone(),
-            restore_english_words: self.restore_english_words,
-            language: self.language,
-            always_macro: self.always_macro,
-            welcome_shown: self.welcome_shown,
-            word_overrides: self.word_override_list(),
-            quick_telex: self.engine.quick_telex(),
-            telex_brackets: self.engine.telex_brackets(),
-            strict_spell_check: self.engine.strict_spell_check(),
         }
     }
 
@@ -259,17 +185,6 @@ impl Session {
     pub fn set_input_method(&mut self, method: InputMethod) {
         self.engine.set_method(method);
         self.forget_position();
-    }
-
-    /// Whether to open the Settings window on launch.
-    #[must_use]
-    pub fn open_settings_at_launch(&self) -> bool {
-        self.open_settings_at_launch
-    }
-
-    /// Sets the "open Settings on launch" preference.
-    pub fn set_open_settings_at_launch(&mut self, on: bool) {
-        self.open_settings_at_launch = on;
     }
 
     /// Whether auto-fix (restore invalid Vietnamese to raw keys) is enabled.
@@ -347,6 +262,20 @@ impl Session {
     #[must_use]
     pub fn always_macro(&self) -> bool {
         self.always_macro
+    }
+
+    /// Replaces the macro table wholesale — how a persisted list is put back.
+    pub fn set_macros(&mut self, macros: Vec<Macro>) {
+        self.macros = macros;
+    }
+
+    /// Replaces the personal word list wholesale — how a persisted list is put
+    /// back. Keys are compared case-insensitively, as `set_word_override` does.
+    pub fn set_word_overrides(&mut self, overrides: &[WordOverride]) {
+        self.word_overrides = overrides
+            .iter()
+            .map(|o| (o.keys.to_ascii_lowercase(), o.prefer))
+            .collect();
     }
 
     /// Sets whether macros expand while Vietnamese is off.
@@ -427,19 +356,6 @@ impl Session {
         self.word_overrides
             .remove(&keys.to_ascii_lowercase())
             .is_some()
-    }
-
-    /// Whether the one-time welcome has already been shown.
-    #[must_use]
-    pub fn welcome_shown(&self) -> bool {
-        self.welcome_shown
-    }
-
-    /// Marks the welcome as shown, so it never appears unbidden again. The menu's
-    /// "Quick Guide" reopens it on demand, which is what keeps dismissing it a
-    /// safe thing to do rather than a destructive one.
-    pub fn set_welcome_shown(&mut self, shown: bool) {
-        self.welcome_shown = shown;
     }
 
     /// Applies sentence-start capitalization to the first letter of a word when the
@@ -630,17 +546,6 @@ impl Session {
     /// Enables or disables the English word restore.
     pub fn set_restore_english_words(&mut self, on: bool) {
         self.restore_english_words = on;
-    }
-
-    /// The current toggle-hotkey preset.
-    #[must_use]
-    pub fn toggle_hotkey(&self) -> HotkeyPreset {
-        self.toggle_hotkey
-    }
-
-    /// Sets the toggle-hotkey preset.
-    pub fn set_toggle_hotkey(&mut self, preset: HotkeyPreset) {
-        self.toggle_hotkey = preset;
     }
 
     /// Processes a Backspace, honoring exclusion and mode.
@@ -1009,17 +914,6 @@ impl Session {
             return BackspaceOutcome::Flush;
         }
         self.engine.backspace_visible_char()
-    }
-
-    /// The user-interface language preference.
-    #[must_use]
-    pub fn language(&self) -> Language {
-        self.language
-    }
-
-    /// Sets the user-interface language preference.
-    pub fn set_language(&mut self, language: Language) {
-        self.language = language;
     }
 
     /// Whether Quick Telex is on.

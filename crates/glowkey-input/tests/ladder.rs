@@ -13,14 +13,19 @@
 //! a bad adapter shows itself.
 
 use glowkey_engine::{
-    ExclusionToggle, HotkeyPreset, InputMode, KeyResponse, Session, Settings, WordPreference,
+    ExclusionList, ExclusionToggle, InputMode, KeyResponse, PlacementStyle, Session, WordPreference,
 };
-use glowkey_input::{decide, hotkey, Ctx, Decision, Effects, Key, KeyEvent, Modifiers};
+use glowkey_input::{
+    decide, hotkey, Ctx, Decision, Effects, HotkeyPreset, Key, KeyEvent, Modifiers,
+};
 
 /// A session plus the little the platform would otherwise own: which key code it
 /// recorded for a custom hotkey, and somewhere to put the effects.
 struct Tap {
     session: Session,
+    /// The toggle preset. The shell keeps it with its preferences, not in the
+    /// session, so the harness does too.
+    preset: HotkeyPreset,
     /// The virtual key code this pretend platform recorded for a custom hotkey.
     recorded_code: Option<i64>,
     effects: Effects,
@@ -37,7 +42,9 @@ impl Tap {
     /// A session with nothing set — the caller picks the frontmost application.
     fn bare() -> Self {
         Self {
-            session: Session::from_settings(&Settings::default()),
+            // The shipped exclusion defaults, as a fresh settings file has them.
+            session: Session::new(PlacementStyle::default(), ExclusionList::with_defaults()),
+            preset: HotkeyPreset::default(),
             recorded_code: None,
             effects: Effects::default(),
         }
@@ -45,7 +52,7 @@ impl Tap {
 
     fn ctx(&self) -> Ctx {
         Ctx {
-            toggle_hotkey: hotkey::resolve(self.session.toggle_hotkey(), self.recorded_code),
+            toggle_hotkey: hotkey::resolve(self.preset, self.recorded_code),
         }
     }
 
@@ -685,17 +692,15 @@ fn a_restored_word_breaks_the_chain() {
 /// UniKey's always-macro expands a shortcut regardless of mode.
 #[test]
 fn always_macro_keeps_feeding_the_engine_with_vietnamese_off() {
-    let mut settings = Settings {
-        always_macro: true,
-        macros: vec![glowkey_engine::Macro {
-            shortcut: "vn".into(),
-            expansion: "Việt Nam".into(),
-        }],
-        ..Settings::default()
-    };
-    settings.exclusions.clear();
+    let mut session = Session::new(PlacementStyle::default(), ExclusionList::with_defaults());
+    session.set_always_macro(true);
+    session.set_macros(vec![glowkey_engine::Macro {
+        shortcut: "vn".into(),
+        expansion: "Việt Nam".into(),
+    }]);
     let mut tap = Tap {
-        session: Session::from_settings(&settings),
+        session,
+        preset: HotkeyPreset::default(),
         recorded_code: None,
         effects: Effects::default(),
     };
@@ -720,11 +725,7 @@ fn a_terminal_enabled_by_hotkey_is_live_but_still_persisted_as_excluded() {
     assert_eq!(outcome, ExclusionToggle::EnabledSessionOnly);
     assert_eq!(type_through(&mut tap, "hoongf"), "hồng"); // live for the session
     assert!(
-        tap.session
-            .snapshot()
-            .exclusions
-            .iter()
-            .any(|id| id == terminal),
+        tap.session.exclusions().ids().any(|id| id == terminal),
         "the persisted exclusion must survive a session-only toggle"
     );
 }
@@ -735,14 +736,13 @@ fn a_terminal_enabled_by_hotkey_is_live_but_still_persisted_as_excluded() {
 fn a_recorded_custom_hotkey_toggles_and_the_old_preset_stops() {
     let mut tap = Tap::active();
     // ⌃⌥K, recorded on a platform that calls that key code 40.
-    tap.session.set_toggle_hotkey(HotkeyPreset::Custom {
+    tap.preset = HotkeyPreset::Custom {
         control: true,
         shift: false,
         option: true,
         key_char: 'K',
-        macos_keycode: Some(40),
-        windows_vk: None,
-    });
+        raw_code: Some(40),
+    };
     tap.recorded_code = Some(40);
 
     let combo = KeyEvent::character('k')

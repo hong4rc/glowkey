@@ -978,6 +978,8 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-service-management",
+ "serde",
+ "serde_json",
  "windows-sys 0.61.2",
  "winit",
  "winresource",
@@ -1000,6 +1002,7 @@ name = "glowkey-input"
 version = "0.1.0"
 dependencies = [
  "glowkey-engine",
+ "serde",
 ]
 
 [[package]]

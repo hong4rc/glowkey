@@ -10,7 +10,65 @@
 //! That code is carried as an opaque integer through [`HotkeyKey::RawCode`]; this
 //! module never interprets it, it only compares it with the one on the event.
 
-use glowkey_engine::HotkeyPreset;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+/// The chosen hotkey for the global Vietnamese/English toggle, as a small preset
+/// list (like UniKey/EVKey's hotkey picker). The shell maps each to its modifier
+/// mask and key code through [`resolve`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum HotkeyPreset {
+    /// ⌃⇧Space — the default.
+    #[default]
+    CtrlShiftSpace,
+    /// ⌃Space.
+    CtrlSpace,
+    /// ⌥Space.
+    OptionSpace,
+    /// ⌃⇧Z.
+    CtrlShiftZ,
+    /// A user-recorded combination.
+    ///
+    /// The four presets above are portable: modifiers plus a semantic key. This
+    /// one is the awkward case: the user pressed a *physical* key, and the only
+    /// durable name it has is the key code the platform reported at the time.
+    /// That code is `raw_code`. Only macOS records today; a platform that did
+    /// not record it matches by `key_char` instead (see [`resolve`]), so a file
+    /// carried between machines still toggles. If a second platform grows a
+    /// recorder, add a tag saying which platform the code belongs to; do not
+    /// invent a universal key code table for two platforms.
+    ///
+    /// Command is never allowed (it belongs to the system), so it has no field.
+    Custom {
+        /// Control held.
+        control: bool,
+        /// Shift held.
+        shift: bool,
+        /// Option (Alt) held.
+        option: bool,
+        /// The character the key produced, for matching where the code is unknown.
+        key_char: char,
+        /// The platform key code recorded with the combination, if any. Older
+        /// files wrote this as `keycode` or `macos_keycode`.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, alias = "keycode", alias = "macos_keycode")
+        )]
+        raw_code: Option<i64>,
+    },
+}
+
+impl HotkeyPreset {
+    /// The recorded key code of a custom combination, if there is one.
+    #[must_use]
+    pub fn raw_code(self) -> Option<i64> {
+        match self {
+            Self::Custom { raw_code, .. } => raw_code,
+            _ => None,
+        }
+    }
+}
 
 use crate::event::{Key, KeyEvent, Modifiers};
 

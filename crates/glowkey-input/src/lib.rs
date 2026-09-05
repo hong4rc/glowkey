@@ -38,5 +38,5 @@ mod ladder;
 
 pub use decision::{Decision, Effects};
 pub use event::{Key, KeyEvent, Modifiers};
-pub use hotkey::{Hotkey, HotkeyCapture, HotkeyKey};
+pub use hotkey::{Hotkey, HotkeyCapture, HotkeyKey, HotkeyPreset};
 pub use ladder::{decide, Ctx};

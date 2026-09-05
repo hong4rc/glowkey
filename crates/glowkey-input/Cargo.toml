@@ -11,3 +11,9 @@ license = "MIT"
 # CI compiles and tests it on ubuntu-latest with `-D warnings` for that reason.
 [dependencies]
 glowkey-engine = { path = "../glowkey-engine" }
+# Only for the settings file that names a hotkey preset; a consumer that does
+# not persist presets does not pay for it.
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+serde = ["dep:serde"]

@@ -1,12 +1,12 @@
 //! Loads and saves [`Settings`] to a JSON file under Application Support.
 //!
-//! The engine owns the data and its (de)serialization; this module only owns the
+//! `prefs_model` owns the data and its (de)serialization; this module only owns the
 //! file location and the I/O, so it is the one macOS-specific piece of settings.
 
 use std::fs;
 use std::path::PathBuf;
 
-use glowkey_engine::Settings;
+use crate::prefs_model::Settings;
 
 /// `~/Library/Application Support/GlowKey/settings.json`.
 #[cfg(target_os = "macos")]

@@ -163,12 +163,14 @@ fn the_list_is_sorted_for_a_stable_settings_file() {
 }
 
 #[test]
-fn overrides_survive_a_settings_round_trip() {
+fn overrides_survive_a_persisted_round_trip() {
     let mut s = session();
     s.set_word_override("was", WordPreference::Raw);
     s.set_word_override("cats", WordPreference::Vietnamese);
 
-    let restored = Session::from_settings(&s.snapshot());
+    // The list as the settings file carries it, put back into a fresh session.
+    let mut restored = session();
+    restored.set_word_overrides(&s.word_override_list());
     assert_eq!(restored.word_override("was"), Some(WordPreference::Raw));
     assert_eq!(
         restored.word_override("cats"),

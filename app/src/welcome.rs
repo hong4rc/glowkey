@@ -16,7 +16,7 @@
 use objc2_app_kit::{NSAlert, NSApplication};
 use objc2_foundation::{MainThreadMarker, NSString};
 
-use glowkey_engine::HotkeyPreset;
+use glowkey_input::HotkeyPreset;
 
 use crate::strings::t;
 

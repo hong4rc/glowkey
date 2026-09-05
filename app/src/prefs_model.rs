@@ -1,14 +1,17 @@
-//! Persisted settings — the single value the UI edits and the app saves.
+//! GlowKey's preferences file — the single value the UI edits and the app saves.
 //!
-//! Platform-free: this holds the data and its JSON (de)serialization. The app
-//! crate owns *where* the file lives and the file I/O, so the engine stays
-//! testable on any OS.
+//! This is the product's model, not the engine's: it names the interface
+//! language, whether the settings window opens at launch, whether the welcome
+//! was shown, and the toggle hotkey, none of which a bare Vietnamese engine
+//! has any use for. The engine gets a `Session` built from it
+//! (`session_adapter`); `settings_store` owns where the file lives.
+//! `settings.json` written by any earlier build loads unchanged: the field
+//! names and defaults here are the file format.
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ExclusionList, HotkeyPreset, InputMethod, Language, Macro, PlacementStyle, WordOverride,
-};
+use glowkey_engine::{ExclusionList, InputMethod, Macro, PlacementStyle, WordOverride};
+use glowkey_input::HotkeyPreset;
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,10 +146,26 @@ fn default_true() -> bool {
 }
 
 fn default_exclusions() -> Vec<String> {
-    crate::exclusion::DEFAULT_EXCLUSIONS
+    glowkey_engine::exclusion::DEFAULT_EXCLUSIONS
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+/// Which language the user interface is written in.
+///
+/// Unikey exposes this as a single "Vietnamese interface" checkbox. A checkbox
+/// cannot say "whatever the system is set to", which is what a native macOS
+/// application should do by default, so this is three-valued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Language {
+    /// Follow the system's preferred language.
+    #[default]
+    System,
+    /// Vietnamese interface, whatever the system says.
+    Vietnamese,
+    /// English interface, whatever the system says.
+    English,
 }
 
 #[cfg(test)]
@@ -177,7 +196,7 @@ mod tests {
             welcome_shown: true,
             word_overrides: vec![WordOverride {
                 keys: "cats".into(),
-                prefer: crate::WordPreference::Vietnamese,
+                prefer: glowkey_engine::WordPreference::Vietnamese,
             }],
         };
         let restored = Settings::from_json(&settings.to_json());
@@ -222,7 +241,7 @@ mod tests {
         assert_eq!(settings.word_overrides.len(), 3);
         assert_eq!(
             settings.word_overrides[1].prefer,
-            crate::WordPreference::Vietnamese
+            glowkey_engine::WordPreference::Vietnamese
         );
     }
 
@@ -253,8 +272,7 @@ mod tests {
                 shift: false,
                 option: true,
                 key_char: 'K',
-                macos_keycode: Some(40),
-                windows_vk: None,
+                raw_code: Some(40),
             },
             ..Settings::default()
         };
@@ -284,12 +302,10 @@ mod tests {
                 key_char: 'K',
                 // The old file's `keycode: 40`, read through the alias. Not a
                 // Windows key, and not a character match: the same physical key.
-                macos_keycode: Some(40),
-                windows_vk: None,
+                raw_code: Some(40),
             }
         );
-        assert_eq!(settings.toggle_hotkey.macos_keycode(), Some(40));
-        assert_eq!(settings.toggle_hotkey.windows_vk(), None);
+        assert_eq!(settings.toggle_hotkey.raw_code(), Some(40));
 
         // The file's exclusions are macOS bundle identifiers, and they must load
         // verbatim wherever the file is read. Naming them here is right — this is
@@ -355,7 +371,7 @@ mod tests {
         // Drawn from the shipped table rather than named, because the rule under
         // test is the merge and the merge does not care what an application is
         // called. Spelling macOS identities here is what broke this on Windows.
-        let defaults = crate::exclusion::DEFAULT_EXCLUSIONS;
+        let defaults = glowkey_engine::exclusion::DEFAULT_EXCLUSIONS;
         let kept = defaults[0];
         let missing = defaults[1];
         let tombstoned = defaults[defaults.len() - 1];
@@ -410,10 +426,10 @@ mod tests {
         // synthesized backspaces mangling a shell's line editing.
         assert_eq!(s.exclusions, default_exclusions());
         assert!(
-            !crate::exclusion::TERMINAL_EXCLUSIONS.is_empty(),
+            !glowkey_engine::exclusion::TERMINAL_EXCLUSIONS.is_empty(),
             "this platform ships no terminals to protect"
         );
-        for terminal in crate::exclusion::TERMINAL_EXCLUSIONS {
+        for terminal in glowkey_engine::exclusion::TERMINAL_EXCLUSIONS {
             assert!(
                 s.exclusions.iter().any(|id| id == terminal),
                 "{terminal} is a known terminal but is not excluded on a fresh install"
@@ -428,5 +444,37 @@ mod tests {
         let s = Settings::from_json(r#"{"auto_fix": false, "default_mode": "English"}"#);
         assert!(!s.auto_fix);
         assert_eq!(s.style, PlacementStyle::default());
+    }
+}
+
+#[cfg(test)]
+mod fixtures {
+    //! Files written by earlier builds must load and round-trip. These are the
+    //! two shapes in the field: a Windows file with the shipped exclusions, and
+    //! a macOS file carrying a recorded custom hotkey under its old field name.
+    use super::*;
+
+    #[test]
+    fn a_windows_file_round_trips() {
+        let json = include_str!("../tests/fixtures/settings-windows.json");
+        let loaded = Settings::from_json(json);
+        assert_eq!(loaded.exclusions.len(), 3);
+        assert_eq!(loaded.style, PlacementStyle::Old);
+        assert!(loaded.open_settings_at_launch);
+        let again = Settings::from_json(&loaded.to_json());
+        assert_eq!(again, loaded);
+    }
+
+    #[test]
+    fn a_macos_file_with_a_recorded_hotkey_round_trips() {
+        let json = include_str!("../tests/fixtures/settings-macos-custom-hotkey.json");
+        let loaded = Settings::from_json(json);
+        assert_eq!(
+            loaded.toggle_hotkey.raw_code(),
+            Some(40),
+            "the old `keycode` field name is still read"
+        );
+        let again = Settings::from_json(&loaded.to_json());
+        assert_eq!(again, loaded);
     }
 }

@@ -196,11 +196,10 @@ fn terminal_hotkey_unexclusion_is_session_only() {
         ExclusionToggle::EnabledSessionOnly
     );
     assert!(session.is_active(), "session-suspended terminal transforms");
-    // The snapshot (what gets persisted) still excludes it.
-    let saved = session.snapshot();
-    assert!(saved.exclusions.iter().any(|id| id == terminal));
-    // And a fresh session from that snapshot excludes it again.
-    let mut restarted = Session::from_settings(&saved);
+    // What gets persisted still excludes it.
+    assert!(session.exclusions().ids().any(|id| id == terminal));
+    // And a fresh session from that persisted list excludes it again.
+    let mut restarted = Session::new(PlacementStyle::New, persisted(&session));
     restarted.set_frontmost_app(terminal);
     assert!(
         !restarted.is_active(),
@@ -219,15 +218,23 @@ fn terminal_hotkey_unexclusion_is_session_only() {
         session.toggle_app_exclusion(editor),
         ExclusionToggle::Enabled
     );
-    let saved = session.snapshot();
-    assert!(!saved.exclusions.iter().any(|id| id == editor));
-    assert!(saved
-        .removed_default_exclusions
-        .iter()
+    assert!(!session.exclusions().ids().any(|id| id == editor));
+    assert!(session
+        .exclusions()
+        .removed_default_ids()
         .any(|id| id == editor));
     // ...and the tombstone keeps it removed across a restart.
-    let restarted = Session::from_settings(&saved);
+    let restarted = Session::new(PlacementStyle::New, persisted(&session));
     assert!(!restarted.exclusions().is_excluded(editor));
+}
+
+/// The exclusion list as the settings file would carry it: saved ids and
+/// removed defaults, rebuilt the way a restart rebuilds it.
+fn persisted(session: &Session) -> ExclusionList {
+    ExclusionList::from_saved(
+        session.exclusions().ids().map(String::from),
+        session.exclusions().removed_default_ids().map(String::from),
+    )
 }
 
 #[test]
@@ -244,9 +251,8 @@ fn permanent_terminal_removal_via_editor_still_works() {
         "{terminal} must ship excluded for this test to mean anything"
     );
     assert!(session.exclusions_mut().remove(terminal));
-    let saved = session.snapshot();
-    assert!(!saved.exclusions.iter().any(|id| id == terminal));
-    let restarted = Session::from_settings(&saved);
+    assert!(!session.exclusions().ids().any(|id| id == terminal));
+    let restarted = Session::new(PlacementStyle::New, persisted(&session));
     assert!(!restarted.exclusions().is_excluded(terminal));
 }
 

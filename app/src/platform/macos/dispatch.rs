@@ -17,8 +17,9 @@
 
 use std::ptr::NonNull;
 
-use glowkey_engine::{ExclusionToggle, HotkeyPreset, InputMode};
+use glowkey_engine::{ExclusionToggle, InputMode};
 use glowkey_input::hotkey::{self, HotkeyCapture};
+use glowkey_input::HotkeyPreset;
 use glowkey_input::{Ctx, Decision, Effects, KeyEvent};
 use objc2_core_graphics::{CGEvent, CGEventField};
 
@@ -73,12 +74,8 @@ impl TapState {
 
         // Resolving the preset needs a shared borrow only, and it happens before
         // the mutable one so the two never overlap.
-        let preset = self
-            .session
-            .try_borrow()
-            .map(|s| s.toggle_hotkey())
-            .unwrap_or(HotkeyPreset::CtrlShiftSpace);
-        let toggle_hotkey = hotkey::resolve(preset, preset.macos_keycode());
+        let preset = self.toggle_hotkey();
+        let toggle_hotkey = hotkey::resolve(preset, preset.raw_code());
         if toggle_hotkey.is_char_fallback() && !self.warned_hotkey_fallback.replace(true) {
             // A combination recorded on another platform: there is no macOS key
             // code to match, so it falls back to the character, which is only
@@ -272,16 +269,15 @@ impl TapState {
                     option,
                     key_char,
                     // Recorded here, so this is the platform whose code we know.
-                    macos_keycode: Some(key.raw_code),
-                    windows_vk: None,
+                    raw_code: Some(key.raw_code),
                 };
-                let Ok(mut session) = self.session.try_borrow_mut() else {
+                let Ok(mut prefs) = self.prefs.try_borrow_mut() else {
                     // Could not store the combo — stay armed rather than silently
                     // ending the recording with the old hotkey still in effect.
                     return Decision::Consume;
                 };
-                session.set_toggle_hotkey(preset);
-                drop(session);
+                prefs.toggle_hotkey = preset;
+                drop(prefs);
                 *self.recording_hotkey.borrow_mut() = false;
                 // Persistence happens in handle_key_down (decide stays disk-free
                 // for the tests).

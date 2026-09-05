@@ -31,7 +31,10 @@
 
 use eframe::egui;
 
-use glowkey_engine::{ExclusionList, HotkeyPreset, Macro, Settings, WordOverride, WordPreference};
+use glowkey_engine::{ExclusionList, Macro, WordOverride, WordPreference};
+use glowkey_input::HotkeyPreset;
+
+use crate::prefs_model::Settings;
 
 use crate::settings_spec::{
     expand_shortcuts, hotkey_display, shortcut_display, Control, ListId, Row, TabSpec, Toggle,
@@ -1725,8 +1728,7 @@ mod tests {
                 shift: false,
                 option: true,
                 key_char: 'k',
-                macos_keycode: Some(40),
-                windows_vk: None,
+                raw_code: Some(40),
             },
             ..Settings::default()
         };
@@ -2005,8 +2007,7 @@ mod tests {
             shift: false,
             option: true,
             key_char: 'k',
-            macos_keycode: None,
-            windows_vk: None,
+            raw_code: None,
         };
         assert_eq!(hotkey_choices(custom).last(), Some(&custom));
     }

@@ -17,6 +17,8 @@ use std::sync::Mutex;
 
 use glowkey_engine::{ExclusionToggle, InputMode};
 
+use crate::prefs_model::Settings;
+
 use super::indicator::{self, Indicator};
 use super::{foreground, hook, tray};
 
@@ -153,7 +155,7 @@ pub fn reveal_log() {
 /// [`deliver_settings_result`] and the main loop applies it in
 /// [`apply_settings`].
 pub fn open_settings() {
-    let Some(current) = hook::with_session(|session| session.snapshot()) else {
+    let Some(current) = hook::snapshot() else {
         return;
     };
     super::ui_thread::open_settings(current);
@@ -170,16 +172,13 @@ pub fn show_about() {
 
 /// A settings result waiting for the main thread: the baseline the window was
 /// opened on, and `None` for "closed without changes" or `Some` for the edit.
-type SettingsResult = (glowkey_engine::Settings, Option<glowkey_engine::Settings>);
+type SettingsResult = (Settings, Option<Settings>);
 
 static PENDING_SETTINGS: Mutex<Option<SettingsResult>> = Mutex::new(None);
 
 /// Called on the UI thread when the settings window has decided. Stores the
 /// result and wakes the main loop, which owns the session and the file.
-pub fn deliver_settings_result(
-    baseline: glowkey_engine::Settings,
-    updated: Option<glowkey_engine::Settings>,
-) {
+pub fn deliver_settings_result(baseline: Settings, updated: Option<Settings>) {
     let previous = PENDING_SETTINGS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -202,10 +201,7 @@ pub fn take_pending_settings_result() -> Option<SettingsResult> {
 }
 
 /// Applies what the settings window handed back. Main thread only.
-pub fn apply_settings(
-    current: &glowkey_engine::Settings,
-    updated: Option<glowkey_engine::Settings>,
-) {
+pub fn apply_settings(current: &Settings, updated: Option<Settings>) {
     let Some(updated) = updated else {
         return; // nothing changed
     };
@@ -223,7 +219,7 @@ pub fn apply_settings(
     // So the window's edits are applied as a diff against the baseline it was
     // given, on top of whatever the session looks like now. Only fields the user
     // actually changed move.
-    let live = hook::with_session(|session| session.snapshot()).unwrap_or_else(|| current.clone());
+    let live = hook::snapshot().unwrap_or_else(|| current.clone());
     let merged = merge_settings(current, &updated, live);
 
     crate::settings_store::save(&merged);
@@ -237,8 +233,8 @@ pub fn apply_settings(
     // stale either way. The frontmost application is not gone, only unpersisted,
     // so it is put back.
     let app = foreground::current();
+    hook::replace_settings(&merged);
     hook::with_session(|session| {
-        *session = glowkey_engine::Session::from_settings(&merged);
         if let Some(app) = app.as_deref() {
             session.set_frontmost_app(app);
         }
@@ -278,11 +274,7 @@ pub fn reinstall_hook() {
 /// Field-by-field rather than clever, because there is no cleverness available:
 /// `Settings` has no per-field dirty tracking, and inventing one for this is a
 /// larger change than the list below.
-fn merge_settings(
-    baseline: &glowkey_engine::Settings,
-    edited: &glowkey_engine::Settings,
-    live: glowkey_engine::Settings,
-) -> glowkey_engine::Settings {
+fn merge_settings(baseline: &Settings, edited: &Settings, live: Settings) -> Settings {
     /// The window's value if the user changed it, otherwise the live one.
     fn pick<T: PartialEq + Clone>(baseline: &T, edited: &T, live: &T) -> T {
         if edited == baseline {
@@ -292,7 +284,7 @@ fn merge_settings(
         }
     }
 
-    glowkey_engine::Settings {
+    Settings {
         exclusions: pick(&baseline.exclusions, &edited.exclusions, &live.exclusions),
         removed_default_exclusions: pick(
             &baseline.removed_default_exclusions,
@@ -364,7 +356,7 @@ fn merge_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glowkey_engine::{Settings, WordOverride, WordPreference};
+    use glowkey_engine::{WordOverride, WordPreference};
 
     fn taught_word() -> WordOverride {
         WordOverride {
@@ -416,9 +408,9 @@ mod tests {
     /// tray's.
     #[test]
     fn a_tray_exclusion_survives_the_real_window_round_trip() {
-        let opened_on = glowkey_engine::Settings {
+        let opened_on = Settings {
             exclusions: vec!["zzz.exe".into(), "aaa.exe".into()],
-            ..glowkey_engine::Settings::default()
+            ..Settings::default()
         };
         let mut app = super::super::settings_ui::SettingsApp::new(opened_on.clone());
         app.draft.auto_capitalize = !app.draft.auto_capitalize;
@@ -440,7 +432,7 @@ mod tests {
     /// "Closed, nothing changed" applies nothing and touches nothing.
     #[test]
     fn applying_no_change_is_a_no_op() {
-        apply_settings(&glowkey_engine::Settings::default(), None);
+        apply_settings(&Settings::default(), None);
         assert!(take_pending_settings_result().is_none());
     }
 

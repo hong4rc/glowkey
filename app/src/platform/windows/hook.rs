@@ -30,6 +30,9 @@ use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
 use glowkey_engine::Session;
+
+use crate::prefs_model::Settings;
+use crate::session_adapter::{session_from, settings_from};
 use glowkey_input::hotkey;
 use glowkey_input::{Ctx, Decision, Effects};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -54,6 +57,9 @@ static HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::ne
 /// Everything one keystroke needs, and nothing that needs the outside world.
 pub struct HookState {
     session: Session,
+    /// The product-only preferences the session does not hold (language,
+    /// launch flags, the hotkey preset), kept so a save writes the whole file.
+    prefs: Settings,
     /// The application the session was last told about, so a change is only
     /// pushed when there is one.
     last_app: Option<String>,
@@ -79,9 +85,10 @@ pub struct HookState {
 }
 
 impl HookState {
-    fn new(settings: &glowkey_engine::Settings) -> Self {
+    fn new(settings: &Settings) -> Self {
         Self {
-            session: Session::from_settings(settings),
+            session: session_from(settings),
+            prefs: settings.clone(),
             last_app: None,
             pending_save: Cell::new(false),
             pending_refresh: Cell::new(false),
@@ -135,7 +142,7 @@ pub fn uninstall() {
 }
 
 /// Seeds the state. Called once, before the loop starts.
-pub fn set_state(settings: &glowkey_engine::Settings) {
+pub fn set_state(settings: &Settings) {
     STATE.with(|s| *s.borrow_mut() = Some(HookState::new(settings)));
     // The thread that owns the session and runs the loop, so another thread
     // can wake it (`wake_main_loop`).
@@ -206,6 +213,30 @@ pub fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
 /// Touches only in-memory session state — no allocation, no syscall, no lock a
 /// non-hook thread holds — because it runs inside a low-level hook callback,
 /// where `decisions/0008` applies exactly as it does to the keyboard one.
+/// The whole preferences file as it stands now: the session's state over the
+/// product-only fields. `None` before the session exists or while it is busy.
+pub fn snapshot() -> Option<Settings> {
+    STATE.with(|state| {
+        let borrowed = state.try_borrow().ok()?;
+        let state = borrowed.as_ref()?;
+        Some(settings_from(&state.session, &state.prefs))
+    })
+}
+
+/// Rebuilds the session from `settings` and keeps `settings` as the product
+/// preferences. The session's runtime state (the composing word) does not
+/// survive; callers put the frontmost app back themselves.
+pub fn replace_settings(settings: &Settings) {
+    STATE.with(|state| {
+        if let Ok(mut borrowed) = state.try_borrow_mut() {
+            if let Some(state) = borrowed.as_mut() {
+                state.session = session_from(settings);
+                state.prefs = settings.clone();
+            }
+        }
+    });
+}
+
 pub fn flush_session() {
     STATE.with(|state| {
         if let Ok(mut borrowed) = state.try_borrow_mut() {
@@ -382,8 +413,11 @@ fn handle_key(state: &mut HookState, info: &KBDLLHOOKSTRUCT) -> bool {
 
     let key = adapt::key_event(info);
 
-    let preset = state.session.toggle_hotkey();
-    let toggle_hotkey = hotkey::resolve(preset, preset.windows_vk().map(i64::from));
+    // No recorder on this platform: a custom combination in the file was
+    // recorded on a Mac, and its code means nothing here, so it matches by
+    // character (`resolve` falls back when the code is `None`).
+    let preset = state.prefs.toggle_hotkey;
+    let toggle_hotkey = hotkey::resolve(preset, None);
     if toggle_hotkey.is_char_fallback() && !state.warned_hotkey_fallback.replace(true) {
         // Recorded on another platform: there is no Windows virtual-key code to
         // match, so it falls back to the character, which is only right while the
@@ -547,12 +581,12 @@ fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT)
 ///
 /// Called by the shell after the callback has returned, which is what keeps the
 /// file write off the keystroke path.
-fn take_pending_save() -> Option<glowkey_engine::Settings> {
+fn take_pending_save() -> Option<Settings> {
     STATE.with(|state| {
         let borrowed = state.try_borrow().ok()?;
         let state = borrowed.as_ref()?;
         if state.pending_save.replace(false) {
-            Some(state.session.snapshot())
+            Some(settings_from(&state.session, &state.prefs))
         } else {
             None
         }

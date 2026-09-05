@@ -11,7 +11,8 @@ use super::adapt::{
 };
 use super::emit::is_chromium_browser;
 use super::*;
-use glowkey_engine::{ExclusionToggle, HotkeyPreset, KeyResponse};
+use glowkey_engine::{ExclusionToggle, KeyResponse};
+use glowkey_input::HotkeyPreset;
 use objc2_core_graphics::CGEventFlags;
 
 /// Builds a real key-down CGEvent from GlowKey's source carrying `ch` as its
@@ -149,7 +150,7 @@ fn toggle_hotkey_presets_match_only_their_combo() {
     let matches = |flags: CGEventFlags, keycode: i64, preset: HotkeyPreset| {
         let event = flagged_event(&source, keycode as u16, flags);
         let key = super::adapt::key_event(NonNull::from(&*event));
-        glowkey_input::hotkey::resolve(preset, preset.macos_keycode()).matches(&key)
+        glowkey_input::hotkey::resolve(preset, preset.raw_code()).matches(&key)
     };
 
     assert!(matches(
@@ -487,7 +488,7 @@ fn terminal_toggle_via_hotkey_is_session_only() {
         .toggle_app_exclusion("com.mitchellh.ghostty");
     assert_eq!(outcome, ExclusionToggle::EnabledSessionOnly);
     assert_eq!(type_via_tap(&state, "hoongf"), "hồng"); // live for the session
-    let snapshot = state.session.borrow().snapshot();
+    let snapshot = state.snapshot().expect("state not busy");
     assert!(
         snapshot
             .exclusions

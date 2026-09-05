@@ -23,17 +23,13 @@ use vi::methods::{Action, IncrementalBuffer};
 use vi::processor::AccentStyle;
 use vi::processor::{LetterModification, ToneMark};
 
-pub mod config;
 mod english;
 pub mod exclusion;
 mod exclusion_defaults;
 
-pub use config::Settings;
 pub use exclusion::ExclusionList;
 
 mod engine;
-mod hotkey;
-mod language;
 mod macros;
 mod method;
 mod overrides;
@@ -41,8 +37,6 @@ mod session;
 mod tones;
 
 pub use engine::*;
-pub use hotkey::*;
-pub use language::*;
 pub use macros::*;
 pub use method::*;
 pub use overrides::*;

@@ -136,7 +136,11 @@ fn english_restore_never_touches_vietnamese_words() {
 fn english_restore_off_by_default_keeps_vietnamese_reading() {
     // Off (the default): `cats` still yields `cát` — the Vietnamese-first reading.
     let mut s = active_session(true);
-    assert!(!glowkey_engine::Settings::default().restore_english_words);
+    assert!(!glowkey_engine::Session::new(
+        glowkey_engine::PlacementStyle::default(),
+        glowkey_engine::ExclusionList::new(),
+    )
+    .restore_english_words());
     assert_eq!(type_then_commit(&mut s, "cats"), "cát");
 }
 

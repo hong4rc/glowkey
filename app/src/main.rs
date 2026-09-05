@@ -44,6 +44,10 @@ mod platform;
 #[cfg(target_os = "macos")]
 mod prefs;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+mod prefs_model;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod session_adapter;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod settings_spec;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod settings_store;

@@ -48,6 +48,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use glowkey_engine::Session;
+
+use crate::prefs_model::Settings;
+use crate::session_adapter::{session_from, settings_from};
 use objc2_core_foundation::{CFRetained, CFRunLoop};
 use objc2_core_graphics::{
     CGEvent, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapProxy, CGEventType,
@@ -102,6 +105,9 @@ fn debug_enabled() -> bool {
 /// no cross-thread access.
 pub(crate) struct TapState {
     session: RefCell<Session>,
+    /// The product-only preferences the session does not hold (language,
+    /// launch flags, the hotkey preset), kept so a save writes the whole file.
+    prefs: RefCell<Settings>,
     last_bundle_id: RefCell<Option<String>>,
     /// The tagged event source all synthesized events are created from.
     source: CFRetained<CGEventSource>,
@@ -136,15 +142,16 @@ impl TapState {
     /// Builds state with default settings (used in tests).
     #[cfg(test)]
     fn new() -> Option<Self> {
-        Self::from_settings(&glowkey_engine::Settings::default())
+        Self::from_settings(&Settings::default())
     }
 
     /// Builds state with a session configured from persisted settings.
-    fn from_settings(settings: &glowkey_engine::Settings) -> Option<Self> {
+    fn from_settings(settings: &Settings) -> Option<Self> {
         let source = CGEventSource::new(CGEventSourceStateID::Private)?;
         CGEventSource::set_user_data(Some(&source), GLOWKEY_TAG);
         Some(Self {
-            session: RefCell::new(Session::from_settings(settings)),
+            session: RefCell::new(session_from(settings)),
+            prefs: RefCell::new(settings.clone()),
             last_bundle_id: RefCell::new(None),
             source,
             recent_emits: RefCell::new(VecDeque::new()),
@@ -158,9 +165,17 @@ impl TapState {
     /// Snapshots the current session and writes it to the settings file. Called
     /// after any user-driven change (menu toggle, preference edit).
     pub fn save_settings(&self) {
-        if let Ok(session) = self.session.try_borrow() {
-            crate::settings_store::save(&session.snapshot());
+        if let Some(settings) = self.snapshot() {
+            crate::settings_store::save(&settings);
         }
+    }
+
+    /// The whole preferences file as it stands now: the session's state over
+    /// the product-only fields. `None` while either is busy.
+    pub fn snapshot(&self) -> Option<Settings> {
+        let session = self.session.try_borrow().ok()?;
+        let prefs = self.prefs.try_borrow().ok()?;
+        Some(settings_from(&session, &prefs))
     }
 
     /// Records the frontmost application on the session, so the ignore list and
@@ -460,8 +475,8 @@ pub fn run() {
         // already on screen for the user to look at while reading about it.
         if show_welcome {
             crate::welcome::show(unsafe { (*ctx).state.toggle_hotkey() }, mtm);
-            if let Ok(mut session) = unsafe { (*ctx).state.session.try_borrow_mut() } {
-                session.set_welcome_shown(true);
+            if let Ok(mut prefs) = unsafe { (*ctx).state.prefs.try_borrow_mut() } {
+                prefs.welcome_shown = true;
             }
             unsafe { (*ctx).state.save_settings() };
             crate::log::log("STARTUP showed the one-time welcome");

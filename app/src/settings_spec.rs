@@ -17,7 +17,10 @@
 //! Nothing here touches AppKit, egui or Win32, so the module compiles on any
 //! target and its tests run on all of them.
 
-use glowkey_engine::{HotkeyPreset, InputMethod, Language, PlacementStyle, Settings};
+use glowkey_engine::{InputMethod, PlacementStyle};
+use glowkey_input::HotkeyPreset;
+
+use crate::prefs_model::{Language, Settings};
 
 use crate::strings::t;
 
@@ -735,8 +738,7 @@ mod tests {
             shift: false,
             option: true,
             key_char: 'k',
-            macos_keycode: None,
-            windows_vk: None,
+            raw_code: None,
         });
         assert!(custom.ends_with('K'), "{custom}");
         assert!(

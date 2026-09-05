@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Unbundle product preferences"
-status: pending
+status: completed
 priority: P1
 effort: "6h"
 dependencies: [1]
@@ -60,10 +60,11 @@ The engine stops knowing there is a settings window or a login item.
 6. Gates on three targets; fixture test green.
 
 ## Success Criteria
-- [ ] `grep -r "Settings\|Language\|macos_keycode\|windows_vk\|open_settings_at_launch\|welcome_shown" crates/glowkey-engine/src` is empty.
-- [ ] `cargo build -p glowkey-engine --no-default-features` succeeds.
-- [ ] Fixture round-trip test passes on both saved-file shapes.
-- [ ] All tests green; clippy on three targets.
+Done 2026-09-05. Notes: the engine keeps `serde` for `Macro`/`WordOverride` until phase 3; `Session::set_macros` and `set_word_overrides` were added so the adapter can rebuild a session without the removed `from_settings`; three engine/ladder tests that asserted through `Settings` now assert through the exclusion list and the adapter's own round-trip test.
+- [x] `grep -r "Settings\|Language\|macos_keycode\|windows_vk\|open_settings_at_launch\|welcome_shown" crates/glowkey-engine/src` is empty.
+- [x] `cargo build -p glowkey-engine --no-default-features` succeeds.
+- [x] Fixture round-trip test passes on both saved-file shapes.
+- [x] All tests green; clippy on three targets.
 
 ## Risk Assessment
 - The Windows `merge_settings` and the macOS `TapState` both touch `Settings`

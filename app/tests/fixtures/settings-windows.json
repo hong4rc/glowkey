@@ -1,0 +1,19 @@
+{
+  "exclusions": ["cmd.exe", "code.exe", "windowsterminal.exe"],
+  "removed_default_exclusions": [],
+  "auto_fix": true,
+  "style": "Old",
+  "input_method": "Telex",
+  "auto_capitalize": false,
+  "toggle_hotkey": "CtrlShiftSpace",
+  "macros": [],
+  "restore_english_words": false,
+  "open_settings_at_launch": true,
+  "language": "System",
+  "quick_telex": false,
+  "telex_brackets": false,
+  "strict_spell_check": false,
+  "always_macro": false,
+  "welcome_shown": false,
+  "word_overrides": []
+}

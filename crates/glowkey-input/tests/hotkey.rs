@@ -1,8 +1,7 @@
 //! Hotkey matching and recording, off any operating system.
 
-use glowkey_engine::HotkeyPreset;
 use glowkey_input::hotkey::{capture, is_app_toggle, is_correction, resolve, HotkeyCapture};
-use glowkey_input::{Key, KeyEvent, Modifiers};
+use glowkey_input::{HotkeyPreset, Key, KeyEvent, Modifiers};
 
 fn mods(control: bool, shift: bool, option: bool, command: bool) -> Modifiers {
     Modifiers {
@@ -69,8 +68,7 @@ fn a_recorded_custom_hotkey_matches_the_code_the_platform_recorded() {
         shift: false,
         option: true,
         key_char: 'K',
-        macos_keycode: Some(40),
-        windows_vk: None,
+        raw_code: Some(40),
     };
     let hotkey = resolve(preset, Some(40));
     assert!(!hotkey.is_char_fallback());
@@ -91,8 +89,7 @@ fn a_hotkey_recorded_elsewhere_falls_back_to_the_display_character() {
         shift: false,
         option: true,
         key_char: 'K',
-        macos_keycode: Some(40),
-        windows_vk: None,
+        raw_code: Some(40),
     };
     let hotkey = resolve(preset, None);
     assert!(
@@ -112,8 +109,7 @@ fn a_space_hotkey_recorded_elsewhere_still_matches_space() {
         shift: false,
         option: true,
         key_char: ' ',
-        macos_keycode: Some(49),
-        windows_vk: None,
+        raw_code: Some(49),
     };
     let hotkey = resolve(preset, None);
     assert!(hotkey.matches(&space(mods(true, false, true, false))));

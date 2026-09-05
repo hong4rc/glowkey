@@ -31,8 +31,8 @@
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::prefs_model::Settings;
 use eframe::egui;
-use glowkey_engine::Settings;
 
 use super::about_ui;
 use super::settings_ui::{self, SettingsApp};

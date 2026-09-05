@@ -13,7 +13,9 @@
 
 use std::sync::atomic::Ordering;
 
-use glowkey_engine::HotkeyPreset;
+use glowkey_input::HotkeyPreset;
+
+use crate::prefs_model::Language;
 
 use super::{TapState, DISABLED};
 
@@ -117,16 +119,16 @@ impl TapState {
 
     /// Whether the Settings window should open on launch.
     pub fn open_settings_at_launch(&self) -> bool {
-        self.session
+        self.prefs
             .try_borrow()
-            .map(|s| s.open_settings_at_launch())
+            .map(|p| p.open_settings_at_launch)
             .unwrap_or(true)
     }
 
     /// Sets the "open Settings on launch" preference and saves.
     pub fn set_open_settings_at_launch_and_save(&self, on: bool) {
-        if let Ok(mut session) = self.session.try_borrow_mut() {
-            session.set_open_settings_at_launch(on);
+        if let Ok(mut prefs) = self.prefs.try_borrow_mut() {
+            prefs.open_settings_at_launch = on;
         }
         self.save_settings();
     }
@@ -149,16 +151,16 @@ impl TapState {
 
     /// The current toggle-hotkey preset. Drives the Settings control.
     pub fn toggle_hotkey(&self) -> HotkeyPreset {
-        self.session
+        self.prefs
             .try_borrow()
-            .map(|s| s.toggle_hotkey())
+            .map(|p| p.toggle_hotkey)
             .unwrap_or(HotkeyPreset::CtrlShiftSpace)
     }
 
     /// Sets the toggle-hotkey preset and saves.
     pub fn set_toggle_hotkey_and_save(&self, preset: HotkeyPreset) {
-        if let Ok(mut session) = self.session.try_borrow_mut() {
-            session.set_toggle_hotkey(preset);
+        if let Ok(mut prefs) = self.prefs.try_borrow_mut() {
+            prefs.toggle_hotkey = preset;
         }
         self.save_settings();
     }
@@ -191,17 +193,17 @@ impl TapState {
     }
 
     /// The user-interface language preference, for the Settings picker.
-    pub fn language(&self) -> glowkey_engine::Language {
-        self.session
+    pub fn language(&self) -> Language {
+        self.prefs
             .try_borrow()
-            .map(|s| s.language())
+            .map(|p| p.language)
             .unwrap_or_default()
     }
 
     /// Sets the interface language, applies it to the live string table, and saves.
-    pub fn set_language_and_save(&self, language: glowkey_engine::Language) {
-        if let Ok(mut session) = self.session.try_borrow_mut() {
-            session.set_language(language);
+    pub fn set_language_and_save(&self, language: Language) {
+        if let Ok(mut prefs) = self.prefs.try_borrow_mut() {
+            prefs.language = language;
         }
         crate::strings::set_language(language);
         self.save_settings();

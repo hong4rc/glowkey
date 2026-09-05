@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Gates, docs, branch and merge"
-status: pending
+status: completed
 priority: P2
 effort: "1h"
 dependencies: [1, 2]
@@ -76,14 +76,24 @@ Docs to touch, and only these:
 
 ## Success Criteria
 
-- [ ] All six gates green on the final tree.
-- [ ] `docs/handoff.md` §11 item 3 closed, item 1 rewritten with phase 1's
+- [x] All six gates green on the final tree.
+- [x] `docs/handoff.md` §11 item 3 closed, item 1 rewritten with phase 1's
       additions, item 2 pointing at the report.
-- [ ] Tier 5 boxes in `docs/manual-verification-windows.md` reflect the run.
-- [ ] Feature branch fast-forwarded into `main` and pushed; history linear.
-- [ ] Journal entry written.
-- [ ] No plan ID, phase number or audit label appears in a commit message, code
+- [x] Tier 5 boxes in `docs/manual-verification-windows.md` reflect the run.
+- [x] Feature branch fast-forwarded into `main` and pushed; history linear.
+- [x] Journal entry written.
+- [x] No plan ID, phase number or audit label appears in a commit message, code
       comment or test name.
+
+## Outcome
+
+Done. `windows-tier5-verification` fast-forwarded into `main` at `f82e557`
+and pushed — `origin/main` had not moved, so no rebase was needed. One
+unplanned fix folded in: `cargo fmt --all -- --check` (not one of the six §11
+gates, but caught along the way) found a trailing blank line phase 1 had left
+in `app/src/prefs/tabs.rs`; fixed in its own commit before the gate run.
+`docs/decisions/0010` and `0012` were read and needed no change — neither
+`ListId::unit` nor anything phase 2 found contradicts a sentence in either.
 
 ## Risk Assessment
 

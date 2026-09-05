@@ -1,7 +1,7 @@
 ---
 title: "macOS renderer parity, and the Windows desktop checks nobody has run"
 description: "Port the three Windows settings-polish items to the AppKit renderer with the shared spec still the single source, then run the Windows Tier 5 desktop checks on this machine and fix what they find."
-status: pending
+status: completed
 priority: P2
 effort: "0.5-1 day"
 tags: [glowkey, macos, windows, ui, settings, verification]
@@ -51,9 +51,9 @@ for a string that already exists in the product.
 
 | # | Phase | Status | Depends on |
 |---|-------|--------|------------|
-| 1 | [macOS renderer parity](./phase-01-start.md) | pending | — |
-| 2 | [Windows Tier 5 desktop checks](./phase-02-windows-tier5-desktop-checks.md) | pending | — |
-| 3 | [Gates, docs, branch and merge](./phase-03-gates-docs-and-merge.md) | pending | 1, 2 |
+| 1 | [macOS renderer parity](./phase-01-start.md) | completed | — |
+| 2 | [Windows Tier 5 desktop checks](./phase-02-windows-tier5-desktop-checks.md) | completed | — |
+| 3 | [Gates, docs, branch and merge](./phase-03-gates-docs-and-merge.md) | completed | 1, 2 |
 
 Phases 1 and 2 are independent: phase 1 touches `app/src/prefs/tabs.rs`,
 `app/src/settings_spec.rs` and `app/src/platform/windows/settings_ui.rs`; phase

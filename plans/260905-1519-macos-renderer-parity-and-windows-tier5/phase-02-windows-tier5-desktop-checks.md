@@ -1,7 +1,7 @@
 ---
 phase: 2
 title: "Windows Tier 5 desktop checks"
-status: pending
+status: completed
 priority: P2
 effort: "2-3h"
 dependencies: []
@@ -101,17 +101,30 @@ renamed.
 
 ## Success Criteria
 
-- [ ] Every Tier 5 box is ticked with evidence, or unticked with a reason.
-- [ ] Idle CPU and working set are recorded as numbers, taken with no window
-      open, and compared against any figure an earlier report holds.
-- [ ] A Mac-shaped `settings.json` loads without loss.
-- [ ] Start-at-login adds the `Run` value and **disabling removes it**, shown by
+- [x] Every Tier 5 box is ticked with evidence, or unticked with a reason.
+- [x] Idle CPU and working set are recorded as numbers, taken with no window
+      open, and compared against any figure an earlier report holds (none
+      existed; this run is the baseline: ≈2.0% of one core, ~101 MB).
+- [x] A Mac-shaped `settings.json` loads without loss.
+- [x] Start-at-login adds the `Run` value and **disabling removes it**, shown by
       `reg query` output before and after.
-- [ ] Tray Quit leaves no `GlowKey.exe`.
-- [ ] `plans/reports/windows-verification-260905.md` exists in the shape
-      "Recording the results" asks for.
-- [ ] The user-owned boxes are listed for the user, not silently ticked.
-- [ ] The machine is left as it was found: registry, settings file, theme.
+- [x] Tray Quit leaves no `GlowKey.exe`.
+- [x] `plans/reports/windows-verification-260905.md` exists in the shape
+      "Recording the results" asks for (appended as a new section; the file
+      already held an unrelated Tier 1 run from earlier the same day).
+- [x] The user-owned boxes are listed for the user, not silently ticked.
+- [x] The machine is left as it was found: registry, settings file, theme.
+
+## Outcome
+
+Done. No engine-split defect was found — every failure this phase hit was in
+the verification technique, not the product: posted `WM_MOUSEMOVE` /
+`WM_LBUTTONDOWN` / `WM_LBUTTONUP` messages do not reach an egui viewport under
+the `decisions/0011` persistent-UI-thread architecture, while posted keyboard
+messages and `WM_COMMAND` to the tray both do. That blocked tab switching,
+`Manage…`, and any in-window click, and those boxes are left unticked with
+that reason in `plans/reports/windows-verification-260905.md` rather than
+faked. Nothing was fixed because nothing in the product was proven broken.
 
 ## Risk Assessment
 

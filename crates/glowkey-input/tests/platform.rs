@@ -282,6 +282,13 @@ fn a_redacted_decision_carries_no_typed_text() {
             redacted.contains("bs=2"),
             "the parts that make a log useful are gone too: {redacted}"
         );
+        // Counted in UTF-16 code units, the unit `bs=` is in — `hồng` is four
+        // of them and seven bytes. A line that mixes the two is read while
+        // chasing an off-by-one, which is the worst moment to mislead.
+        assert!(
+            redacted.contains("ins=4u"),
+            "the insert length is not in code units: {redacted}"
+        );
         // And the verbose rendering still has it, or turning the setting on
         // would buy the user nothing.
         assert!(decision.to_string().contains("hồng"));

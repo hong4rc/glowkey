@@ -194,15 +194,26 @@ impl fmt::Display for Redacted<'_> {
             Decision::Passthrough => f.write_str("Passthrough"),
             Decision::Consume => f.write_str("Consume"),
             Decision::ToggleApp => f.write_str("ToggleApp"),
+            // `insert` is counted in UTF-16 code units, the same unit
+            // `backspaces` is in, so the two halves of a diff can be compared
+            // against each other and against the render. `String::len()` would
+            // be bytes — `ồng` is 3 units and 5 bytes — and a log line that
+            // silently mixes units is worse than one that omits the number,
+            // because it is read while chasing an off-by-one.
             Decision::Emit(r) => {
-                write!(f, "Emit bs={} ins={}u", r.backspaces, r.insert.len())
+                write!(
+                    f,
+                    "Emit bs={} ins={}u",
+                    r.backspaces,
+                    r.insert.encode_utf16().count()
+                )
             }
             Decision::EmitThenReplayKey(r) => {
                 write!(
                     f,
                     "EmitThenReplayKey bs={} ins={}u",
                     r.backspaces,
-                    r.insert.len()
+                    r.insert.encode_utf16().count()
                 )
             }
         }

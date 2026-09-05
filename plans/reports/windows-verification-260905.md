@@ -223,6 +223,40 @@ Do not read the table above as more than it is.
   the 10 ms threshold in this short run. That is encouraging and not a measurement.
 - **Nothing about long-running behaviour.** Every run here was under ten seconds.
 
+## Later the same day — what the user found
+
+Testing by the person who owns the machine, after the fixes above landed. This
+is the half no harness produced.
+
+**The Chromium omnibox fix works.** `hoongf` → `hồng` in Edge's address bar,
+confirmed by the user. That closes the Phase 6 question the plan had listed as
+open ("does the trailing-selection defect reproduce on Windows?"): it did, and
+the forward-delete guard fixes it.
+
+**The tray glyph was invisible.** Hardcoded near-white with a comment reading
+"for a dark taskbar", on a machine whose taskbar is light. Reported as "vi may
+be easy, but en is something wrong, cannot see that" — and the reason `VI`
+looked fine is that the excluded state is grey, which happens to show on both.
+
+**The settings window rendered black on a light system**, Done button included.
+Two causes, one fixed (eframe's `clear_color` is a hardcoded near-black that
+ignores the theme, and the unfilled chrome panels showed it) and one open (the
+theme still resolves to Dark despite `AppsUseLightTheme = 1`). A diagnostic line
+is in place and has not been read.
+
+**`hồngu` "does not auto revert"** turned out to be correct behaviour: auto-fix
+fires at the word boundary, and the log showed `Ctrl+A`/`Ctrl+C` where a space
+would have been. Now pinned by a test so the answer lives in the suite.
+
+**League of Legends is the open question.** GlowKey is unusable there while
+EVKey is fine. The log rules out the obvious causes — `Reach::Ok`, zero injection
+refusals — and leaves two candidates that need one test to separate. Full
+reasoning in `windows-handoff-260905.md`; the short version is that a lone `w`
+becomes `ư`, so the ability key never fires, *or* Vanguard drops injected input
+and nothing works at all. **Do not build a fix before running the test**, and do
+not ship games in the default exclusion list: the user types Vietnamese in game
+chat and excluding games would take that away.
+
 ## Next, in order
 
 1. **Re-run Tier 1 with EVKey stopped.** Until then every result here carries the

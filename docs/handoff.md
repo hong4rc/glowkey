@@ -360,7 +360,22 @@ Code, Electron apps, elevated windows, dead-key layouts, AltGr, two layouts at
 once, long-running behaviour, idle cost. Hotkey *recording* is not implemented.
 Full list in `plans/reports/windows-verification-260905.md`.
 
-**Two things a new session should know.**
+**Start here:** `plans/reports/windows-handoff-260905.md` is the current state,
+the open defects and the open questions, written for a session picking this up
+cold. What follows is the short version.
+
+**Two open defects.** The settings window renders dark on a light-themed machine
+(one of the two causes is fixed, the other is not — a diagnostic log line is in
+place and unread), and it can only be opened once per process because winit
+permits one event loop.
+
+**The open question that matters most.** GlowKey is unusable in League of Legends
+while EVKey is fine. The log rules out elevation and Vanguard-refusing-injection
+(`Reach::Ok`, zero refusals). Two candidates remain — a lone `w` becoming `ư`, or
+Vanguard dropping injected input — and one test separates them. See the handoff
+report; **do not build the `w` option before running it.**
+
+**Three things a new session should know.**
 
 1. `SetWindowsHookExW` with a null `hmod` **installs successfully and never calls
    the callback.** It cost several debugging rounds. `HOOK first callback
@@ -368,6 +383,9 @@ Full list in `plans/reports/windows-verification-260905.md`.
 2. The verification machine had **EVKey running**, which transformed text while
    GlowKey was excluded and made the results look inconsistent until it was
    noticed. Stop other input methods before measuring anything.
+3. **Do not send synthetic keystrokes into the user's live session** — the
+   harnesses steal focus and type. Ask first, or use
+   `scripts/verify-windows-isolated.ps1` (written, not yet verified).
 
 Windows-specific decisions: `docs/decisions/0009-windows-low-level-hook.md`.
 Checklist: `docs/manual-verification-windows.md`.

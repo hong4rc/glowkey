@@ -140,6 +140,27 @@ const EXCLUDED_SIZE: [f32; 2] = [372.0, 320.0];
 const MACROS_SIZE: [f32; 2] = [396.0, 340.0];
 const WORDS_SIZE: [f32; 2] = [396.0, 340.0];
 
+/// The surface the tab strip and the button bar sit on.
+///
+/// Painted rather than left transparent. An unfilled panel shows whatever the
+/// clear colour is, which is how the tab strip and the button bar stayed black
+/// while the content between them was themed — the two halves of the same window
+/// disagreeing about what colour it was.
+///
+/// A shade off the content fill, with a hairline against it, so the chrome reads
+/// as chrome. Both values come from the active visuals, so this follows the
+/// light/dark switch instead of pinning a colour that is right in one theme only
+/// — the token-driven rule, applied to the one place that was breaking it.
+fn chrome_frame(ctx: &egui::Context) -> egui::Frame {
+    let visuals = &ctx.style().visuals;
+    egui::Frame::none()
+        .fill(visuals.panel_fill)
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            visuals.widgets.noninteractive.bg_stroke.color,
+        ))
+}
+
 /// Loads the system UI font into egui.
 ///
 /// Not cosmetic: **egui's bundled proportional font has no Vietnamese glyphs.**
@@ -234,9 +255,20 @@ fn apply_style(ctx: &egui::Context) {
 /// open, and a registry read on a repaint costs nothing. Nothing on the hook's
 /// path calls this.
 fn apply_theme(ctx: &egui::Context) {
-    ctx.set_theme(theme_preference(
-        crate::platform::windows::theme::apps_are_light(),
-    ));
+    let light = crate::platform::windows::theme::apps_are_light();
+    // Once per window, not per frame: this runs every frame and a line per frame
+    // is not a diagnostic, it is a way of hiding one.
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            crate::log::log(&format!(
+                "SETTINGS theme: apps_are_light={light} -> {}",
+                if light { "Light" } else { "Dark" }
+            ));
+        }
+    }
+    ctx.set_theme(theme_preference(light));
 }
 
 /// The mapping itself, separated from the registry so it can be asserted.
@@ -534,6 +566,40 @@ impl SettingsApp {
                  GlowKey vẫn chạy dưới khay hệ thống.",
             )),
         );
+
+        group_gap(ui);
+
+        // Start at login.
+        //
+        // Not a duplicate of the tray item: the macOS window carries this too
+        // (`prefs/mod.rs`) *and* keeps it in the menu bar (`menu_bar.rs`), which
+        // is the shape being matched. It also has nowhere else to live — it is
+        // registry state rather than a field of `Settings`, so it cannot ride
+        // along with the rest of the draft.
+        //
+        // Read fresh every frame rather than mirrored into a bool, so the
+        // checkbox cannot drift out of step with the tray item toggling the same
+        // thing. A registry read on a repaint of an open window is nowhere near
+        // the keystroke path.
+        let mut at_login = crate::platform::windows::startup::is_enabled();
+        let was = at_login;
+        checkbox_row(
+            ui,
+            &mut at_login,
+            t("Start at login", "Khởi động cùng máy"),
+            Some(t(
+                "Adds GlowKey to this account's startup programs. Turning it off \
+                 removes the entry rather than leaving a disabled one behind.",
+                "Thêm GlowKey vào danh sách khởi động của tài khoản này. Khi tắt, mục \
+                 khởi động được xoá hẳn chứ không để lại mục vô hiệu.",
+            )),
+        );
+        if at_login != was && !crate::platform::windows::startup::set_enabled(at_login) {
+            // The write failed, so the checkbox must not go on claiming it
+            // worked. Nothing is stored here, so the next frame re-reads the
+            // registry and shows the truth.
+            crate::log::log("SETTINGS could not change the startup entry");
+        }
     }
 
     /// Typing: how keys become Vietnamese.
@@ -1111,7 +1177,7 @@ impl SettingsApp {
         }
 
         egui::TopBottomPanel::top("glowkey_settings_tabs")
-            .frame(egui::Frame::none().inner_margin(egui::Margin {
+            .frame(chrome_frame(ctx).inner_margin(egui::Margin {
                 left: 10.0,
                 right: 10.0,
                 top: 8.0,
@@ -1129,7 +1195,7 @@ impl SettingsApp {
             });
 
         egui::TopBottomPanel::bottom("glowkey_settings_bottom")
-            .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 10.0)))
+            .frame(chrome_frame(ctx).inner_margin(egui::Margin::symmetric(16.0, 10.0)))
             .show(ctx, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button(t("Done", "Xong")).clicked() {
@@ -1161,6 +1227,17 @@ impl SettingsApp {
 impl eframe::App for SettingsApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.ui(ctx);
+    }
+
+    /// The colour behind everything.
+    ///
+    /// **eframe's default ignores the theme.** It returns a hardcoded
+    /// `rgba(12, 12, 12, 180)` — near-black — whatever the visuals say, and every
+    /// panel that does not paint its own background shows it. That is how a
+    /// window whose theme had already been corrected still came up black: the
+    /// theme was right and the surface underneath it was not.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.window_fill().to_normalized_gamma_f32()
     }
 }
 

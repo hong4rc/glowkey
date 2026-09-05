@@ -77,6 +77,11 @@ fn claim_named(name: &str) -> Option<InstanceGuard> {
     // there. The handle is still valid and still ours to close either way.
     let existed = unsafe { windows_sys::Win32::Foundation::GetLastError() } == ERROR_ALREADY_EXISTS;
     if existed {
+        // Logged, not silent. Exiting without a word is indistinguishable from a
+        // crash at startup, and the name is claimable by any process in the
+        // session — so "GlowKey will not start" and "something is holding the
+        // name" need to be told apart from the log alone.
+        crate::log::log("STARTUP another instance holds the single-instance claim — exiting");
         // SAFETY: created above; released because we are about to give up.
         unsafe { CloseHandle(handle) };
         return None;

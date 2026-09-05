@@ -433,11 +433,15 @@ impl Session {
         &self.macros
     }
 
-    /// Adds or replaces a macro by shortcut (case-insensitive). Empty shortcut is
-    /// ignored. Returns false if it was ignored.
+    /// Adds or replaces a macro by shortcut (case-insensitive).
+    ///
+    /// Returns false if the pair was refused — see
+    /// [`macros::is_storable`](crate::macros::is_storable) for the rule, which is
+    /// the same one the table parser applies, so a table that imports cannot
+    /// contain a pair this would reject.
     pub fn add_macro(&mut self, shortcut: &str, expansion: &str) -> bool {
         let shortcut = shortcut.trim();
-        if shortcut.is_empty() {
+        if !crate::macros::is_storable(shortcut, expansion) {
             return false;
         }
         self.macros

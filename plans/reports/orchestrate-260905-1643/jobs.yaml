@@ -1,0 +1,61 @@
+version: 1
+concurrency: 6
+run: orchestrate-260905-1643
+base_ref: main
+notes: >
+  All stage-1 jobs are read-only analysis over a clean tree. No worktrees:
+  nothing writes to the repository. The coordinator owns the only writes
+  (this run directory and, after the arbiter pass, the plan).
+jobs:
+  - id: blame-user
+    runtime: internal
+    agent: code-reviewer
+    task: review
+    importance: high
+    cwd: D:/project/github/glowkey
+    timeout: 20m
+    expected_output: A hostile-user critique naming concrete bad things with file evidence.
+  - id: arch-refactor
+    runtime: internal
+    agent: code-reviewer
+    task: review
+    cwd: D:/project/github/glowkey
+    timeout: 20m
+    expected_output: Architecture and refactor findings with paths, sizes and seams.
+  - id: crossplat
+    runtime: internal
+    agent: planner
+    task: plan
+    cwd: D:/project/github/glowkey
+    timeout: 25m
+    expected_output: Windows completion + Linux port design and phased work list.
+  - id: production
+    runtime: internal
+    agent: researcher
+    task: review
+    cwd: D:/project/github/glowkey
+    timeout: 25m
+    expected_output: Production-readiness gap list across signing, release, updates, crash, privacy.
+  - id: ui-polish
+    runtime: internal
+    agent: ui-ux-designer
+    task: review
+    cwd: D:/project/github/glowkey
+    timeout: 20m
+    expected_output: UI polish findings for both renderers, tied to settings_spec rows.
+  - id: security-cve
+    runtime: internal
+    agent: general-purpose
+    task: security
+    importance: high
+    cwd: D:/project/github/glowkey
+    timeout: 25m
+    expected_output: Advisory findings per Cargo.lock crate plus unsafe-code review.
+  - id: arbiter
+    runtime: internal
+    agent: kongming
+    task: review
+    depends_on: [blame-user, arch-refactor, crossplat, production, ui-polish, security-cve]
+    cwd: D:/project/github/glowkey
+    timeout: 25m
+    expected_output: Verdict per job, contradictions, unsupported claims, ranked backlog.

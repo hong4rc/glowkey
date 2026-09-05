@@ -403,6 +403,9 @@ fn tap_dispatch(
 /// Creates the event tap and runs the main loop. Returns without running if the
 /// Accessibility permission is missing (the tap cannot be created).
 pub fn run() {
+    // First, so that anything below which panics says so somewhere readable.
+    crate::log::install_panic_hook();
+
     // Settings are loaded before the permission gate because the gate's alert is
     // the first thing the user sees, and it has to speak their language too.
     let settings = crate::settings_store::load();

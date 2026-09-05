@@ -1,0 +1,33 @@
+# `cargo audit` configuration.
+#
+# The point of running it is to catch the NEXT advisory. Both entries below are
+# "unmaintained" notices rather than vulnerabilities — `cargo audit` reports zero
+# vulnerabilities across the tree — and neither has an action available, so
+# ignoring them is what keeps the job's failure meaningful. Each says why, and
+# each should be re-examined when the dependency that pulls it in moves.
+
+[advisories]
+ignore = [
+  # ttf-parser 0.25.1 — unmaintained (no CVE, no fix).
+  #
+  # Windows only, and only the settings window: it arrives through
+  # ab_glyph -> epaint -> egui -> eframe. It is not in the macOS build at all and
+  # is not on any keystroke path.
+  #
+  # It parses the two system fonts named in `platform/windows/settings_ui.rs`
+  # and the fonts egui compiles in. There is no code path that hands it a
+  # user-supplied file, and it is `#![forbid(unsafe_code)]`.
+  #
+  # There is nothing to upgrade to: 0.25.1 is the latest release and current
+  # egui still depends on it. RustSec suggests `skrifa`, which is an egui
+  # decision, not ours. Revisit when eframe changes its font stack.
+  "RUSTSEC-2026-0192",
+
+  # paste 1.0.15 — unmaintained (no CVE, no fix).
+  #
+  # Not compiled. It is a lock-file entry only, reachable solely behind a wgpu
+  # `metal` feature that `eframe = { default-features = false }` excludes —
+  # `cargo tree -i paste --target all -e normal,build,dev` prints nothing.
+  # Revisit if the eframe backend configuration changes.
+  "RUSTSEC-2024-0436",
+]

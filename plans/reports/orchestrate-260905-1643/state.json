@@ -1,0 +1,44 @@
+{
+  "run": "orchestrate-260905-1643",
+  "started": "2026-09-05T16:43+07:00",
+  "baseRef": "main",
+  "runtimes": {
+    "probed": [
+      "codex",
+      "gemini",
+      "cursor-agent",
+      "opencode",
+      "amp",
+      "droid",
+      "qwen",
+      "crush",
+      "aider"
+    ],
+    "available": [
+      "gemini 0.21.3 (auth unverified, unused)"
+    ],
+    "selected": "internal (in-session subagents) for every job"
+  },
+  "stage1": {
+    "blame-user": "success",
+    "arch-refactor": "success",
+    "crossplat": "success",
+    "production": "success",
+    "ui-polish": "success",
+    "security-cve": "success"
+  },
+  "stage2": {
+    "arbiter": "success"
+  },
+  "finished": "2026-09-05T18:10+07:00",
+  "plan": "plans/260905-1643-glowkey-production-hardening/",
+  "implemented": "phase 1 (safety fixes) applied on main, uncommitted",
+  "gates": {
+    "cargo test --workspace": "22 targets green",
+    "cargo clippy --workspace --all-targets -D warnings": "clean",
+    "cargo clippy --target aarch64-apple-darwin -p glowkey": "clean",
+    "cargo audit --deny warnings": "clean",
+    "cargo doc RUSTDOCFLAGS=-D warnings": "clean",
+    "cargo check --target x86_64-unknown-linux-gnu (libs)": "clean"
+  }
+}

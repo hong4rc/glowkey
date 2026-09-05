@@ -14,6 +14,46 @@ pub struct Macro {
     pub expansion: String,
 }
 
+/// The longest expansion a macro may carry, in characters.
+///
+/// Gõ tắt expands an abbreviation into a phrase; the longest real entries in
+/// shipped UniKey and EVKey tables are a sentence. The cap exists because the
+/// expansion is inserted a character at a time on the keystroke path and an
+/// imported table is the one file GlowKey reads that it did not write — a
+/// downloaded table with a megabyte on one line would otherwise be accepted and
+/// then typed.
+pub const MAX_EXPANSION_CHARS: usize = 4096;
+
+/// Whether a shortcut and expansion may be stored as a macro.
+///
+/// One rule, used by every path that can introduce one — typed into the Macros
+/// window, parsed from a table, or merged by an import — because they had drifted
+/// apart and disagreed about the same table.
+///
+/// Rejects:
+/// - an empty shortcut, which nothing could ever type;
+/// - a shortcut containing whitespace: it is matched against the keys typed
+///   before a boundary, and a boundary is where matching stops;
+/// - **control characters** in either field. This is the untrusted-input rule.
+///   An expansion is inserted as text, never as key codes, so a control
+///   character cannot press Enter or Ctrl — but a carriage return or a NUL in
+///   the middle of one still corrupts the list on screen and the table on the
+///   way back out, and no real gõ tắt entry contains one;
+/// - an expansion longer than [`MAX_EXPANSION_CHARS`].
+///
+/// An **empty expansion** is *not* rejected here. The line format cannot carry
+/// one and skips it, while the JSON fallback round-trips it deliberately; which
+/// of those is right is a product question, and answering it silently in a
+/// validator would change what an existing settings file means.
+#[must_use]
+pub fn is_storable(shortcut: &str, expansion: &str) -> bool {
+    !shortcut.is_empty()
+        && !shortcut.chars().any(char::is_whitespace)
+        && !shortcut.chars().any(char::is_control)
+        && !expansion.chars().any(char::is_control)
+        && expansion.chars().count() <= MAX_EXPANSION_CHARS
+}
+
 /// What an import should do when a shortcut it carries already exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacroConflict {
@@ -97,7 +137,7 @@ impl Macro {
                 // First colon only, so an expansion may contain one.
                 let (shortcut, expansion) = line.split_once(':')?;
                 let shortcut = shortcut.trim();
-                (!shortcut.is_empty() && !expansion.is_empty()).then(|| Self {
+                (!expansion.is_empty() && is_storable(shortcut, expansion)).then(|| Self {
                     shortcut: shortcut.to_string(),
                     expansion: expansion.to_string(),
                 })

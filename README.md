@@ -68,9 +68,11 @@ records the layering.
 
 Download the disk image from the [releases page](../../releases) and drag
 **GlowKey** to Applications. macOS will refuse to open it — *"GlowKey is damaged
-and can't be opened"* — because the app is signed but not notarized, which needs
-a paid Apple Developer account this project does not have. It is not damaged.
-Clear the quarantine flag once:
+and can't be opened"* — because the released build is **ad-hoc signed**: signed
+with no identity at all, which is not the same as signed-but-unnotarized and is
+the harsher of the two Gatekeeper paths. Notarizing needs a paid Apple Developer
+account this project does not have. It is not damaged. Clear the quarantine flag
+once:
 
 ```
 xattr -dr com.apple.quarantine /Applications/GlowKey.app

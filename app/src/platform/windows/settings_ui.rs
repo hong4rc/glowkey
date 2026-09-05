@@ -129,11 +129,14 @@ pub(super) fn window_icon() -> egui::IconData {
 /// window. Returns whether the proportional font was installed — which is
 /// exactly what the window's ability to draw Vietnamese depends on.
 pub(super) fn install_system_font(ctx: &egui::Context) -> bool {
-    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    // From the API rather than `%SystemRoot%`: an environment variable is
+    // inherited from whoever launched us and can name any directory, and this
+    // path is fed straight to a font parser.
+    let fonts_dir = super::paths::system_dir().join("Fonts");
     let mut fonts = egui::FontDefinitions::default();
 
     let mut load = |name: &str, file: &str, family: egui::FontFamily| {
-        let Ok(bytes) = std::fs::read(format!("{root}\\Fonts\\{file}")) else {
+        let Ok(bytes) = std::fs::read(fonts_dir.join(file)) else {
             return false;
         };
         fonts

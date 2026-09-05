@@ -145,7 +145,14 @@ pub fn reveal_log() {
     };
     // `explorer.exe` rather than ShellExecute, so this needs no COM
     // initialisation on a thread that is running a keyboard hook.
-    let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
+    //
+    // By absolute path. `Command` no longer searches the current directory, but
+    // it does still search the directory the executable came from, so a bare
+    // name would run an `explorer.exe` sitting beside `GlowKey.exe` — which is
+    // exactly what a zip extracted into Downloads can arrange.
+    let _ = std::process::Command::new(super::paths::system_dir().join("explorer.exe"))
+        .arg(dir)
+        .spawn();
 }
 
 /// Asks the UI thread for the settings window, on a snapshot of the session.

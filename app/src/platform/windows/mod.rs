@@ -79,6 +79,12 @@ pub fn run() {
     // installed every log call has to be non-blocking.
     hook_log::start();
 
+    // Then the panic hook, which needs somewhere to write. Under
+    // `windows_subsystem = "windows"` the default hook writes to a stderr that
+    // does not exist, so without this a panic outside the hook callback leaves
+    // no trace at all.
+    crate::log::install_panic_hook();
+
     hook::set_state(&settings);
 
     // The one eframe event loop, on its own thread, for the life of the process

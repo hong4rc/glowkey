@@ -5,7 +5,8 @@
 //! launched with a scrubbed environment. `SHGetKnownFolderPath` is the system's
 //! own answer to the same question and is right in all of those cases.
 
-use windows_sys::Win32::Foundation::S_OK;
+use windows_sys::Win32::Foundation::{MAX_PATH, S_OK};
+use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
     FOLDERID_LocalAppData, FOLDERID_RoamingAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
@@ -33,6 +34,27 @@ pub fn log_dir() -> Option<PathBuf> {
         p.push("Logs");
         p
     })
+}
+
+/// The Windows directory — `C:\\Windows` on almost every machine, and asked of
+/// the system rather than read from `%SystemRoot%`.
+///
+/// Two callers need it and both feed it somewhere that matters: the path
+/// `explorer.exe` is launched from, and the directory a font parser is pointed
+/// at. An environment variable is inherited from whoever started the process and
+/// can name anything; this cannot.
+///
+/// Falls back to `C:\\Windows` if the call fails, which is better than refusing
+/// to show the log folder over it.
+pub fn system_dir() -> PathBuf {
+    let mut buf = [0u16; MAX_PATH as usize];
+    // SAFETY: writes at most `buf.len()` units into `buf` and returns the count
+    // written, excluding the terminator. Zero means it failed.
+    let len = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    if len == 0 || len > buf.len() {
+        return PathBuf::from("C:\\Windows");
+    }
+    PathBuf::from(String::from_utf16_lossy(&buf[..len]))
 }
 
 /// One known folder, as a path.
@@ -73,5 +95,15 @@ mod tests {
         assert!(logs.is_absolute());
         assert_ne!(settings, logs);
         assert!(logs.ends_with("Logs"));
+    }
+
+    /// The Windows directory resolves to a real absolute path holding the two
+    /// things the callers want from it.
+    #[test]
+    fn the_system_directory_resolves() {
+        let root = system_dir();
+        assert!(root.is_absolute());
+        assert!(root.join("explorer.exe").exists());
+        assert!(root.join("Fonts").is_dir());
     }
 }

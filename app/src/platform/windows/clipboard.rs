@@ -14,7 +14,9 @@ use windows_sys::Win32::Foundation::{GlobalFree, HANDLE, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows_sys::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 
 /// Rewrites the clipboard's text through `transform`.
@@ -94,10 +96,21 @@ fn read_text() -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    // SAFETY: CF_UNICODETEXT is documented NUL-terminated.
+    // The block belongs to whichever process last set the clipboard, so its
+    // NUL termination is that process's promise rather than a guarantee. Bound
+    // the scan by the allocation: a truncated or malformed CF_UNICODETEXT block
+    // would otherwise walk off the end of somebody else's memory, which is a
+    // crash or — worse, because it is silent — GlowKey's own heap read back out
+    // through the clipboard tools.
+    //
+    // SAFETY: `handle` is the clipboard's, locked above and not yet unlocked.
+    let capacity = unsafe { GlobalSize(handle) } / std::mem::size_of::<u16>();
+    // SAFETY: reads stay inside `capacity` units of the locked allocation. An
+    // unterminated block yields the whole thing rather than an error — the text
+    // is still text, and refusing it would lose a paste for a technicality.
     let len = unsafe {
         let mut len = 0;
-        while *ptr.add(len) != 0 {
+        while len < capacity && *ptr.add(len) != 0 {
             len += 1;
         }
         len

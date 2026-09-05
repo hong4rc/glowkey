@@ -131,6 +131,25 @@ fn rotate(open: &mut LogFile, current: &PathBuf, previous: &PathBuf) {
 /// Appends one line to the log (and echoes to stderr when `GLOWKEY_DEBUG` is set).
 /// Never panics; a logging failure is swallowed so it cannot disturb input.
 /// Under `cargo test` it does nothing — tests must not write the user's real log.
+/// Routes panics to the log file.
+///
+/// Both keystroke callbacks already catch their own panics, so this is for
+/// everything else — the UI thread, a timer, startup. Without it a panic on
+/// Windows is completely silent: `windows_subsystem = "windows"` means the
+/// default hook writes to a stderr that does not exist, so the app vanishes
+/// leaving nothing behind to read. On macOS it reaches a Console log nobody
+/// thinks to open. The log file is the one place a bug report already knows to
+/// look.
+///
+/// Called once, at the top of each shell's `run`.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log(&format!("PANIC {info}"));
+        previous(info);
+    }));
+}
+
 pub fn log(message: &str) {
     if cfg!(test) {
         return;

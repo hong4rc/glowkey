@@ -6,6 +6,24 @@ on:
   pull_request:
 
 jobs:
+  # Dependency advisories against the committed lock file.
+  #
+  # GlowKey sees every keystroke on the machine, so the cost of shipping a known
+  # vulnerable dependency is higher here than in most applications. The two
+  # "unmaintained" notices currently in the tree are ignored with written
+  # justifications in `.cargo/audit.toml` — neither is a vulnerability and
+  # neither has a fix available — which is what leaves this job free to fail on
+  # the next real one instead of being permanently red and ignored.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      # `--deny warnings` so an unmaintained crate that is NOT in audit.toml
+      # fails too. An advisory nobody looks at is the same as no advisory.
+      - run: cargo audit --deny warnings
+
   # Engine, session policy and input policy are platform-free: prove they build
   # and pass on Linux, which also guards against OS-specific code leaking in.
   #

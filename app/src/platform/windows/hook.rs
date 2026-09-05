@@ -180,8 +180,16 @@ pub fn wake_main_loop() {
 /// Whether the hook is currently installed.
 ///
 /// **Not proof that it is being called.** Windows can remove a slow hook without
-/// telling us, and this still reports `true` afterwards — which is why the
-/// indicator pairs it with a liveness check rather than trusting it alone.
+/// telling us, and this still reports `true` afterwards.
+///
+/// **There is no liveness check yet, and this is the whole of what the indicator
+/// has.** `HOOK` is cleared only by `uninstall`, so `Indicator::HookGone` is
+/// reachable only when GlowKey itself removed the hook — never in the case that
+/// actually matters, where Windows removed it. The symptom is that typing stops
+/// transforming while the tray keeps showing VI and nothing anywhere says why.
+/// macOS has `platform/macos/health.rs` for exactly this (`decisions/0007`);
+/// Windows has no equivalent. Do not read this comment as describing a guard
+/// that exists.
 #[must_use]
 pub fn is_installed() -> bool {
     HOOK.load(std::sync::atomic::Ordering::Relaxed) != 0

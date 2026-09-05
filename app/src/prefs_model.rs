@@ -119,9 +119,32 @@ impl Default for Settings {
 impl Settings {
     /// Parses settings from JSON, falling back to defaults on any error so a
     /// corrupt or partial file never stops the app.
+    ///
+    /// Test-only. The app loads through [`Settings::try_from_json`], because it
+    /// has to tell "the file was empty" from "the file was unreadable" — the
+    /// settings store moves an unreadable file aside rather than letting the
+    /// next save copy it over the backup. The tolerant form stays for the
+    /// tolerance tests themselves, which assert exactly that a malformed
+    /// document still yields usable defaults.
+    #[cfg(test)]
     #[must_use]
     pub fn from_json(json: &str) -> Self {
         serde_json::from_str(json).unwrap_or_default()
+    }
+
+    /// Parses settings, reporting why the file could not be read.
+    ///
+    /// The error is a `String` rather than `serde_json::Error` deliberately: the
+    /// caller only logs it, and keeping serde out of the signature keeps this
+    /// usable from the shells without pinning them to serde's version.
+    ///
+    /// # Errors
+    ///
+    /// Returns the parse failure when `json` is not a settings document. A
+    /// document that merely lacks fields is not an error — they take their
+    /// defaults, which is what lets an old file load in a new build.
+    pub fn try_from_json(json: &str) -> Result<Self, String> {
+        serde_json::from_str(json).map_err(|e| e.to_string())
     }
 
     /// Serializes to pretty JSON for the user-inspectable settings file.

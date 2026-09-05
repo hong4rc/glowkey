@@ -1753,8 +1753,8 @@ mod tests {
     #[test]
     fn the_window_icon_decodes() {
         let icon = window_icon();
-        assert_eq!((icon.width, icon.height), (64, 64));
-        assert_eq!(icon.rgba.len(), 64 * 64 * 4);
+        assert_eq!((icon.width, icon.height), (32, 32));
+        assert_eq!(icon.rgba.len(), 32 * 32 * 4);
     }
 
     /// One rect per option, and a click on a segment selects its option.

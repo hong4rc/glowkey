@@ -1,24 +1,31 @@
-# Regenerates app/Resources/AppIcon.ico from the vector master.
+# Regenerates app/Resources/AppIcon.ico and AppIcon.png from the vector master.
 #
 #   pwsh scripts/make-icon.ps1
 #
 # The Windows counterpart of scripts/make-icon.sh, and the same bargain: **the
-# generated .ico is committed**, so building GlowKey needs no image tooling.
+# generated files are committed**, so building GlowKey needs no image tooling.
 # Only run this when the artwork changes. It needs ImageMagick:
 #
 #   winget install ImageMagick.ImageMagick
 #
-# The sizes are the ones Windows actually asks for: 16 and 20 for the tray and
-# small list views, 24 and 32 for the title bar and Alt-Tab, 48 for large icons,
-# 64 for high-DPI Alt-Tab, and 256 for the extra-large Explorer view and the
-# installer. Each is rendered from the vector rather than resampled from a bigger
-# raster, so the 16px never turns into a smudge of the 256px.
+# The .ico sizes are the ones Windows actually asks for: 16 and 20 for the tray
+# and small list views, 24 and 32 for the title bar and Alt-Tab, 48 for large
+# icons, 64 for high-DPI Alt-Tab, and 256 for the extra-large Explorer view and
+# the installer. Each is rendered from the vector rather than resampled from a
+# bigger raster, so the 16px never turns into a smudge of the 256px.
+#
+# AppIcon.png is the egui window icon (Settings, About): a single raster that
+# Windows itself then shrinks for whatever the title bar needs — no multi-size
+# .ico support in that path (`WM_SETICON`, one `HICON`, `ICON_SMALL` only), so
+# rendering it any larger than the biggest small-icon size just makes GDI do
+# more of the shrinking, not less.
 
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
 $svg = 'GlowKey_Assets/app_icon.svg'
 $ico = 'app/Resources/AppIcon.ico'
+$windowIcon = 'app/Resources/AppIcon.png'
 $sizes = 16, 20, 24, 32, 48, 64, 256
 
 $magick = Get-Command magick -ErrorAction SilentlyContinue
@@ -60,6 +67,14 @@ try {
 
     $written = Get-Item $ico
     Write-Output ("Wrote {0} ({1:N0} bytes) with sizes: {2}" -f $ico, $written.Length, ($sizes -join ', '))
+
+    # 32px: the exact size the .ico ladder already renders, so this is a copy of
+    # a size proven to hold up, not a new render at a guessed resolution — and
+    # it covers ICON_SMALL up to 200% DPI (SM_CXSMICON tops out at 32) without
+    # asking GDI to shrink from anything bigger.
+    Copy-Item (Join-Path $tmp 'icon-32.png') $windowIcon -Force
+    $writtenPng = Get-Item $windowIcon
+    Write-Output ("Wrote {0} ({1:N0} bytes)" -f $windowIcon, $writtenPng.Length)
 }
 finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

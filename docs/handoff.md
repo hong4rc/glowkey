@@ -702,19 +702,36 @@ spec with the Windows UI thread (`0010`, `0011`) all landed today on `main`. Bot
 shells compile and their headless suites pass; the **macOS side of all of it is
 compile-checked only** and has not been run.
 
-1. **macOS runtime pass.** Build with `just dev`, then: the spec-rendered
-   Settings window (all four tabs, list editors, hotkey recording), ⌃⇧Space,
-   ⌃⇧E in Ghostty ("VI ⚠" HUD), and ⌃⇧W **with the Personal Words window
-   open** (the review found and fixed a blanked list there; nobody has watched
-   it work). Check the log reads `KEY` before `TOGGLE mode` now, as on Windows.
-2. **Windows desktop checks the user has not done yet**
-   (`manual-verification-windows.md` Tier 5): reopen Settings three times, About
-   with Esc and X, dark theme, ⌃⇧Space with About open, tray Quit leaves no
-   process. Never send synthetic keystrokes into the live session; use posted
-   window messages to GlowKey's own windows only.
-3. **macOS renderer parity, still unanswered by the user:** checkbox in the
-   control column, "N apps" count units, and the rhythm constants that the
-   Windows renderer got in plan `260905-1145`. Ask before doing.
+1. **macOS runtime pass — still not done; the 2026-09-05 session that reached
+   this list ran on Windows and used the Windows Tier 5 checks (below) as its
+   stand-in.** Build with `just dev`, then watch, in addition to the items
+   already listed: the spec-rendered Settings window (all four tabs, list
+   editors, hotkey recording), ⌃⇧Space, ⌃⇧E in Ghostty ("VI ⚠" HUD), and ⌃⇧W
+   **with the Personal Words window open** (the review found and fixed a
+   blanked list there; nobody has watched it work) — check the log reads `KEY`
+   before `TOGGLE mode` now, as on Windows — **and** the three things the
+   same session's macOS renderer parity work (item 3, now done) could only
+   compile-check: a checkbox is in the control column and its caption sits
+   under its title, not the box; the three count rows read `20 apps` /
+   `0 macros` / `0 words` (and the Vietnamese forms); row rhythm is 6 between a
+   control and its caption, 10 row to row, 18 before a section header.
+2. **Windows desktop checks — done, on this machine, 2026-09-05.** Idle CPU
+   and working set recorded, a Mac-shaped settings file confirmed to load,
+   start-at-login's add/remove round-tripped through the registry, Settings
+   and About opened/closed/reopened and stood side by side, the mode toggle
+   updated the indicator with About open, both themes captured, and tray Quit
+   left no process. Full results, and what a posted-mouse-message technique
+   could not drive (list-window `Manage…`, tab switching, an edit saved on a
+   third open), in `plans/reports/windows-verification-260905.md`. What is
+   left is what needs a real keypress or click into the live session — a short
+   list at the end of that report, including `Ctrl+Shift+Space` with About
+   open, the tray icon's own click, Tab/←/→ through the segmented controls,
+   and the clipboard tools.
+3. **macOS renderer parity — done, 2026-09-05.** Checkbox in the control
+   column, the count units, and the rhythm constants all match the Windows
+   renderer now, reading `ListId::unit()` from the shared spec. Verified by
+   `cargo clippy --target aarch64-apple-darwin` and the headless spec tests
+   only; the pixels are item 1 above.
 4. **Publishing.** `cargo publish --dry-run -p glowkey-engine` is green. The
    session and input crates cannot be packaged until the engine is on
    crates.io; `ci.yml` says where to add them. Before a first tag: drop

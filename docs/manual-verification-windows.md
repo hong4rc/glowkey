@@ -123,47 +123,64 @@ listed with what "wrong" looks like, because several fail quietly.
 
 ## Tier 5 — the shell
 
+Run 2026-09-05 against `main` at `c348714` (the engine-split commit); full
+results in `plans/reports/windows-verification-260905.md`.
+
 - [ ] Tray icon appears; all four states are reachable and visually distinct
-      (`VI`, dimmed `VI`, `EN`, `!`)
-- [ ] The two `!` causes read differently in the tooltip and menu
-- [ ] Settings persist to `%APPDATA%\GlowKey\settings.json` and reload
-- [ ] A settings file copied from a Mac still loads
-- [ ] Start-at-login adds the `HKCU\...\Run` value, and **disabling removes it**
+      (`VI`, dimmed `VI`, `EN`, `!`) — needs a real click on the icon; not run.
+- [ ] The two `!` causes read differently in the tooltip and menu — same reason.
+- [x] Settings persist to `%APPDATA%\GlowKey\settings.json` and reload
+- [x] A settings file copied from a Mac still loads
+- [x] Start-at-login adds the `HKCU\...\Run` value, and **disabling removes it**
       (check with `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"`)
-- [ ] The three clipboard tools transform the clipboard in place
-- [ ] The log rotates, lives under `%LOCALAPPDATA%`, and no typed text leaves the
+- [ ] The three clipboard tools transform the clipboard in place — needs the
+      real clipboard; left for the user.
+- [x] The log rotates, lives under `%LOCALAPPDATA%`, and no typed text leaves the
       machine
-- [ ] No console window appears at any point
-- [ ] **Idle cost with the settings window closed** — record CPU and working set
+- [x] No console window appears at any point
+- [x] **Idle cost with the settings window closed** — record CPU and working set
       as numbers. This is the check on the `winit`+`egui` decision, and taking it
       with the window open measures nothing. Since 2026-09-05 a one-point
       off-screen shim window exists for the process's life (`decisions/0011`);
-      the number should not have moved.
+      the number should not have moved. **2026-09-05: ≈2.0% of one core,
+      ~101 MB working set — the first recorded figure, nothing to compare
+      against yet.**
 - [ ] Settings opens, closes, and reopens three times from the tray in one
-      process; an edit made in the third open is saved.
-- [ ] About opens from the tray: icon, name, version with commit, no button, no
-      sound. Esc closes it; the title-bar X closes it; it reopens.
-- [ ] About and Settings open side by side; each has its own taskbar entry and
-      neither steals focus from the other on repaint.
-- [ ] With About open, Ctrl+Shift+Space toggles VI/EN and the tray glyph changes
-      at once; the tray-menu toggle does the same.
-- [ ] Segmented controls: no hairline around the track or the selected segment;
+      process **(done via posted `WM_COMMAND`, not the tray itself)**; an edit
+      made in the third open is saved — not run, needs a click inside the
+      window (see report).
+- [x] About opens from the tray **(via posted `WM_COMMAND`)**: icon, name,
+      version with commit, no button, no sound (sound unheard). Esc closes it;
+      the title-bar X closes it; it reopens.
+- [x] About and Settings open side by side; each has its own taskbar entry
+      (`WS_EX_APPWINDOW` confirmed on both) — focus-stealing on repaint not
+      separately observed.
+- [ ] With About open, Ctrl+Shift+Space toggles VI/EN and the tray glyph
+      changes at once — needs a real keypress; not run. **The tray-menu toggle
+      does the same, confirmed** (posted `WM_COMMAND`, indicator updated 1 ms
+      later).
+- [x] Segmented controls: no hairline around the track or the selected segment;
       the selected segment is raised (white in light, lighter grey in dark) and
       its label is the normal text colour. Both themes.
-- [ ] "Open this window at launch" on: Settings appears at startup. Off: it does
-      not.
-- [ ] Tray Quit ends the process: no `GlowKey.exe` left in Task Manager.
+- [x] "Open this window at launch" on: Settings appears at startup. (Off was
+      not separately tried; the default is on and was observed working.)
+- [x] Tray Quit ends the process: no `GlowKey.exe` left in Task Manager.
 - [ ] Manage… on Excluded apps, Macros and Personal words each opens its own
       window beside Settings, with a taskbar entry; Esc closes it; closing
       Settings closes them too; an app added in Excluded apps is saved when
-      Settings closes.
-- [ ] Every control and every caption starts on one vertical line, the control
-      column; checkboxes are not at the left margin.
+      Settings closes. **Not run**: opening it needs a click inside the
+      Settings window, which a posted mouse message could not drive this run
+      (see report) — a real click still works.
+- [x] Every control and every caption starts on one vertical line, the control
+      column; checkboxes are not at the left margin. **General tab only** —
+      the other three tabs need the same click that blocked Manage…, above.
 - [ ] Tab reaches the tab strip and each segmented control; ←/→ move the
       selection and a ring shows on the raised segment; the hotkey popup opens
-      with Space/Enter.
-- [ ] The shortcut row shows keycaps; captions are plain text.
-- [ ] About: Copy puts the version and commit on the clipboard.
+      with Space/Enter. **Not run**: needs a real keypress into the live
+      session.
+- [x] The shortcut row shows keycaps; captions are plain text.
+- [ ] About: Copy puts the version and commit on the clipboard. **Not run**:
+      same click limitation as Manage…, above.
 
 ## Tier 6 — the shipped exclusion table
 

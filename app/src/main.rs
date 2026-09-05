@@ -3,13 +3,17 @@
 //! GlowKey is a background agent (no Dock icon) that wraps the active keyboard
 //! layout with Vietnamese Telex, in the style of EVKey/OpenKey: it installs a
 //! `CGEventTap`, so the user's Colemak/US layout stays live and Vietnamese is added
-//! on top. See [`platform::macos`]. Requires an Accessibility permission; it does
+//! on top. See `platform::macos`. Requires an Accessibility permission; it does
 //! not operate in secure/password fields.
 //!
 //! On Windows the same engine and the same decision ladder run behind a
-//! `WH_KEYBOARD_LL` hook and `SendInput` — see [`platform::windows`]. On every
+//! `WH_KEYBOARD_LL` hook and `SendInput` — see `platform::windows`. On every
 //! other platform this builds as a stub so the workspace (and the tested engine
 //! crate) compiles in CI without a macOS SDK.
+//!
+//! Those two are code spans rather than intra-doc links on purpose: exactly one
+//! backend module exists in any build, so a link to the other is unresolvable
+//! and `RUSTDOCFLAGS=-D warnings` fails the host that is not its own.
 
 // No console window on Windows.
 //

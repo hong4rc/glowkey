@@ -10,26 +10,10 @@ license = "MIT"
 # "non-standard" only because it declares license-file rather than an SPDX id).
 # See THIRD-PARTY-NOTICES.md — the notice must ship with any distribution.
 vi = "0.8"
-# Settings (de)serialization to JSON. Small, standard, and the settings file is
-# user-inspectable. Kept in the engine so Settings + its (de)serialization stay
-# platform-free (the app crate only owns the file path and I/O).
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 phf = { version = "0.11", features = ["macros"] }
+# Only so `InputMethod` and `PlacementStyle` can sit in a consumer's settings
+# file. Off by default: the engine itself persists nothing.
+serde = { version = "1", features = ["derive"], optional = true }
 
-[dev-dependencies]
-# Generated keystroke sequences for the invariant suite (tests/properties.rs).
-# The engine's one load-bearing rule — "rendered == the text tail at the caret" —
-# is a property, not a list of examples, and the examples cannot cover the
-# keystroke space. Pinned failures live in proptest-regressions/, which is
-# committed so a CI failure reproduces locally.
-proptest = "1"
-# Keystroke latency numbers for the record (benches/keystroke.rs). An input
-# method's latency is a feature: the engine re-derives the whole word through the
-# `vi` crate on every key, and until now nobody had measured what that costs.
-# `harness = false` below is required, or cargo runs the bench as a test target.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-
-[[bench]]
-name = "keystroke"
-harness = false
+[features]
+serde = ["dep:serde"]

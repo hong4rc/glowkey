@@ -1,7 +1,7 @@
 //! Auto-fix: at a word boundary, restore the raw keystrokes when the Telex result
 //! is not valid Vietnamese (`exit`, not `eĩt`).
 
-use glowkey_engine::{ExclusionList, PlacementStyle, Session};
+use glowkey_session::{ExclusionList, PlacementStyle, Session};
 
 /// Types `input` in an active session, then commits (word boundary). Returns the
 /// on-screen text after applying the per-key edits and any auto-fix restore.
@@ -136,9 +136,9 @@ fn english_restore_never_touches_vietnamese_words() {
 fn english_restore_off_by_default_keeps_vietnamese_reading() {
     // Off (the default): `cats` still yields `cát` — the Vietnamese-first reading.
     let mut s = active_session(true);
-    assert!(!glowkey_engine::Session::new(
-        glowkey_engine::PlacementStyle::default(),
-        glowkey_engine::ExclusionList::new(),
+    assert!(!glowkey_session::Session::new(
+        glowkey_session::PlacementStyle::default(),
+        glowkey_session::ExclusionList::new(),
     )
     .restore_english_words());
     assert_eq!(type_then_commit(&mut s, "cats"), "cát");

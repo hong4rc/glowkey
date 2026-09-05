@@ -21,7 +21,7 @@
 //! user pressed — so the platform runs [`crate::hotkey::capture`] itself, ahead of
 //! this function, exactly where the recording branch used to sit.
 
-use glowkey_engine::{BackspaceOutcome, BoundaryBackspace, InputMethod, Session};
+use glowkey_session::{BackspaceOutcome, BoundaryBackspace, InputMethod, Session};
 
 use crate::decision::{Decision, Effects};
 use crate::event::{Key, KeyEvent};

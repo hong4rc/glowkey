@@ -29,7 +29,7 @@ use std::cell::{Cell, RefCell};
 use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 
-use glowkey_engine::Session;
+use glowkey_session::Session;
 
 use crate::prefs_model::Settings;
 use crate::session_adapter::{session_from, settings_from};
@@ -532,7 +532,7 @@ fn carry_out(state: &mut HookState, decision: &Decision, info: &KBDLLHOOKSTRUCT)
                 Some(app) => {
                     let outcome = state.session.toggle_app_exclusion(&app);
                     hook_log::log(format!("TOGGLE app {app:?} -> {outcome:?}"));
-                    if outcome != glowkey_engine::ExclusionToggle::EnabledSessionOnly {
+                    if outcome != glowkey_session::ExclusionToggle::EnabledSessionOnly {
                         request_save(state);
                     }
                     // The ladder returns `ToggleApp` without setting

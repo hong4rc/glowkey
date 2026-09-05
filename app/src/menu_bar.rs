@@ -94,7 +94,7 @@ define_class!(
 
         #[unsafe(method(clipboardRemoveTones:))]
         fn clipboard_remove_tones(&self, _sender: Option<&AnyObject>) {
-            transform_clipboard(glowkey_engine::remove_tones);
+            transform_clipboard(glowkey_session::remove_tones);
         }
 
         #[unsafe(method(clipboardUppercase:))]
@@ -260,10 +260,10 @@ impl MenuController {
         // Header: current state.
         let header = match (excluded, mode) {
             (true, _) => t("Excluded in {}", "Đã tắt trong {}").replace("{}", &app_name),
-            (false, glowkey_engine::InputMode::Vietnamese) => {
+            (false, glowkey_session::InputMode::Vietnamese) => {
                 t("Vietnamese", "Tiếng Việt").to_string()
             }
-            (false, glowkey_engine::InputMode::English) => t("English", "Tiếng Anh").to_string(),
+            (false, glowkey_session::InputMode::English) => t("English", "Tiếng Anh").to_string(),
         };
         self.add_disabled(menu, &header, mtm);
         self.add_separator(menu, mtm);
@@ -286,7 +286,7 @@ impl MenuController {
         // configurable — four presets plus a recorded custom combo — and this line
         // used to say `⌃⇧Space` whatever the user had chosen. The menu rebuilds on
         // every open, so it was a fresh lie each time.
-        let mode_on = matches!(mode, glowkey_engine::InputMode::Vietnamese);
+        let mode_on = matches!(mode, glowkey_session::InputMode::Vietnamese);
         let shortcut = crate::prefs::hotkey_display(self.state().toggle_hotkey());
         let mode_label = t("Vietnamese input ({})", "Gõ tiếng Việt ({})").replace("{}", &shortcut);
         self.add_item(menu, &mode_label, sel!(toggleMode:), mode_on, "", mtm);

@@ -69,8 +69,10 @@ pub struct KeyResponse {
 }
 
 impl KeyResponse {
-    /// A key the engine did not consume — the host should insert it itself.
-    pub(crate) fn passthrough() -> Self {
+    /// A key the engine did not consume: the host should insert it itself.
+    /// `handled` is false and there is nothing to delete or insert.
+    #[must_use]
+    pub fn passthrough() -> Self {
         Self::default()
     }
 }
@@ -301,7 +303,7 @@ impl Engine {
     /// Handles a Backspace keystroke while a word is being composed.
     ///
     /// Drops the last raw key and re-derives, so deleting mid-word restores exactly
-    /// the state that produced the earlier text. Returns [`KeyResponse::passthrough`]
+    /// the state that produced the earlier text. Returns `KeyResponse::passthrough`
     /// when nothing is being composed, so the host deletes normally.
     pub fn backspace(&mut self) -> KeyResponse {
         if self.raw.is_empty() {
@@ -610,4 +612,79 @@ pub(crate) fn apply_case(lower: &str, raw: &[char]) -> String {
         };
     }
     lower.to_string()
+}
+
+/// Whether `word` is a non-empty string that is not a valid Vietnamese syllable.
+///
+/// This is the engine's spell check: the mid-word strict check asks it on every
+/// key, and the policy layer asks it at a word boundary to decide whether to
+/// restore the raw keystrokes. Uses `vi`'s syllable validator plus the stop-coda
+/// tone rule it lacks; a plain ASCII word that never transformed is treated as
+/// valid (nothing to fix) since it equals its raw input.
+pub fn is_invalid_vietnamese(word: &str) -> bool {
+    if word.is_empty() {
+        return false;
+    }
+    // A pure-ASCII word is what the user typed verbatim — leave it alone.
+    if word.is_ascii() {
+        return false;
+    }
+    // A word starting with đ is deliberate, so keep it even when it is not a
+    // syllable. Reaching a leading đ costs `dd` in Telex or `d9` in VNI, and no
+    // English word begins with either, so there is nothing here to rescue — while
+    // restoring the raw keys wrecks the Vietnamese chat abbreviations built this
+    // way (`đc`, `đt`, `đk`, which would come back as `ddc`, `ddt`, `ddk`). English
+    // words that merely *contain* the pair still restore, since their đ is not
+    // leading: `address`→`ađress`, `odd`→`ođ`, `sudden`→`suđen`.
+    if word.starts_with('đ') || word.starts_with('Đ') {
+        return false;
+    }
+    !vi::validation::is_valid_syllable(word) || violates_stop_coda_tone(word)
+}
+
+/// Whether the syllable breaks Vietnamese's stop-coda tone rule.
+///
+/// A syllable closed by `c`, `ch`, `p` or `t` can only carry sắc or nặng — the
+/// two "sharp" tones. Huyền, hỏi and ngã are impossible there. UniKey enforces
+/// this in `lastWordIsNonVn` (`ukengine.cpp:2352`); the `vi` crate does not, and
+/// happily calls `màc`, `hỏc`, `mãt` and `hòp` valid.
+///
+/// It matters in daily use because Telex's `f`, `r` and `x` are exactly those
+/// three tones, so ordinary English words were being transformed and then not
+/// rescued: `left`→`lèt`, `soft`→`sòt`, `gift`→`gìt`, `lift`→`lìt`. Auto-fix
+/// left them alone because it had been told they were valid Vietnamese.
+pub(crate) fn violates_stop_coda_tone(word: &str) -> bool {
+    /// Vowels carrying huyền, hỏi or ngã — the tones a stop coda forbids.
+    const FORBIDDEN_TONES: &str = "àèìòùỳằầềồờừÀÈÌÒÙỲẰẦỀỒỜỪ                                   ảẻỉỏủỷẳẩểổởửẢẺỈỎỦỶẲẨỂỔỞỬ                                   ãẽĩõũỹẵẫễỗỡữÃẼĨÕŨỸẴẪỄỖỠỮ";
+
+    let lowered = word.to_lowercase();
+    let stop_coda = lowered.ends_with("ch")
+        || lowered.ends_with('c')
+        || lowered.ends_with('p')
+        || lowered.ends_with('t');
+    stop_coda && word.chars().any(|ch| FORBIDDEN_TONES.contains(ch))
+}
+
+/// Computes the minimal edit turning `prev` into `next`: keep the common prefix,
+/// delete the rest of `prev` (counted in UTF-16 code units), insert the rest of
+/// `next`. This is the `backspaceCount` / `newCharCount` shape shipping engines
+/// use, and the shape every [`KeyResponse`] the engine returns has.
+pub fn diff(prev: &str, next: &str) -> KeyResponse {
+    // Longest common prefix in whole characters (never split a scalar).
+    let common_bytes = prev
+        .char_indices()
+        .zip(next.char_indices())
+        .take_while(|((_, a), (_, b))| a == b)
+        .map(|((i, c), _)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+
+    let deleted = &prev[common_bytes..];
+    let inserted = &next[common_bytes..];
+
+    KeyResponse {
+        handled: true,
+        backspaces: deleted.encode_utf16().count(),
+        insert: inserted.to_string(),
+    }
 }

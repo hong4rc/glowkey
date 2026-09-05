@@ -15,7 +15,7 @@
 
 use std::sync::Mutex;
 
-use glowkey_engine::{ExclusionToggle, InputMode};
+use glowkey_session::{ExclusionToggle, InputMode};
 
 use crate::prefs_model::Settings;
 
@@ -90,7 +90,7 @@ pub fn refresh_indicator() {
 
 /// Flips Vietnamese on or off.
 pub fn toggle_mode() {
-    let mode = hook::with_session(glowkey_engine::Session::toggle_mode);
+    let mode = hook::with_session(glowkey_session::Session::toggle_mode);
     if let Some(mode) = mode {
         crate::log::log(&format!("TOGGLE mode -> {mode:?} (menu)"));
         hook::mark_dirty();
@@ -356,7 +356,7 @@ fn merge_settings(baseline: &Settings, edited: &Settings, live: Settings) -> Set
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glowkey_engine::{WordOverride, WordPreference};
+    use glowkey_session::{WordOverride, WordPreference};
 
     fn taught_word() -> WordOverride {
         WordOverride {

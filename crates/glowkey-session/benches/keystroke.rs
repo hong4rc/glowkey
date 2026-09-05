@@ -11,7 +11,7 @@
 //! `tests/latency.rs`, since criterion's own output is not an assertion.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use glowkey_engine::{ExclusionList, InputMethod, PlacementStyle, Session};
+use glowkey_session::{ExclusionList, InputMethod, PlacementStyle, Session};
 
 /// A session configured the way a real user's is, in the app the ignore list
 /// would leave alone.

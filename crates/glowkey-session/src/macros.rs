@@ -1,10 +1,12 @@
-//! Text-expansion macros and the UniKey table format (leaves this crate in a later phase).
+//! Text-expansion macros and the UniKey table format.
 
-use super::*;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 /// A text-expansion macro (Unikey's "gõ tắt"): typing `shortcut` then a boundary
 /// replaces it with `expansion`. E.g. `vn` → `Việt Nam`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Macro {
     /// The typed keys that trigger the expansion (matched case-insensitively).
     pub shortcut: String,
@@ -78,8 +80,12 @@ impl Macro {
         if trimmed.starts_with('[') {
             // Broken JSON returns nothing rather than falling through to the line
             // reader, which would report "expected shortcut:expansion" about a
-            // file that is plainly not in that format.
+            // file that is plainly not in that format. Without `serde` there is
+            // no JSON reader, and a JSON table is likewise nothing.
+            #[cfg(feature = "serde")]
             return serde_json::from_str(trimmed).unwrap_or_default();
+            #[cfg(not(feature = "serde"))]
+            return Vec::new();
         }
         text.lines()
             .filter(|line| !is_unikey_header(line))
@@ -134,9 +140,14 @@ impl Macro {
                 && !m.shortcut.contains('\n')
                 && !m.expansion.contains('\n')
         });
+        #[cfg(feature = "serde")]
         if !line_safe {
             return serde_json::to_string_pretty(macros).unwrap_or_default();
         }
+        // Without `serde` there is no JSON writer; the line format is the best
+        // that can be done, and the caller opted out of the lossless path.
+        #[cfg(not(feature = "serde"))]
+        let _ = line_safe;
         let mut out = String::new();
         for m in macros {
             out.push_str(&m.shortcut);

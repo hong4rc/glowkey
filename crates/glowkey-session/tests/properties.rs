@@ -16,7 +16,7 @@
 //! before the boundary key lands. A property that modelled a path the tap never
 //! takes would prove nothing.
 
-use glowkey_engine::{
+use glowkey_session::{
     BackspaceOutcome, BoundaryBackspace, ExclusionList, InputMethod, KeyResponse, PlacementStyle,
     Session, WordPreference,
 };

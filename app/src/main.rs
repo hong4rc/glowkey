@@ -28,6 +28,8 @@ mod about_window;
 mod app_info;
 #[cfg(target_os = "macos")]
 mod ax;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod default_exclusions;
 #[cfg(target_os = "macos")]
 mod hud;
 #[cfg(any(target_os = "macos", target_os = "windows"))]

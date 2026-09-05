@@ -9,7 +9,7 @@
 //! to be interesting on a developer's machine is flaky on a shared CI runner,
 //! and a flaky guard gets disabled and then rots.
 
-use glowkey_engine::{ExclusionList, InputMethod, PlacementStyle, Session};
+use glowkey_session::{ExclusionList, InputMethod, PlacementStyle, Session};
 use std::time::Instant;
 
 /// Keystrokes to type. Large enough that scheduler noise averages out.

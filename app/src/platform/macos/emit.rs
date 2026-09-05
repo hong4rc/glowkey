@@ -14,14 +14,14 @@ use std::ptr::NonNull;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use glowkey_engine::KeyResponse;
+use glowkey_session::KeyResponse;
 use objc2_app_kit::NSWorkspace;
 use objc2_core_graphics::{CGEvent, CGEventFlags, CGEventSource, CGEventTapLocation};
 
 use super::adapt::{KEY_CODE_DELETE, KEY_CODE_FORWARD_DELETE};
 use super::{debug_enabled, TapState, DISABLED, GLOWKEY_TAG, RUNAWAY_LIMIT, RUNAWAY_WINDOW};
 
-pub(super) use glowkey_engine::exclusion::is_chromium_app as is_chromium_browser;
+pub(super) use crate::default_exclusions::is_chromium_app as is_chromium_browser;
 
 impl TapState {
     /// Records an emit and returns false if the rate indicates a runaway; latches

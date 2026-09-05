@@ -1,7 +1,7 @@
 //! The outcome of processing one key event, and the things the platform must do
 //! about it that are not the keystroke itself.
 
-use glowkey_engine::{InputMode, KeyResponse};
+use glowkey_session::{InputMode, KeyResponse};
 
 /// The outcome of processing one key event.
 ///

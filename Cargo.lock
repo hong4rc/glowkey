@@ -970,8 +970,8 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "glowkey-engine",
  "glowkey-input",
+ "glowkey-session",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
@@ -989,11 +989,8 @@ dependencies = [
 name = "glowkey-engine"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "phf",
- "proptest",
  "serde",
- "serde_json",
  "vi",
 ]
 
@@ -1001,8 +998,19 @@ dependencies = [
 name = "glowkey-input"
 version = "0.1.0"
 dependencies = [
- "glowkey-engine",
+ "glowkey-session",
  "serde",
+]
+
+[[package]]
+name = "glowkey-session"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "glowkey-engine",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

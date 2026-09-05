@@ -372,7 +372,7 @@ mod tests {
     fn the_result_matches_how_the_shipped_table_spells_it() {
         let resolved = file_name_of(r"C:\Program Files\WindowsApps\WindowsTerminal.exe");
         assert!(
-            glowkey_engine::exclusion::is_terminal(&resolved),
+            crate::default_exclusions::is_terminal(&resolved),
             "{resolved} must match the shipped terminal table"
         );
     }

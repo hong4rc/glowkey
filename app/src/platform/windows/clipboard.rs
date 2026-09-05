@@ -44,7 +44,7 @@ pub fn transform(transform: impl FnOnce(&str) -> String) -> bool {
 
 /// Removes Vietnamese tone marks and diacritics — `Việt` becomes `Viet`.
 pub fn remove_tones() -> bool {
-    transform(glowkey_engine::remove_tones)
+    transform(glowkey_session::remove_tones)
 }
 
 /// Uppercases, honouring Vietnamese casing rules through Rust's Unicode-aware
@@ -169,7 +169,7 @@ mod tests {
     /// review and obvious to a user.
     #[test]
     fn each_tool_is_wired_to_the_transformation_it_names() {
-        assert_eq!(glowkey_engine::remove_tones("Việt Nam"), "Viet Nam");
+        assert_eq!(glowkey_session::remove_tones("Việt Nam"), "Viet Nam");
         assert_eq!("Việt".to_uppercase(), "VIỆT");
         assert_eq!("VIỆT".to_lowercase(), "việt");
     }

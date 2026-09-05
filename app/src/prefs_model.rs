@@ -10,8 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use glowkey_engine::{ExclusionList, InputMethod, Macro, PlacementStyle, WordOverride};
 use glowkey_input::HotkeyPreset;
+use glowkey_session::{ExclusionList, InputMethod, Macro, PlacementStyle, WordOverride};
 
 /// Everything the menu bar and preferences window control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +137,7 @@ impl Settings {
         ExclusionList::from_saved(
             self.exclusions.iter().cloned(),
             self.removed_default_exclusions.iter().cloned(),
+            crate::default_exclusions::shipped(),
         )
     }
 }
@@ -146,7 +147,7 @@ fn default_true() -> bool {
 }
 
 fn default_exclusions() -> Vec<String> {
-    glowkey_engine::exclusion::DEFAULT_EXCLUSIONS
+    crate::default_exclusions::DEFAULT_EXCLUSIONS
         .iter()
         .map(|s| (*s).to_string())
         .collect()
@@ -196,7 +197,7 @@ mod tests {
             welcome_shown: true,
             word_overrides: vec![WordOverride {
                 keys: "cats".into(),
-                prefer: glowkey_engine::WordPreference::Vietnamese,
+                prefer: glowkey_session::WordPreference::Vietnamese,
             }],
         };
         let restored = Settings::from_json(&settings.to_json());
@@ -241,7 +242,7 @@ mod tests {
         assert_eq!(settings.word_overrides.len(), 3);
         assert_eq!(
             settings.word_overrides[1].prefer,
-            glowkey_engine::WordPreference::Vietnamese
+            glowkey_session::WordPreference::Vietnamese
         );
     }
 
@@ -371,7 +372,7 @@ mod tests {
         // Drawn from the shipped table rather than named, because the rule under
         // test is the merge and the merge does not care what an application is
         // called. Spelling macOS identities here is what broke this on Windows.
-        let defaults = glowkey_engine::exclusion::DEFAULT_EXCLUSIONS;
+        let defaults = crate::default_exclusions::DEFAULT_EXCLUSIONS;
         let kept = defaults[0];
         let missing = defaults[1];
         let tombstoned = defaults[defaults.len() - 1];
@@ -426,10 +427,10 @@ mod tests {
         // synthesized backspaces mangling a shell's line editing.
         assert_eq!(s.exclusions, default_exclusions());
         assert!(
-            !glowkey_engine::exclusion::TERMINAL_EXCLUSIONS.is_empty(),
+            !crate::default_exclusions::TERMINAL_EXCLUSIONS.is_empty(),
             "this platform ships no terminals to protect"
         );
-        for terminal in glowkey_engine::exclusion::TERMINAL_EXCLUSIONS {
+        for terminal in crate::default_exclusions::TERMINAL_EXCLUSIONS {
             assert!(
                 s.exclusions.iter().any(|id| id == terminal),
                 "{terminal} is a known terminal but is not excluded on a fresh install"

@@ -5,25 +5,27 @@
 //! a session together from saved preferences, and `settings_from` writes a
 //! session's state back over the product-only fields the session never held.
 
-use glowkey_engine::Session;
+use glowkey_session::Session;
 
 use crate::prefs_model::Settings;
 
 /// A session configured as `settings` says.
 #[must_use]
 pub fn session_from(settings: &Settings) -> Session {
-    let mut session = Session::new(settings.style, settings.exclusion_list());
-    session.set_input_method(settings.input_method);
-    session.set_auto_fix(settings.auto_fix);
-    session.set_auto_capitalize(settings.auto_capitalize);
-    session.set_restore_english_words(settings.restore_english_words);
-    session.set_always_macro(settings.always_macro);
-    session.set_quick_telex(settings.quick_telex);
-    session.set_telex_brackets(settings.telex_brackets);
-    session.set_strict_spell_check(settings.strict_spell_check);
-    session.set_macros(settings.macros.clone());
-    session.set_word_overrides(&settings.word_overrides);
-    session
+    Session::builder()
+        .style(settings.style)
+        .exclusions(settings.exclusion_list())
+        .input_method(settings.input_method)
+        .auto_fix(settings.auto_fix)
+        .auto_capitalize(settings.auto_capitalize)
+        .restore_english_words(settings.restore_english_words)
+        .always_macro(settings.always_macro)
+        .quick_telex(settings.quick_telex)
+        .telex_brackets(settings.telex_brackets)
+        .strict_spell_check(settings.strict_spell_check)
+        .macros(settings.macros.clone())
+        .word_overrides(&settings.word_overrides)
+        .build()
 }
 
 /// `prefs` with every field the session owns replaced by the session's current
@@ -59,8 +61,8 @@ pub fn settings_from(session: &Session, prefs: &Settings) -> Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glowkey_engine::{InputMethod, PlacementStyle};
     use glowkey_input::HotkeyPreset;
+    use glowkey_session::{InputMethod, PlacementStyle};
 
     /// What goes in comes back out, and the product-only fields survive the
     /// trip through a session that never held them.
@@ -80,13 +82,13 @@ mod tests {
             open_settings_at_launch: false,
             language: crate::prefs_model::Language::Vietnamese,
             welcome_shown: true,
-            macros: vec![glowkey_engine::Macro {
+            macros: vec![glowkey_session::Macro {
                 shortcut: "vn".into(),
                 expansion: "Việt Nam".into(),
             }],
-            word_overrides: vec![glowkey_engine::WordOverride {
+            word_overrides: vec![glowkey_session::WordOverride {
                 keys: "cats".into(),
-                prefer: glowkey_engine::WordPreference::Vietnamese,
+                prefer: glowkey_session::WordPreference::Vietnamese,
             }],
             ..Settings::default()
         };

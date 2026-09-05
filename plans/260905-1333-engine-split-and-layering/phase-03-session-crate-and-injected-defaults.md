@@ -1,7 +1,7 @@
 ---
 phase: 3
 title: "Session crate and injected defaults"
-status: pending
+status: completed
 priority: P1
 effort: "6h"
 dependencies: [2]
@@ -77,12 +77,12 @@ impl ExclusionList {
 7. Gates on three targets.
 
 ## Success Criteria
-- [ ] `grep -rn "\.exe\|com\.\|terminal" crates/glowkey-session/src` is empty.
-- [ ] `cargo test -p glowkey-session` green with the seven moved test files
+- [x] `grep -rn "\.exe\|com\.\|terminal" crates/glowkey-session/src` is empty.
+- [x] `cargo test -p glowkey-session` green with the seven moved test files
       edited only in `use` lines.
-- [ ] `cargo tree -p glowkey-engine` shows `vi` and `phf` only.
-- [ ] `glowkey-input` tests unchanged and green.
-- [ ] Linux CI job covers all three library crates.
+- [x] `cargo tree -p glowkey-engine` shows `vi` and `phf` only.
+- [x] `glowkey-input` tests unchanged and green.
+- [x] Linux CI job covers all three library crates.
 
 ## Risk Assessment
 - `Session` uses `Engine` internals (`restore`, `raw_vec`) that may currently
@@ -92,3 +92,21 @@ impl ExclusionList {
   cannot be made public cleanly.
 - The exclusion tombstone rule (`saved ∪ (defaults − removed)`) is tested in
   `exclusion.rs`; the injected defaults must keep it. Tests move with it.
+
+## Completion Notes (2026-09-05)
+
+- Done as planned, with three recorded deviations:
+  - The engine keeps `serde` as an **optional feature** (off by default) so
+    `InputMethod` and `PlacementStyle` can still sit in the settings file. The
+    plan said "no serde at all"; `cargo tree -p glowkey-engine` shows `vi` and
+    `phf` only in the default build, which is the property that mattered.
+  - `is_invalid_vietnamese` and `diff` stay in the engine and became `pub`:
+    the strict mid-word check uses the first, and the second is the shape of
+    every `KeyResponse`. `KeyResponse::passthrough` is public for the same reason.
+  - `ExclusionDefaults` carries both tables (excluded and terminals), not just
+    the excluded list, because the terminal rule decides toggle semantics.
+- Tests name invented identities (`example.terminal`, `example.editor`) via
+  `tests/common`; the platform tables and their tests live in
+  `app/src/default_exclusions/`.
+- `glowkey-session` re-exports the engine so a consumer names one crate; the
+  app and `glowkey-input` depend on it alone.

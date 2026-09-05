@@ -2,7 +2,7 @@
 //! in Unikey or EVKey can be imported as-is, with a JSON fallback for tables the
 //! line format cannot carry.
 
-use glowkey_engine::{Macro, MacroConflict};
+use glowkey_session::{Macro, MacroConflict};
 
 mod common;
 use common::a_terminal_default;
@@ -81,10 +81,10 @@ fn round_trips_macros_the_line_format_would_mangle() {
 }
 
 /// A session holding the two macros a user might already have.
-fn session_with_two() -> glowkey_engine::Session {
-    let mut s = glowkey_engine::Session::new(
-        glowkey_engine::PlacementStyle::New,
-        glowkey_engine::ExclusionList::new(),
+fn session_with_two() -> glowkey_session::Session {
+    let mut s = glowkey_session::Session::new(
+        glowkey_session::PlacementStyle::New,
+        glowkey_session::ExclusionList::new(),
     );
     s.add_macro("vn", "Việt Nam");
     s.add_macro("hn", "Hà Nội");
@@ -208,10 +208,8 @@ fn macros_can_run_with_vietnamese_switched_off() {
 fn always_macro_stays_out_of_excluded_apps() {
     // Excluded means hands off; a terminal silently expanding a shortcut would be
     // worse than the bug exclusions exist to prevent.
-    let mut s = glowkey_engine::Session::new(
-        glowkey_engine::PlacementStyle::New,
-        glowkey_engine::ExclusionList::with_defaults(),
-    );
+    let mut s =
+        glowkey_session::Session::new(glowkey_session::PlacementStyle::New, common::shipped());
     s.add_macro("vn", "Việt Nam");
     s.set_always_macro(true);
     s.toggle_mode();
@@ -227,9 +225,9 @@ fn always_macro_stays_out_of_excluded_apps() {
 
 #[test]
 fn always_macro_does_nothing_without_macros() {
-    let mut s = glowkey_engine::Session::new(
-        glowkey_engine::PlacementStyle::New,
-        glowkey_engine::ExclusionList::new(),
+    let mut s = glowkey_session::Session::new(
+        glowkey_session::PlacementStyle::New,
+        glowkey_session::ExclusionList::new(),
     );
     s.set_always_macro(true);
     s.toggle_mode();

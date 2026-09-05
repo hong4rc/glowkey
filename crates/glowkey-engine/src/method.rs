@@ -7,7 +7,8 @@ use super::*;
 /// New style is the modern default (`hoà`, `thuý`); old style is the traditional
 /// convention (`hòa`, `thúy`). Mirrors [`AccentStyle`] but keeps `vi` out of the
 /// shell's type surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum PlacementStyle {
     /// Modern orthography — the software default.
     #[default]
@@ -37,7 +38,8 @@ impl From<PlacementStyle> for AccentStyle {
 
 /// The keyboard input method for Vietnamese, as in Unikey/EVKey. Telex uses letter
 /// keys (`aa`→â, `f`→huyền); VNI uses digits (`a6`→â, `2`→huyền).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum InputMethod {
     /// Telex — the software default.
     #[default]

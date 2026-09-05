@@ -12,11 +12,12 @@
 //! a policy test passing here while the tap-level equivalent fails is exactly how
 //! a bad adapter shows itself.
 
-use glowkey_engine::{
-    ExclusionList, ExclusionToggle, InputMode, KeyResponse, PlacementStyle, Session, WordPreference,
-};
 use glowkey_input::{
     decide, hotkey, Ctx, Decision, Effects, HotkeyPreset, Key, KeyEvent, Modifiers,
+};
+use glowkey_session::{
+    ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, KeyResponse, PlacementStyle,
+    Session, WordPreference,
 };
 
 /// A session plus the little the platform would otherwise own: which key code it
@@ -43,7 +44,10 @@ impl Tap {
     fn bare() -> Self {
         Self {
             // The shipped exclusion defaults, as a fresh settings file has them.
-            session: Session::new(PlacementStyle::default(), ExclusionList::with_defaults()),
+            session: Session::new(
+                PlacementStyle::default(),
+                ExclusionList::with_defaults(shipped_defaults()),
+            ),
             preset: HotkeyPreset::default(),
             recorded_code: None,
             effects: Effects::default(),
@@ -125,24 +129,26 @@ fn type_with_deletes(tap: &mut Tap, input: &str) -> String {
     screen
 }
 
-/// A shipped default exclusion, whatever this platform's table calls it.
+/// A shipped default exclusion.
 ///
-/// The shipped table is per-target — bundle identifiers on macOS, executable
-/// names on Windows — so a test that writes `com.apple.Terminal` into an
-/// assertion is a macOS test wearing a portable test's clothes. Three of these
-/// were, and they failed the first time the suite ran on Windows.
+/// The session does not know what an application is called; the shell hands it
+/// the shipped tables, so this harness hands it invented ones. A test that
+/// writes `com.apple.Terminal` into an assertion is a macOS test wearing a
+/// portable test's clothes: three of these were, and they failed the first time
+/// the suite ran on Windows.
 fn a_default_exclusion() -> &'static str {
-    glowkey_engine::exclusion::DEFAULT_EXCLUSIONS
-        .first()
-        .expect("the shipped exclusion table is never empty")
+    "example.terminal"
 }
 
 /// A shipped default that is a **terminal**, so the session-only un-exclusion
 /// rule applies to it.
 fn a_terminal_default() -> &'static str {
-    glowkey_engine::exclusion::TERMINAL_EXCLUSIONS
-        .first()
-        .expect("the shipped terminal table is never empty")
+    "example.terminal"
+}
+
+/// The tables a shell would ship: the one terminal above.
+fn shipped_defaults() -> ExclusionDefaults {
+    ExclusionDefaults::new([a_default_exclusion()], [a_terminal_default()])
 }
 
 fn ctrl_shift() -> Modifiers {
@@ -692,9 +698,12 @@ fn a_restored_word_breaks_the_chain() {
 /// UniKey's always-macro expands a shortcut regardless of mode.
 #[test]
 fn always_macro_keeps_feeding_the_engine_with_vietnamese_off() {
-    let mut session = Session::new(PlacementStyle::default(), ExclusionList::with_defaults());
+    let mut session = Session::new(
+        PlacementStyle::default(),
+        ExclusionList::with_defaults(shipped_defaults()),
+    );
     session.set_always_macro(true);
-    session.set_macros(vec![glowkey_engine::Macro {
+    session.set_macros(vec![glowkey_session::Macro {
         shortcut: "vn".into(),
         expansion: "Việt Nam".into(),
     }]);

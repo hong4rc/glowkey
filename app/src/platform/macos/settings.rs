@@ -47,14 +47,14 @@ impl TapState {
     }
 
     /// Current state for menu labels: (mode, auto-fix on, is `bundle_id` excluded).
-    pub fn menu_state(&self, bundle_id: &str) -> (glowkey_engine::InputMode, bool, bool) {
+    pub fn menu_state(&self, bundle_id: &str) -> (glowkey_session::InputMode, bool, bool) {
         match self.session.try_borrow() {
             Ok(s) => (
                 s.mode(),
                 s.auto_fix(),
                 s.exclusions().is_excluded(bundle_id),
             ),
-            Err(_) => (glowkey_engine::InputMode::Vietnamese, true, false),
+            Err(_) => (glowkey_session::InputMode::Vietnamese, true, false),
         }
     }
 
@@ -134,15 +134,15 @@ impl TapState {
     }
 
     /// The current input method (Telex/VNI). Drives the Settings control.
-    pub fn input_method(&self) -> glowkey_engine::InputMethod {
+    pub fn input_method(&self) -> glowkey_session::InputMethod {
         self.session
             .try_borrow()
             .map(|s| s.input_method())
-            .unwrap_or(glowkey_engine::InputMethod::Telex)
+            .unwrap_or(glowkey_session::InputMethod::Telex)
     }
 
     /// Sets the input method (Telex/VNI) and saves.
-    pub fn set_input_method_and_save(&self, method: glowkey_engine::InputMethod) {
+    pub fn set_input_method_and_save(&self, method: glowkey_session::InputMethod) {
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.set_input_method(method);
         }
@@ -279,8 +279,8 @@ impl TapState {
     /// itself lives in [`Session::import_macros`].
     pub fn import_macros_and_save(
         &self,
-        imported: &[glowkey_engine::Macro],
-        on_conflict: glowkey_engine::MacroConflict,
+        imported: &[glowkey_session::Macro],
+        on_conflict: glowkey_session::MacroConflict,
     ) -> Option<(usize, usize)> {
         let counts = self
             .session
@@ -301,7 +301,7 @@ impl TapState {
     }
 
     /// How many rows of an import would overwrite an existing shortcut.
-    pub fn macro_conflicts(&self, imported: &[glowkey_engine::Macro]) -> usize {
+    pub fn macro_conflicts(&self, imported: &[glowkey_session::Macro]) -> usize {
         self.session
             .try_borrow()
             .map(|s| s.macro_conflicts(imported))
@@ -309,7 +309,7 @@ impl TapState {
     }
 
     /// The text-expansion macros, cloned for the Settings list.
-    pub fn macros(&self) -> Vec<glowkey_engine::Macro> {
+    pub fn macros(&self) -> Vec<glowkey_session::Macro> {
         self.session
             .try_borrow()
             .map(|s| s.macros().to_vec())
@@ -338,15 +338,15 @@ impl TapState {
     }
 
     /// The current tone-placement style. Drives the Settings segmented control.
-    pub fn style(&self) -> glowkey_engine::PlacementStyle {
+    pub fn style(&self) -> glowkey_session::PlacementStyle {
         self.session
             .try_borrow()
             .map(|s| s.style())
-            .unwrap_or(glowkey_engine::PlacementStyle::New)
+            .unwrap_or(glowkey_session::PlacementStyle::New)
     }
 
     /// Sets the tone-placement style and saves. Used by the Settings segmented control.
-    pub fn set_style_and_save(&self, style: glowkey_engine::PlacementStyle) {
+    pub fn set_style_and_save(&self, style: glowkey_session::PlacementStyle) {
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.set_style(style);
         }
@@ -366,7 +366,7 @@ impl TapState {
         }
     }
     /// Every recorded word decision, for the Personal Words window.
-    pub fn word_overrides(&self) -> Vec<glowkey_engine::WordOverride> {
+    pub fn word_overrides(&self) -> Vec<glowkey_session::WordOverride> {
         self.session
             .try_borrow()
             .map(|s| s.word_override_list())
@@ -374,7 +374,7 @@ impl TapState {
     }
 
     /// The decision recorded for `keys`, if any.
-    pub fn word_override(&self, keys: &str) -> Option<glowkey_engine::WordPreference> {
+    pub fn word_override(&self, keys: &str) -> Option<glowkey_session::WordPreference> {
         self.session
             .try_borrow()
             .ok()
@@ -382,7 +382,7 @@ impl TapState {
     }
 
     /// Records a word decision and saves.
-    pub fn set_word_override_and_save(&self, keys: &str, prefer: glowkey_engine::WordPreference) {
+    pub fn set_word_override_and_save(&self, keys: &str, prefer: glowkey_session::WordPreference) {
         if let Ok(mut session) = self.session.try_borrow_mut() {
             session.set_word_override(keys, prefer);
         }

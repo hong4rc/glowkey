@@ -17,10 +17,10 @@
 
 use std::ptr::NonNull;
 
-use glowkey_engine::{ExclusionToggle, InputMode};
 use glowkey_input::hotkey::{self, HotkeyCapture};
 use glowkey_input::HotkeyPreset;
 use glowkey_input::{Ctx, Decision, Effects, KeyEvent};
+use glowkey_session::{ExclusionToggle, InputMode};
 use objc2_core_graphics::{CGEvent, CGEventField};
 
 use super::adapt::{integer_field, modifier_names, unicode_char};
@@ -219,7 +219,7 @@ impl TapState {
             Err(_) => (
                 String::new(),
                 String::new(),
-                glowkey_engine::InputMode::Vietnamese,
+                glowkey_session::InputMode::Vietnamese,
                 false,
             ),
         };

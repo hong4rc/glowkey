@@ -2,7 +2,7 @@
 //! the rule that must never regress: an excluded application does not transform,
 //! and nothing (mode toggle included) overrides that.
 
-use glowkey_engine::{
+use glowkey_session::{
     BoundaryBackspace, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
 };
 
@@ -126,7 +126,7 @@ fn english_mode_passes_through_in_a_normal_app() {
 
 #[test]
 fn switching_into_excluded_app_stops_transformation_immediately() {
-    let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
+    let mut session = Session::new(PlacementStyle::New, common::shipped());
     session.set_frontmost_app("com.tinyspeck.slackmacgap");
     assert_eq!(type_through(&mut session, "hoongf "), "hồng ");
 
@@ -186,7 +186,7 @@ fn terminal_hotkey_unexclusion_is_session_only() {
     // permanently.
     let terminal = a_terminal_default();
     let editor = an_editor_default();
-    let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
+    let mut session = Session::new(PlacementStyle::New, common::shipped());
     session.set_frontmost_app(terminal);
     assert!(!session.is_active());
 
@@ -234,6 +234,7 @@ fn persisted(session: &Session) -> ExclusionList {
     ExclusionList::from_saved(
         session.exclusions().ids().map(String::from),
         session.exclusions().removed_default_ids().map(String::from),
+        common::defaults(),
     )
 }
 
@@ -242,7 +243,7 @@ fn permanent_terminal_removal_via_editor_still_works() {
     // The Excluded Apps window path (exclusions_mut().remove) is a deliberate,
     // permanent removal — even for a terminal — and tombstones it.
     let terminal = a_terminal_default();
-    let mut session = Session::new(PlacementStyle::New, ExclusionList::with_defaults());
+    let mut session = Session::new(PlacementStyle::New, common::shipped());
     // Asserted, not assumed: every assertion below is satisfied by an identity
     // that was never in the list, so without this the test passes vacuously —
     // which is exactly what it did on Windows while naming a macOS terminal.

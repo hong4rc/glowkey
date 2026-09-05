@@ -25,7 +25,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
 
-use glowkey_engine::WordPreference;
+use glowkey_session::WordPreference;
 
 use super::PrefsController;
 use crate::strings::t;

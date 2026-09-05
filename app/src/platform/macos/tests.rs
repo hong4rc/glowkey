@@ -11,8 +11,8 @@ use super::adapt::{
 };
 use super::emit::is_chromium_browser;
 use super::*;
-use glowkey_engine::{ExclusionToggle, KeyResponse};
 use glowkey_input::HotkeyPreset;
+use glowkey_session::{ExclusionToggle, KeyResponse};
 use objc2_core_graphics::CGEventFlags;
 
 /// Builds a real key-down CGEvent from GlowKey's source carrying `ch` as its
@@ -434,14 +434,14 @@ fn hotkey_recording_captures_a_custom_combo() {
     ));
     assert_eq!(
         state.session.borrow().mode(),
-        glowkey_engine::InputMode::English
+        glowkey_session::InputMode::English
     );
     // …and the old default (⌃⇧Space) no longer does.
     let old = toggle_event(&state.source);
     state.decide(NonNull::from(&*old));
     assert_eq!(
         state.session.borrow().mode(),
-        glowkey_engine::InputMode::English,
+        glowkey_session::InputMode::English,
         "the replaced preset must not toggle anymore"
     );
 }
@@ -512,7 +512,7 @@ fn real_events_toggle_hotkey_switches_mode() {
     ));
     assert_eq!(
         state.session.borrow().mode(),
-        glowkey_engine::InputMode::English
+        glowkey_session::InputMode::English
     );
 
     // Now the same keys pass through untransformed.
@@ -561,7 +561,7 @@ fn ctrl_shift_w_corrects_the_last_word() {
     // And the decision was recorded, so the next `was` needs no keystroke.
     assert_eq!(
         state.session.borrow().word_override("was"),
-        Some(glowkey_engine::WordPreference::Raw)
+        Some(glowkey_session::WordPreference::Raw)
     );
 }
 

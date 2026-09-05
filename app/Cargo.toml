@@ -19,7 +19,10 @@ name = "GlowKey"
 path = "src/main.rs"
 
 [dependencies]
-glowkey-engine = { path = "../crates/glowkey-engine" }
+# The typing policy and, through it, the engine. The app names one crate for
+# both; the shipped exclusion tables it hands the session live in
+# src/default_exclusions/.
+glowkey-session = { path = "../crates/glowkey-session", features = ["serde"] }
 # The decision ladder, with no operating system in it. Every platform backend
 # under src/platform/ runs this same policy rather than its own reading of it.
 glowkey-input = { path = "../crates/glowkey-input", features = ["serde"] }

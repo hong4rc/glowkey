@@ -18,7 +18,7 @@
 //! The state is computed here, as a pure function of four inputs, so the rule can
 //! be tested without a tray, a hook, or a window.
 
-use glowkey_engine::InputMode;
+use glowkey_session::InputMode;
 
 use crate::strings::t;
 

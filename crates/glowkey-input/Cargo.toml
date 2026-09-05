@@ -5,12 +5,13 @@ description = "Platform-free input policy for GlowKey — the decision ladder an
 edition = "2021"
 license = "MIT"
 
-# Deliberately the engine and nothing else. This crate is the policy every
-# platform runs, so a dependency on an OS crate here would be a dependency on
-# that OS everywhere — which is the whole thing the split exists to prevent.
-# CI compiles and tests it on ubuntu-latest with `-D warnings` for that reason.
+# Deliberately the session crate (which brings the engine) and nothing else.
+# This crate is the policy every platform runs, so a dependency on an OS crate
+# here would be a dependency on that OS everywhere, which is the whole thing the
+# split exists to prevent. CI compiles and tests it on ubuntu-latest with
+# `-D warnings` for that reason.
 [dependencies]
-glowkey-engine = { path = "../glowkey-engine" }
+glowkey-session = { path = "../glowkey-session" }
 # Only for the settings file that names a hotkey preset; a consumer that does
 # not persist presets does not pay for it.
 serde = { version = "1", features = ["derive"], optional = true }

@@ -231,7 +231,7 @@ pub(super) fn import_macros(controller: &PrefsController) {
         );
         return;
     };
-    if glowkey_engine::Macro::table_is_legacy_viqr(&text) {
+    if glowkey_session::Macro::table_is_legacy_viqr(&text) {
         controller.notify(
             t(
                 "That is an old UniKey table.",
@@ -247,7 +247,7 @@ pub(super) fn import_macros(controller: &PrefsController) {
         );
         return;
     }
-    let imported = glowkey_engine::Macro::parse_table(&text);
+    let imported = glowkey_session::Macro::parse_table(&text);
     if imported.is_empty() {
         let detail = if text.trim_start().starts_with('[') {
             t(
@@ -273,7 +273,7 @@ pub(super) fn import_macros(controller: &PrefsController) {
     // ignored only once it was too late to choose otherwise.
     let conflicts = controller.state().macro_conflicts(&imported);
     let on_conflict = if conflicts == 0 {
-        glowkey_engine::MacroConflict::Skip
+        glowkey_session::MacroConflict::Skip
     } else {
         let choice = controller.ask(
             &t(
@@ -293,8 +293,8 @@ pub(super) fn import_macros(controller: &PrefsController) {
             mtm,
         );
         match choice {
-            0 => glowkey_engine::MacroConflict::Skip,
-            1 => glowkey_engine::MacroConflict::Replace,
+            0 => glowkey_session::MacroConflict::Skip,
+            1 => glowkey_session::MacroConflict::Replace,
             _ => return,
         }
     };
@@ -339,7 +339,7 @@ pub(super) fn export_macros(controller: &PrefsController) {
         return;
     };
     let macros = controller.state().macros();
-    let text = glowkey_engine::Macro::format_table(&macros);
+    let text = glowkey_session::Macro::format_table(&macros);
     if std::fs::write(path.to_string(), text).is_err() {
         controller.notify(
             t("Could not write that file.", "Không ghi được tệp đó."),

@@ -12,33 +12,26 @@
 //! code path for forward typing, backspace, and case handling.
 //!
 //! The engine is intentionally ignorant of the per-application ignore list and of
-//! VN/EN mode — those are the shell's concern. When Vietnamese input is off, the
-//! shell simply never calls [`Engine::process_key`].
+//! VN/EN mode: those belong to `glowkey-session`, the policy layer built on top
+//! of this crate. When Vietnamese input is off, that layer simply never calls
+//! [`Engine::process_key`].
+//!
+//! `serde` support for [`InputMethod`] and [`PlacementStyle`] is behind the
+//! `serde` feature, so a consumer that does not persist settings does not pay
+//! for it.
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
 use vi::methods::{Action, IncrementalBuffer};
 use vi::processor::AccentStyle;
 use vi::processor::{LetterModification, ToneMark};
 
-mod english;
-pub mod exclusion;
-mod exclusion_defaults;
-
-pub use exclusion::ExclusionList;
-
 mod engine;
-mod macros;
 mod method;
-mod overrides;
-mod session;
 mod tones;
 
 pub use engine::*;
-pub use macros::*;
 pub use method::*;
-pub use overrides::*;
-pub use session::*;
 pub use tones::*;

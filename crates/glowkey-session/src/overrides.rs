@@ -1,6 +1,7 @@
-//! Per-word user decisions between raw keys and Vietnamese (leaves this crate in a later phase).
+//! Per-word user decisions between raw keys and Vietnamese.
 
-use super::*;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
 
 /// Which reading of one set of typed keys the user wants.
 ///
@@ -8,17 +9,18 @@ use super::*;
 /// are legitimate Vietnamese and legitimate English (`docs/handoff.md` §6.3), so
 /// `cats` is both `cats` and `cát` and no amount of cleverness decides which.
 /// This is the user answering, one word at a time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum WordPreference {
     /// Keep the keys as typed: `cats` stays `cats`.
     ///
     /// The aliases exist because this list is meant to be hand-editable, and
     /// `"raw"` is what a person writes.
     #[default]
-    #[serde(alias = "raw", alias = "typed")]
+    #[cfg_attr(feature = "serde", serde(alias = "raw", alias = "typed"))]
     Raw,
     /// Keep the Vietnamese rendering: `cats` becomes `cát`.
-    #[serde(alias = "vietnamese", alias = "vi")]
+    #[cfg_attr(feature = "serde", serde(alias = "vietnamese", alias = "vi"))]
     Vietnamese,
 }
 
@@ -29,10 +31,11 @@ pub enum WordPreference {
 /// `cats` and `cát` are the two answers. Lowercased to match
 /// `english::is_common_english`, so a capitalised word at a sentence start obeys
 /// the same decision as the same word mid-sentence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct WordOverride {
     /// The typed keys, lowercase.
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub keys: String,
     /// Which reading to keep. An unrecognised or missing value reads as "keep
     /// what was typed", the safe answer.
@@ -44,13 +47,17 @@ pub struct WordOverride {
     /// back over them. Losing a curated exclusion list to a typo in an unrelated
     /// field is not a trade anyone would accept, so this field refuses to be the
     /// thing that fails the document.
-    #[serde(default, deserialize_with = "lenient_preference")]
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, deserialize_with = "lenient_preference")
+    )]
     pub prefer: WordPreference,
 }
 
 /// Reads a word preference, treating anything unrecognised as the default.
 ///
 /// See [`WordOverride::prefer`] for why this cannot be allowed to fail.
+#[cfg(feature = "serde")]
 pub(crate) fn lenient_preference<'de, D>(deserializer: D) -> Result<WordPreference, D::Error>
 where
     D: serde::Deserializer<'de>,

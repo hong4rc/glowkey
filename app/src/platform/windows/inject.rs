@@ -219,7 +219,7 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
 /// Split out so the rule is testable without injecting anything.
 #[must_use]
 pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>) -> bool {
-    backspaces > 0 && app.is_some_and(glowkey_engine::exclusion::is_chromium_app)
+    backspaces > 0 && app.is_some_and(crate::default_exclusions::is_chromium_app)
 }
 
 #[cfg(test)]
@@ -253,7 +253,7 @@ mod tests {
     /// browser added there is covered without a second edit here.
     #[test]
     fn the_guard_uses_the_shipped_chromium_table() {
-        for app in glowkey_engine::exclusion::CHROMIUM_APP_PREFIXES {
+        for app in crate::default_exclusions::CHROMIUM_APP_PREFIXES {
             assert!(
                 needs_omnibox_guard(1, Some(app)),
                 "{app} is in the shipped table and must be guarded"

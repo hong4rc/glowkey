@@ -31,8 +31,8 @@
 
 use eframe::egui;
 
-use glowkey_engine::{ExclusionList, Macro, WordOverride, WordPreference};
 use glowkey_input::HotkeyPreset;
+use glowkey_session::{ExclusionList, Macro, WordOverride, WordPreference};
 
 use crate::prefs_model::Settings;
 

@@ -9,7 +9,7 @@
 //! These tests pin the pairs that *could not both work* under that switch. That
 //! is the whole point of the feature, so it is what the tests are about.
 
-use glowkey_engine::{BoundaryBackspace, ExclusionList, PlacementStyle, Session, WordPreference};
+use glowkey_session::{BoundaryBackspace, ExclusionList, PlacementStyle, Session, WordPreference};
 
 /// An app that is not excluded, so the session transforms. `is_active` fails
 /// closed on an unknown app, so this is not optional.
@@ -184,7 +184,7 @@ fn overrides_survive_a_persisted_round_trip() {
 // ---------------------------------------------------------------------------
 
 /// Applies an edit to a screen string the way the tap does.
-fn apply(screen: &mut String, r: &glowkey_engine::KeyResponse) {
+fn apply(screen: &mut String, r: &glowkey_session::KeyResponse) {
     let units: Vec<u16> = screen.encode_utf16().collect();
     let keep = units.len().saturating_sub(r.backspaces);
     *screen = String::from_utf16(&units[..keep]).unwrap();

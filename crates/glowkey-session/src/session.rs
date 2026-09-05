@@ -1,4 +1,5 @@
-//! The session: mode, exclusions, corrections and macros over the engine (leaves this crate in a later phase).
+//! The session: mode, the frontmost application, exclusions, corrections and
+//! macros over the engine.
 
 use super::*;
 
@@ -89,7 +90,8 @@ struct CorrectableWord {
 }
 
 /// Whether the session currently transforms input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum InputMode {
     /// Vietnamese transformation is active.
     #[default]
@@ -118,9 +120,9 @@ pub struct Session {
     style: PlacementStyle,
     /// Whether to restore invalid Vietnamese to raw keys at a word boundary.
     auto_fix: bool,
-    /// Bundle identifier of the frontmost application, set by the shell on focus
-    /// change. `None` before the first application is known.
-    current_bundle_id: Option<String>,
+    /// The frontmost application, set by the shell on focus change. `None`
+    /// before the first application is known.
+    current_app: Option<AppId>,
     /// The document behind the caret, most recent last: an unbroken run of
     /// boundary characters and the words that preceded them. Deleting back to a
     /// committed word re-opens it, which is what makes `hồng`␣⌫`z` → `hông` work
@@ -154,6 +156,11 @@ pub struct Session {
 }
 
 impl Session {
+    /// A builder, for configuring every policy knob in one expression.
+    pub fn builder() -> SessionBuilder {
+        SessionBuilder::new()
+    }
+
     /// Creates a session with the given placement style and ignore list.
     #[must_use]
     pub fn new(style: PlacementStyle, exclusions: ExclusionList) -> Self {
@@ -163,7 +170,7 @@ impl Session {
             exclusions,
             style,
             auto_fix: true,
-            current_bundle_id: None,
+            current_app: None,
             committed: VecDeque::new(),
             auto_capitalize: false,
             pending_capital: true,
@@ -212,8 +219,8 @@ impl Session {
         if self.mode == InputMode::English {
             return false;
         }
-        match &self.current_bundle_id {
-            Some(id) => !self.exclusions.is_excluded(id),
+        match &self.current_app {
+            Some(id) => !self.exclusions.is_excluded(id.as_str()),
             None => false,
         }
     }
@@ -253,9 +260,9 @@ impl Session {
             && !self.macros.is_empty()
             && self.mode == InputMode::English
             && self
-                .current_bundle_id
+                .current_app
                 .as_ref()
-                .is_some_and(|id| !self.exclusions.is_excluded(id))
+                .is_some_and(|id| !self.exclusions.is_excluded(id.as_str()))
     }
 
     /// Whether macros expand while Vietnamese is off.
@@ -560,20 +567,20 @@ impl Session {
 
     /// Records the frontmost application and flushes any in-progress word so it
     /// cannot leak across a focus change.
-    pub fn set_frontmost_app(&mut self, bundle_id: impl Into<String>) {
+    pub fn set_frontmost_app(&mut self, app: impl Into<AppId>) {
         // A change of app, mode or exclusion means the caret is somewhere else or
         // the word is no longer ours to edit. `forget_position`'s own comment
         // claimed this happened; it did not, and an app that activates itself (a
         // call popup, a finished build) changes focus with no event to flush on.
         self.forget_position();
-        self.current_bundle_id = Some(bundle_id.into());
+        self.current_app = Some(app.into());
         self.engine.reset();
     }
 
-    /// The frontmost application's bundle identifier, if known.
+    /// The frontmost application, if known.
     #[must_use]
-    pub fn current_bundle_id(&self) -> Option<&str> {
-        self.current_bundle_id.as_deref()
+    pub fn current_app(&self) -> Option<&AppId> {
+        self.current_app.as_ref()
     }
 
     /// Toggles a specific application in the ignore list. Each app's membership is
@@ -592,10 +599,10 @@ impl Session {
         // claimed this happened; it did not, and an app that activates itself (a
         // call popup, a finished build) changes focus with no event to flush on.
         self.forget_position();
-        self.current_bundle_id = Some(bundle_id.to_string());
+        self.current_app = Some(AppId::from(bundle_id));
         self.engine.reset();
         if self.exclusions.is_excluded(bundle_id) {
-            if exclusion::is_terminal(bundle_id) {
+            if self.exclusions.is_terminal(bundle_id) {
                 self.exclusions.suspend_for_session(bundle_id);
                 ExclusionToggle::EnabledSessionOnly
             } else {
@@ -975,76 +982,5 @@ impl Session {
         // A caret move / click lands us in unknown context; don't guess a sentence
         // start, so the next letter is not wrongly capitalized.
         self.pending_capital = false;
-    }
-}
-
-/// Whether `word` is a non-empty string that is not a valid Vietnamese syllable —
-/// the condition under which auto-fix restores the raw keystrokes. Uses `vi`'s
-/// syllable validator; a plain ASCII word that never transformed is treated as
-/// valid (nothing to fix) since it equals its raw input.
-pub(crate) fn is_invalid_vietnamese(word: &str) -> bool {
-    if word.is_empty() {
-        return false;
-    }
-    // A pure-ASCII word is what the user typed verbatim — leave it alone.
-    if word.is_ascii() {
-        return false;
-    }
-    // A word starting with đ is deliberate, so keep it even when it is not a
-    // syllable. Reaching a leading đ costs `dd` in Telex or `d9` in VNI, and no
-    // English word begins with either, so there is nothing here to rescue — while
-    // restoring the raw keys wrecks the Vietnamese chat abbreviations built this
-    // way (`đc`, `đt`, `đk`, which would come back as `ddc`, `ddt`, `ddk`). English
-    // words that merely *contain* the pair still restore, since their đ is not
-    // leading: `address`→`ađress`, `odd`→`ođ`, `sudden`→`suđen`.
-    if word.starts_with('đ') || word.starts_with('Đ') {
-        return false;
-    }
-    !vi::validation::is_valid_syllable(word) || violates_stop_coda_tone(word)
-}
-
-/// Whether the syllable breaks Vietnamese's stop-coda tone rule.
-///
-/// A syllable closed by `c`, `ch`, `p` or `t` can only carry sắc or nặng — the
-/// two "sharp" tones. Huyền, hỏi and ngã are impossible there. UniKey enforces
-/// this in `lastWordIsNonVn` (`ukengine.cpp:2352`); the `vi` crate does not, and
-/// happily calls `màc`, `hỏc`, `mãt` and `hòp` valid.
-///
-/// It matters in daily use because Telex's `f`, `r` and `x` are exactly those
-/// three tones, so ordinary English words were being transformed and then not
-/// rescued: `left`→`lèt`, `soft`→`sòt`, `gift`→`gìt`, `lift`→`lìt`. Auto-fix
-/// left them alone because it had been told they were valid Vietnamese.
-pub(crate) fn violates_stop_coda_tone(word: &str) -> bool {
-    /// Vowels carrying huyền, hỏi or ngã — the tones a stop coda forbids.
-    const FORBIDDEN_TONES: &str = "àèìòùỳằầềồờừÀÈÌÒÙỲẰẦỀỒỜỪ                                   ảẻỉỏủỷẳẩểổởửẢẺỈỎỦỶẲẨỂỔỞỬ                                   ãẽĩõũỹẵẫễỗỡữÃẼĨÕŨỸẴẪỄỖỠỮ";
-
-    let lowered = word.to_lowercase();
-    let stop_coda = lowered.ends_with("ch")
-        || lowered.ends_with('c')
-        || lowered.ends_with('p')
-        || lowered.ends_with('t');
-    stop_coda && word.chars().any(|ch| FORBIDDEN_TONES.contains(ch))
-}
-
-/// Computes the minimal edit turning `prev` into `next`: keep the common prefix,
-/// delete the rest of `prev` (counted in UTF-16 code units), insert the rest of
-/// `next`. This is the `backspaceCount` / `newCharCount` shape shipping engines use.
-pub(crate) fn diff(prev: &str, next: &str) -> KeyResponse {
-    // Longest common prefix in whole characters (never split a scalar).
-    let common_bytes = prev
-        .char_indices()
-        .zip(next.char_indices())
-        .take_while(|((_, a), (_, b))| a == b)
-        .map(|((i, c), _)| i + c.len_utf8())
-        .last()
-        .unwrap_or(0);
-
-    let deleted = &prev[common_bytes..];
-    let inserted = &next[common_bytes..];
-
-    KeyResponse {
-        handled: true,
-        backspaces: deleted.encode_utf16().count(),
-        insert: inserted.to_string(),
     }
 }

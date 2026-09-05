@@ -47,7 +47,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use glowkey_engine::Session;
+use glowkey_session::Session;
 
 use crate::prefs_model::Settings;
 use crate::session_adapter::{session_from, settings_from};
@@ -213,7 +213,7 @@ impl TapState {
     pub fn mode_is_vietnamese(&self) -> bool {
         self.session
             .try_borrow()
-            .map(|s| s.mode() == glowkey_engine::InputMode::Vietnamese)
+            .map(|s| s.mode() == glowkey_session::InputMode::Vietnamese)
             .unwrap_or(false)
     }
     /// Flushes the in-progress word — the engine's edits assume the composing word

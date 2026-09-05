@@ -318,12 +318,12 @@ define_class!(
 
         #[unsafe(method(addWordAsTyped:))]
         fn add_word_as_typed(&self, _sender: Option<&AnyObject>) {
-            self.add_word(glowkey_engine::WordPreference::Raw);
+            self.add_word(glowkey_session::WordPreference::Raw);
         }
 
         #[unsafe(method(addWordAsVietnamese:))]
         fn add_word_as_vietnamese(&self, _sender: Option<&AnyObject>) {
-            self.add_word(glowkey_engine::WordPreference::Vietnamese);
+            self.add_word(glowkey_session::WordPreference::Vietnamese);
         }
 
         #[unsafe(method(flipWord:))]
@@ -334,10 +334,10 @@ define_class!(
             // Read the current verdict rather than tracking it on the button: the
             // list is the truth, and the button only knows which row it is on.
             let flipped = match self.state().word_override(&keys) {
-                Some(glowkey_engine::WordPreference::Raw) => {
-                    glowkey_engine::WordPreference::Vietnamese
+                Some(glowkey_session::WordPreference::Raw) => {
+                    glowkey_session::WordPreference::Vietnamese
                 }
-                _ => glowkey_engine::WordPreference::Raw,
+                _ => glowkey_session::WordPreference::Raw,
             };
             self.state().set_word_override_and_save(&keys, flipped);
             self.refresh_words();
@@ -598,7 +598,7 @@ impl PrefsController {
     /// Shared by both Add buttons — the only difference between them is the
     /// verdict, and duplicating the field-reading around that would be two
     /// places to keep the trimming rule.
-    fn add_word(&self, prefer: glowkey_engine::WordPreference) {
+    fn add_word(&self, prefer: glowkey_session::WordPreference) {
         let Some(field) = self.ivars().word_keys.borrow().clone() else {
             return;
         };

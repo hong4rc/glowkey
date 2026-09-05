@@ -176,6 +176,15 @@ define_class!(
                 .set_always_macro_and_save(state == NSControlStateValueOn);
         }
 
+        /// "Record typed text in the log" checkbox toggled.
+        #[unsafe(method(verboseLogChanged:))]
+        fn verbose_log_changed(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let state: isize = unsafe { msg_send![sender, state] };
+            self.state()
+                .set_verbose_log_and_save(state == NSControlStateValueOn);
+        }
+
         /// Mid-word spell check checkbox toggled.
         #[unsafe(method(strictSpellCheckChanged:))]
         fn strict_spell_check_changed(&self, sender: Option<&AnyObject>) {

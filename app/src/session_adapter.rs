@@ -55,6 +55,7 @@ pub fn settings_from(session: &Session, prefs: &Settings) -> Settings {
         open_settings_at_launch: prefs.open_settings_at_launch,
         language: prefs.language,
         welcome_shown: prefs.welcome_shown,
+        verbose_log: prefs.verbose_log,
     }
 }
 
@@ -82,6 +83,7 @@ mod tests {
             open_settings_at_launch: false,
             language: crate::prefs_model::Language::Vietnamese,
             welcome_shown: true,
+            verbose_log: true,
             macros: vec![glowkey_session::Macro {
                 shortcut: "vn".into(),
                 expansion: "Việt Nam".into(),

@@ -6,7 +6,7 @@ use glowkey_input::{
     handle, hotkey, Ctx, Decision, HotkeyPreset, KeyEvent, Modifiers, Notice, Platform,
 };
 use glowkey_session::{
-    AppId, ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
+    AppId, KeyResponse, ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
 };
 
 const TERMINAL: &str = "example.terminal";
@@ -254,4 +254,41 @@ fn the_decided_notice_carries_the_session_before_the_change() {
     // Active at decision time; excluded afterwards.
     assert_eq!(shell.0, vec![true]);
     assert!(!session.is_active());
+}
+
+/// The redacted decision names no text the user typed.
+///
+/// This is a privacy property, not a formatting preference, so it is asserted
+/// against the rendered string rather than reviewed by eye: whatever the shells
+/// write to the log by default must not contain the characters. The counts and
+/// the branch survive, because those are what a triage pass reads first.
+#[test]
+fn a_redacted_decision_carries_no_typed_text() {
+    let response = KeyResponse {
+        handled: true,
+        backspaces: 2,
+        insert: "hồng".to_string(),
+    };
+    for decision in [
+        Decision::Emit(response.clone()),
+        Decision::EmitThenReplayKey(response.clone()),
+    ] {
+        let redacted = decision.redacted().to_string();
+        assert!(
+            !redacted.contains("hồng"),
+            "the log line still names what was typed: {redacted}"
+        );
+        assert!(
+            redacted.contains("bs=2"),
+            "the parts that make a log useful are gone too: {redacted}"
+        );
+        // And the verbose rendering still has it, or turning the setting on
+        // would buy the user nothing.
+        assert!(decision.to_string().contains("hồng"));
+    }
+
+    // A decision with no text renders the same either way.
+    for decision in [Decision::Passthrough, Decision::Consume, Decision::ToggleApp] {
+        assert_eq!(decision.redacted().to_string(), decision.to_string());
+    }
 }

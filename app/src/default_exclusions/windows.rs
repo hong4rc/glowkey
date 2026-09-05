@@ -51,6 +51,10 @@ pub const DEFAULT_EXCLUSIONS: &[&str] = &[
 /// Chromium-family browsers. Whether the omnibox's trailing selection behaves
 /// the way it does on macOS is a Phase 6 measurement, not an assumption; the
 /// table exists so the guard has somewhere to look when the answer is known.
+// Read by `needs_omnibox_guard` and its tests. Dead in a Windows build only
+// while the forward-delete that consulted it is disabled; the macOS guard uses
+// the same idea against its own table.
+#[allow(dead_code)]
 pub const CHROMIUM_APP_PREFIXES: &[&str] = &[
     "chrome.exe",
     "msedge.exe",

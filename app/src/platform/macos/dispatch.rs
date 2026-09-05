@@ -272,9 +272,21 @@ impl TapState {
         let mods = modifier_names(unsafe { CGEvent::flags(Some(event.as_ref())) });
         let app = self.last_bundle_id.borrow().clone().unwrap_or_default();
         let (raw, rendered, mode, active) = session.debug_state();
-        format!(
-            "KEY {ch:?} code={code} mods={mods} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
-        )
+        // The head of the line is the same either way — which key, where, what
+        // GlowKey decided. Only the text is conditional, because only the text is
+        // what the user wrote. See `crate::log::verbose`.
+        if crate::log::verbose() {
+            format!(
+                "KEY {ch:?} code={code} mods={mods} app={app} mode={mode:?} active={active} | {decision} | raw={raw:?} rendered={rendered:?}"
+            )
+        } else {
+            let decision = decision.redacted();
+            format!(
+                "KEY code={code} mods={mods} app={app} mode={mode:?} active={active} | {decision} | raw={}c rendered={}c",
+                raw.chars().count(),
+                rendered.chars().count()
+            )
+        }
     }
 
     /// One step of hotkey recording. The policy decides what the keystroke means;

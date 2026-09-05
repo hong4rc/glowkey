@@ -503,13 +503,26 @@ impl Platform for HookPort<'_> {
         match notice {
             Notice::Decided {
                 event, decision, ..
-            } => hook_log::log(format!(
-                "KEY {:?} vk={} mods={} app={} | {decision}",
-                event.ch,
-                event.raw_code,
-                adapt::modifier_names(&event.mods),
-                self.app.unwrap_or(""),
-            )),
+            } => hook_log::log(if crate::log::verbose() {
+                format!(
+                    "KEY {:?} vk={} mods={} app={} | {decision}",
+                    event.ch,
+                    event.raw_code,
+                    adapt::modifier_names(&event.mods),
+                    self.app.unwrap_or(""),
+                )
+            } else {
+                // Same line without the character and without the inserted text.
+                // `vk=` stays: it is the physical key, which is what a layout or
+                // dead-key report needs, and it does not say what was produced.
+                format!(
+                    "KEY vk={} mods={} app={} | {}",
+                    event.raw_code,
+                    adapt::modifier_names(&event.mods),
+                    self.app.unwrap_or(""),
+                    decision.redacted(),
+                )
+            }),
             Notice::ModeToggled(mode) => hook_log::log(format!("TOGGLE mode -> {mode:?}")),
             Notice::Corrected { was, becomes } => hook_log::log(format!(
                 "CORRECT {was:?} -> {becomes:?} — swapped and remembered"

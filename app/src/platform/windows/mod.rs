@@ -74,6 +74,9 @@ pub fn run() {
     // Vietnamese and Unikey ships a Vietnamese interface; an input method is the
     // last place to make someone read a second language.
     crate::strings::set_language(settings.language);
+    // Before the first keystroke can be logged. Off unless the user asked for
+    // it, so a fresh install records no typed text at all.
+    crate::log::set_verbose(settings.verbose_log);
 
     // The writer thread first: everything below logs, and after the hook is
     // installed every log call has to be non-blocking.

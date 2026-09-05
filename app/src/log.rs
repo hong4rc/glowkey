@@ -131,6 +131,36 @@ fn rotate(open: &mut LogFile, current: &PathBuf, previous: &PathBuf) {
 /// Appends one line to the log (and echoes to stderr when `GLOWKEY_DEBUG` is set).
 /// Never panics; a logging failure is swallowed so it cannot disturb input.
 /// Under `cargo test` it does nothing — tests must not write the user's real log.
+/// Whether the log records the text the user types.
+///
+/// Off unless the user turns it on. The log's whole purpose is diagnosing a
+/// typing bug without a live reproduction, and the fields that do that —
+/// `raw=`, `rendered=`, the inserted text — are the text somebody wrote, sitting
+/// in a file any program running as that user can read. Bounded at 5 MB plus one
+/// generation, that is a lot of somebody's writing to keep by default for a bug
+/// they may never hit.
+///
+/// So the default line keeps the shape and drops the characters, and a setting
+/// puts them back for as long as it takes to catch the bug. It is a setting
+/// rather than a build flag because bug reports come from users, who have to be
+/// able to turn it on and off again themselves.
+static VERBOSE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turns keystroke content in the log on or off. Called from the settings.
+pub fn set_verbose(on: bool) {
+    VERBOSE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the log may record the text the user types.
+///
+/// Read on the keystroke path, so it is a relaxed atomic load: the cost is a
+/// register read, and a toggle taking effect one keystroke later is not a
+/// property worth a fence.
+#[must_use]
+pub fn verbose() -> bool {
+    VERBOSE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Routes panics to the log file.
 ///
 /// Both keystroke callbacks already catch their own panics, so this is for

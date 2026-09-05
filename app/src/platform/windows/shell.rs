@@ -239,6 +239,10 @@ pub fn apply_settings(current: &Settings, updated: Option<Settings>) {
     // was in a settings window, so the caret has moved and the diff baseline is
     // stale either way. The frontmost application is not gone, only unpersisted,
     // so it is put back.
+    // Before the confirmation line below, so turning it off takes effect for
+    // every line after the click rather than one save later.
+    crate::log::set_verbose(merged.verbose_log);
+
     let app = foreground::current();
     hook::replace_settings(&merged);
     hook::with_session(|session| {
@@ -346,6 +350,11 @@ fn merge_settings(baseline: &Settings, edited: &Settings, live: Settings) -> Set
             &baseline.always_macro,
             &edited.always_macro,
             &live.always_macro,
+        ),
+        verbose_log: pick(
+            &baseline.verbose_log,
+            &edited.verbose_log,
+            &live.verbose_log,
         ),
         welcome_shown: pick(
             &baseline.welcome_shown,

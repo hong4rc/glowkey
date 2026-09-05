@@ -177,6 +177,46 @@ impl Decision {
     }
 }
 
+/// The decision with the typed text left out, as both shells write it to their
+/// logs by default.
+///
+/// [`Display`](fmt::Display) names the text that was inserted, which is the text
+/// the user typed. That is what makes a log useful for diagnosing a typing bug
+/// and also what makes it a record of everything somebody wrote, so it is opt-in
+/// and this is what a log line carries otherwise. Everything a triage pass reads
+/// first — which branch of the ladder ran, how far back it deleted, how much it
+/// inserted — survives; only the characters are gone.
+pub struct Redacted<'a>(pub &'a Decision);
+
+impl fmt::Display for Redacted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Decision::Passthrough => f.write_str("Passthrough"),
+            Decision::Consume => f.write_str("Consume"),
+            Decision::ToggleApp => f.write_str("ToggleApp"),
+            Decision::Emit(r) => {
+                write!(f, "Emit bs={} ins={}u", r.backspaces, r.insert.len())
+            }
+            Decision::EmitThenReplayKey(r) => {
+                write!(
+                    f,
+                    "EmitThenReplayKey bs={} ins={}u",
+                    r.backspaces,
+                    r.insert.len()
+                )
+            }
+        }
+    }
+}
+
+impl Decision {
+    /// This decision rendered without the text it would insert.
+    #[must_use]
+    pub fn redacted(&self) -> Redacted<'_> {
+        Redacted(self)
+    }
+}
+
 /// The decision as both shells write it to their logs.
 impl fmt::Display for Decision {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

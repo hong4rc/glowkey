@@ -27,18 +27,27 @@ it does not.
 ## The local diagnostic log — please read this
 
 To make typing bugs diagnosable without a live reproduction, GlowKey appends a
-line for **every key it handles**. Those lines contain the text you typed.
+line for **every key it handles**.
+
+**By default those lines do not contain the text you typed.** They record which
+physical key was pressed, the frontmost application, which branch of the logic
+ran, and how many characters were deleted and inserted — enough to diagnose most
+reports, and not a record of what you wrote.
 
 | | macOS | Windows |
 |---|---|---|
 | Where | `~/Library/Logs/GlowKey/glowkey.log` | `%LOCALAPPDATA%\GlowKey\Logs\glowkey.log` |
-| What | the key, the frontmost app, the decision, and the current word's raw and rendered forms | the key's character, the frontmost app, the decision, and the text emitted |
 | Size | bounded at 5 MB plus one previous generation | same |
 
-Things you should know about it:
+**Settings → General → Diagnostics → "Record typed text in the log"** turns the
+text back on: the character of each key, and on macOS the word being composed in
+both its raw and rendered forms. It is **off by default**. Turn it on only to
+reproduce a bug and turn it off afterwards — while it is on, the log is a record
+of everything you type, up to about 10 MB of it, attributed to the application
+you typed it in.
 
-- **It is keystroke content on disk.** Up to about 10 MB of what you have typed,
-  attributed to the application you typed it in.
+Things you should know about it either way:
+
 - It is a plain local file, and nothing GlowKey does transmits it anywhere. But
   any program running under your own user account can read it.
 - **Keys typed in excluded (ignored) apps are still recorded.** The ignore list
@@ -48,8 +57,8 @@ Things you should know about it:
     secure input from event taps.
   - **Windows — not excluded.** A low-level keyboard hook receives no such
     exemption from the operating system, and GlowKey does not implement one.
-    Assume anything you type into a password field on Windows can appear in the
-    log.
+    Assume anything you type into a password field on Windows reaches GlowKey —
+    and, if you have turned typed-text recording on, reaches the log.
 - Delete it any time — macOS: menu bar → *Reveal Log in Finder*; Windows: tray →
   *Show log folder*. GlowKey recreates an empty one.
 

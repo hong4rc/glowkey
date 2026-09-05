@@ -51,6 +51,7 @@ pub fn is_terminal(app_id: &str) -> bool {
 /// A prefix match, because macOS ships channel-suffixed bundle identifiers:
 /// `com.google.Chrome.canary` is Chrome and must be guarded like Chrome.
 #[must_use]
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn is_chromium_app(app_id: &str) -> bool {
     CHROMIUM_APP_PREFIXES
         .iter()

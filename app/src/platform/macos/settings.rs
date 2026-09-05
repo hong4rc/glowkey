@@ -133,6 +133,28 @@ impl TapState {
         self.save_settings();
     }
 
+    /// Whether the log records typed text.
+    pub fn verbose_log(&self) -> bool {
+        self.prefs
+            .try_borrow()
+            .map(|p| p.verbose_log)
+            .unwrap_or(false)
+    }
+
+    /// Sets whether the log records typed text, and saves.
+    ///
+    /// The flag is set here rather than only at startup so that turning it off
+    /// stops the recording at the click, not at the next launch — a user who has
+    /// just typed something they did not mean to record should not have to quit
+    /// the app to stop it.
+    pub fn set_verbose_log_and_save(&self, on: bool) {
+        if let Ok(mut prefs) = self.prefs.try_borrow_mut() {
+            prefs.verbose_log = on;
+        }
+        crate::log::set_verbose(on);
+        self.save_settings();
+    }
+
     /// The current input method (Telex/VNI). Drives the Settings control.
     pub fn input_method(&self) -> glowkey_session::InputMethod {
         self.session

@@ -64,6 +64,16 @@ records the layering.
 
 ## Install
 
+> **GlowKey is not code-signed for distribution, and that is a deliberate
+> choice.** Notarizing on macOS needs a paid Apple Developer account this
+> project does not have; Windows code signing is not set up either. So this is a
+> build-it-yourself project for a technical audience, and installing it means
+> stepping past your operating system's warnings on purpose. Both platforms need
+> a manual step below, and on macOS **you will have to re-grant the Accessibility
+> permission after every update** — an unsigned app gets a new identity on every
+> build, and macOS ties the permission to that identity. If that is more friction
+> than you want, Unikey and EVKey are signed and are the reasonable choice.
+
 ### macOS
 
 Download the disk image from the [releases page](../../releases) and drag

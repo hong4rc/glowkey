@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK,
-    VK_DELETE,
 };
 
 /// Whether the current run of injection refusals has already been reported.
@@ -65,6 +64,16 @@ pub fn is_own_event(extra_info: usize) -> bool {
 /// delivered in order and cannot be interleaved with real input midway, which is
 /// the ordering guarantee the blind diff model needs.
 pub fn emit_edit(backspaces: usize, text: &str, app: Option<&str>) {
+    send(&edit_inputs(backspaces, text, app));
+}
+
+/// The key sequence one edit becomes.
+///
+/// Separate from [`emit_edit`] so it can be asserted on without sending anything
+/// into the live session: what this returns is exactly what the machine would
+/// receive, and the thing most worth pinning about an input method is that it
+/// never contains a key the user did not ask for.
+fn edit_inputs(backspaces: usize, text: &str, app: Option<&str>) -> Vec<INPUT> {
     let mut inputs: Vec<INPUT> = Vec::with_capacity(backspaces * 2 + text.len() * 2 + 2);
 
     // ── The Chromium address-bar guard ──────────────────────────────────────
@@ -85,21 +94,28 @@ pub fn emit_edit(backspaces: usize, text: &str, app: Option<&str>) {
     // caret at the end of the text — GlowKey's normal position while composing —
     // it deletes nothing, so it is a no-op in the ordinary case.
     //
-    // **The trade-off, stated rather than hidden.** macOS gates this on an
-    // accessibility read of whether a selection actually exists. The Windows
-    // equivalent is a UI Automation call: cross-process, COM, and on the
-    // keystroke path — which `decisions/0008` forbids and `LowLevelHooksTimeout`
-    // punishes by removing the hook. So this fires unconditionally for Chromium
-    // applications instead. The cost is one wasted key event per edit there, and
-    // one real risk: if the caret is mid-field *while composing*, the
-    // forward-delete eats the character after it. Reaching that state requires
-    // moving the caret without flushing, and the ladder flushes on every arrow
-    // key and the mouse hook flushes on every click — so it is narrow, and it is
-    // written down here rather than discovered later.
-    if needs_omnibox_guard(backspaces, app) {
-        inputs.push(key_input(VK_DELETE, false));
-        inputs.push(key_input(VK_DELETE, true));
-    }
+    // **Not sent, since 2026-09-05.** This used to fire for every Chromium
+    // application, on the argument that reaching a mid-field caret required
+    // moving it without flushing. That argument was wrong: a mouse click *does*
+    // flush and *does* leave the caret mid-field, so the next edit carrying
+    // backspaces sent a forward-delete into ordinary text. `is_chromium_app`
+    // matches Electron too, so that is Chrome, Edge, Slack, VS Code and Discord,
+    // and the failure is silent — the user cannot tell a character went missing.
+    // Worse than the bug it prevents, which is a visible `hoongf` -> `hoồng` in
+    // the address bar and is now back.
+    //
+    // macOS keeps its guard because it can afford to ask first: an accessibility
+    // read tells it whether a selection actually exists. The Windows equivalent
+    // is a UI Automation call — cross-process, COM, on the keystroke path — which
+    // `decisions/0008` forbids and `LowLevelHooksTimeout` punishes by removing
+    // the hook, so it cannot simply be added here.
+    //
+    // The way back is to learn focus off the hot path: extend the WinEvent hook
+    // in `foreground.rs` with `EVENT_OBJECT_FOCUS`, cache whether the focused
+    // element is the omnibox, and require that here as the second condition.
+    // `needs_omnibox_guard` is the first condition and is kept and still tested
+    // rather than deleted — the rule it encodes is right, it is only half of one.
+    let _ = app;
 
     for _ in 0..backspaces {
         inputs.push(key_input(VK_BACK, false));
@@ -111,7 +127,7 @@ pub fn emit_edit(backspaces: usize, text: &str, app: Option<&str>) {
         inputs.push(unicode_input(unit, false));
         inputs.push(unicode_input(unit, true));
     }
-    send(&inputs);
+    inputs
 }
 
 /// Replays one key by its virtual-key code, from our own queue.
@@ -214,9 +230,19 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
     }
 }
 
-/// Whether an edit into `app` needs the Chromium address-bar guard.
+/// Whether an edit into `app` is in scope for the Chromium address-bar guard.
 ///
 /// Split out so the rule is testable without injecting anything.
+///
+/// **Not currently a trigger.** [`edit_inputs`] no longer consults it: fired as
+/// the only condition it deleted real text in Chromium page bodies, and the
+/// comment there records why. This is the first of the two conditions the guard
+/// needs — a Chromium application with backspaces to send — and it stays, tested,
+/// for the focus-cached second one to join.
+// Not called while the forward-delete is disabled. Kept rather than deleted:
+// this is the first of the guard's two conditions, it is covered by tests, and
+// re-deriving it later from the same evidence would be work done twice.
+#[allow(dead_code)]
 #[must_use]
 pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>) -> bool {
     backspaces > 0 && app.is_some_and(crate::default_exclusions::is_chromium_app)
@@ -225,15 +251,48 @@ pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the test that proves it is never sent still names it.
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_DELETE;
 
-    /// The guard fires for a Chromium browser with backspaces to send, and for
-    /// nothing else.
+    /// The virtual-key code an entry carries, or `None` for a Unicode entry.
+    fn vk_of(input: &INPUT) -> Option<u16> {
+        // SAFETY: every entry this module builds is a KEYBDINPUT — `key_input`
+        // and `unicode_input` are the only constructors — so reading `ki` is
+        // reading the variant that is there.
+        let vk = unsafe { input.Anonymous.ki.wVk };
+        (vk != 0).then_some(vk)
+    }
+
+    /// **A Chromium edit sends no forward-delete.**
+    ///
+    /// The regression this pins is the user's text disappearing, so it is
+    /// asserted against the actual input sequence rather than trusted to a call
+    /// site staying commented out. `VK_DELETE` here removes the character after
+    /// the caret, and in a page body there is always one.
+    #[test]
+    fn a_chromium_edit_sends_no_forward_delete() {
+        for app in ["chrome.exe", "msedge.exe", "slack.exe", "code.exe"] {
+            let inputs = edit_inputs(2, "ồ", Some(app));
+            assert!(
+                !inputs.iter().any(|i| vk_of(i) == Some(VK_DELETE)),
+                "{app}: a forward-delete deletes the character after the caret"
+            );
+            assert!(
+                inputs.iter().any(|i| vk_of(i) == Some(VK_BACK)),
+                "{app}: the edit still deletes what it meant to"
+            );
+        }
+    }
+
+    /// The guard's scope answers yes for a Chromium browser with backspaces to
+    /// send, and no for everything else.
     ///
     /// Both halves matter. Missing it in Edge is the `hoongf` -> `hoồng` bug;
-    /// firing it anywhere else spends a forward-delete on a field that never had
-    /// a selection, which in a normal editor deletes a real character.
+    /// answering yes anywhere else would spend a forward-delete on a field that
+    /// never had a selection — which is what happened while this was wired up as
+    /// the only condition, and why it no longer is.
     #[test]
-    fn the_omnibox_guard_fires_only_for_chromium_edits() {
+    fn the_omnibox_guard_scope_covers_only_chromium_edits() {
         assert!(needs_omnibox_guard(1, Some("msedge.exe")));
         assert!(needs_omnibox_guard(3, Some("chrome.exe")));
 

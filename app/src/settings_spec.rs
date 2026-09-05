@@ -120,6 +120,7 @@ pub enum Toggle {
     AutoCapitalize,
     RestoreEnglishWords,
     AlwaysMacro,
+    VerboseLog,
 }
 
 impl Toggle {
@@ -139,12 +140,13 @@ impl Toggle {
             Self::AutoCapitalize => &mut settings.auto_capitalize,
             Self::RestoreEnglishWords => &mut settings.restore_english_words,
             Self::AlwaysMacro => &mut settings.always_macro,
+            Self::VerboseLog => &mut settings.verbose_log,
         })
     }
 
     /// Every toggle, for the test that checks each is placed exactly once.
     #[cfg(test)]
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::LaunchAtLogin,
         Self::OpenSettingsAtLaunch,
         Self::QuickTelex,
@@ -154,6 +156,7 @@ impl Toggle {
         Self::AutoCapitalize,
         Self::RestoreEnglishWords,
         Self::AlwaysMacro,
+        Self::VerboseLog,
     ];
 }
 
@@ -320,6 +323,22 @@ const GENERAL: &[Section] = &[
                 .label("Launch GlowKey at login", "Khởi động GlowKey cùng máy"),
             Row::new(Control::Checkbox(Toggle::OpenSettingsAtLaunch))
                 .label("Open this window at launch", "Mở cửa sổ này khi khởi động"),
+        ],
+    },
+    Section {
+        title: Text::new("Diagnostics", "Chẩn đoán"),
+        rows: &[
+            Row::new(Control::Checkbox(Toggle::VerboseLog))
+                .label(
+                    "Record typed text in the log",
+                    "Ghi nội dung đã gõ vào nhật ký",
+                )
+                .caption(
+                    "Turn on only to reproduce a bug, then off again. The log \
+                     always keeps the key and the decision; this adds the text.",
+                    "Chỉ bật khi cần tái hiện lỗi, rồi tắt đi. Nhật ký luôn ghi \
+                     phím và quyết định; mục này thêm cả nội dung.",
+                ),
         ],
     },
     Section {

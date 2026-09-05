@@ -468,6 +468,7 @@ impl PrefsController {
             Toggle::AutoCapitalize => state.auto_capitalize(),
             Toggle::RestoreEnglishWords => state.restore_english_words(),
             Toggle::AlwaysMacro => state.always_macro(),
+            Toggle::VerboseLog => state.verbose_log(),
         }
     }
 
@@ -508,6 +509,7 @@ fn toggle_selector(toggle: Toggle) -> Sel {
         Toggle::AutoCapitalize => sel!(autoCapitalizeChanged:),
         Toggle::RestoreEnglishWords => sel!(englishRestoreChanged:),
         Toggle::AlwaysMacro => sel!(alwaysMacroChanged:),
+        Toggle::VerboseLog => sel!(verboseLogChanged:),
     }
 }
 

@@ -85,6 +85,13 @@ pub struct Settings {
     /// it once too.
     #[serde(default)]
     pub welcome_shown: bool,
+    /// Whether the diagnostic log records the text the user types.
+    ///
+    /// Off by default, and deliberately not something the app turns on for
+    /// itself: the fields it enables are what somebody wrote. See
+    /// `crate::log::set_verbose`.
+    #[serde(default)]
+    pub verbose_log: bool,
     /// Per-word decisions about the English/Telex ambiguity — the one limitation
     /// no rule can resolve (`docs/handoff.md` §6.3). Empty by default, and an
     /// existing settings file gains an empty list rather than failing to load.
@@ -111,6 +118,7 @@ impl Default for Settings {
             strict_spell_check: false,
             always_macro: false,
             welcome_shown: false,
+            verbose_log: false,
             word_overrides: Vec::new(),
         }
     }
@@ -218,6 +226,7 @@ mod tests {
             strict_spell_check: true,
             always_macro: true,
             welcome_shown: true,
+            verbose_log: true,
             word_overrides: vec![WordOverride {
                 keys: "cats".into(),
                 prefer: glowkey_session::WordPreference::Vietnamese,

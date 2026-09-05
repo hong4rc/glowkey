@@ -410,6 +410,9 @@ pub fn run() {
     // the first thing the user sees, and it has to speak their language too.
     let settings = crate::settings_store::load();
     crate::strings::set_language(settings.language);
+    // Before the first keystroke can be logged. Off unless the user asked for
+    // it, so a fresh install records no typed text at all.
+    crate::log::set_verbose(settings.verbose_log);
 
     // Wait for Accessibility instead of exiting, so the app stays alive while the
     // user grants it (add GlowKey.app in System Settings → Privacy & Security →

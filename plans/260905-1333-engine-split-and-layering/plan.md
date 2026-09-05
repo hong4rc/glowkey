@@ -41,11 +41,11 @@ touches `Settings`. The split follows the tests.
 Layering, bottom up, each a crate with one reason to change:
 
 ```
-glowkey-engine   core: Engine, InputMethod, PlacementStyle, KeyResponse, remove_tones,
-                 Macro (data + expansion), WordOverride/WordPreference (data + lookup)
+glowkey-engine   core: Engine, InputMethod, PlacementStyle, KeyResponse, remove_tones
       ▲
 glowkey-session  policy: Session, InputMode, ExclusionList (defaults injected),
-                 auto-fix, correction, macros on/off, AppId newtype
+                 auto-fix, correction, Macro (data + expansion), WordOverride/
+                 WordPreference, AppId newtype
       ▲
 glowkey-input    ports: KeyEvent/Key/Modifiers in, Decision/Effects out, hotkey matching,
                  `Platform` trait for what a shell must provide
@@ -91,9 +91,9 @@ value), a plugin registry (one product).
 
 ## Acceptance criteria
 
-1. `glowkey-engine` has no `serde` in its default features, no `Settings`, no
-   `Language`, no `HotkeyPreset`, no `.exe` or bundle id anywhere, no
-   `cfg(target_os)`; `cargo test -p glowkey-engine` green on Linux CI; a
+1. `glowkey-engine` has no `serde` at all, no `Settings`, no `Language`, no
+   `HotkeyPreset`, no `Macro`, no `WordOverride`, no `.exe` or bundle id
+   anywhere, no `cfg(target_os)`; `cargo test -p glowkey-engine` green on Linux CI; a
    consumer example `examples/type_a_word.rs` compiles with the crate alone.
 2. `glowkey-session` builds a `Session` through a builder with injected
    exclusion defaults; every existing session test passes unchanged in
@@ -136,6 +136,43 @@ value), a plugin registry (one product).
   the consumer inherits it. Acceptable; documented in the engine README.
 - Port plan Phase 8 (Linux) builds on phase 4 here; the port plan is marked
   blocked by this one.
+
+## Validation Log
+
+### Validation Session 1 (2026-09-05 13:40)
+
+### Verification Results
+- Claims checked: 22 (Fact Checker, Flow Tracer, Scope Auditor, Contract Verifier)
+- Verified: 22 | Failed: 0 | Unverified: 0
+- Tier: Full
+- Evidence: `Engine` at `lib.rs:588`, `Session` at `lib.rs:1166`;
+  `Session::from_settings` 3 callers, `.snapshot()` 5, `set_frontmost_app` 13
+  references at 8 sites (menu_bar.rs, macos/mod.rs x3, macos/tests.rs x4,
+  windows/hook.rs, windows/shell.rs x2); `HotkeyPreset` 66 references,
+  `Settings` 123, `DEFAULT_EXCLUSIONS` 17; `carry_out_effects` present in both
+  `macos/dispatch.rs:109` and `windows/hook.rs`; `KeyEvent.raw_code: i64`
+  exists; the `keycode` serde alias at `lib.rs:187`; the engine has no
+  `pub(crate) fn` (the session uses only public API, so the split is clean);
+  no `rust-version` anywhere yet; the Linux CI job covers engine and input only.
+
+### Decisions (all as recommended)
+1. Session in its own crate `glowkey-session`.
+2. **Macros and word overrides move to the session crate**, not the core.
+   Changes the design diagram, criterion 1, the phase 1 module table
+   (`macros.rs`, `overrides.rs` marked as leaving), and phase 3 scope (move
+   them plus `tests/macro_table.rs`, `tests/word_overrides.rs`). The engine
+   then has no `serde` at all.
+3. `Settings`, `Language`, launch flags: a module in `app/`.
+4. `Platform` trait, five methods; phase 4 stays.
+5. `HotkeyPreset` to `glowkey-input` with one `raw_code` and serde aliases.
+6. `AppId` newtype at the 13 references.
+7. Semver-checks and MSRV in CI now, semver `continue-on-error` until a tag.
+
+### Whole-Plan Consistency Sweep
+Re-read `plan.md` and all five phase files after propagation. Every mention of
+`Macro`/`WordOverride` placement now says session; criterion 1 and the phase 1
+module table agree; `from_settings`, `snapshot`, `DEFAULT_EXCLUSIONS`,
+`AppId`, `Platform` are used consistently. No unresolved contradictions.
 
 ## Rollback
 

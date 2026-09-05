@@ -17,9 +17,9 @@ The engine stops knowing there is a settings window or a login item.
 ## Requirements
 - Functional: `settings.json` written by today's build loads and round-trips
   byte-for-byte (modulo key order, which serde_json preserves as declared).
-- Non-functional: `glowkey-engine` has no `serde` in default features after
-  this phase (`serde` becomes an optional feature for `Macro`/`WordOverride`
-  only); no `cfg(target_os)`, no `macos_keycode`, no `windows_vk`.
+- Non-functional: after this phase the engine's only `serde` users are
+  `Macro`/`WordOverride`, which leave in phase 3 (then `serde` goes entirely);
+  no `cfg(target_os)`, no `macos_keycode`, no `windows_vk`.
 
 ## Architecture
 - `app/src/prefs_model.rs` (new; shared by both shells): `Settings` moves here
@@ -54,7 +54,9 @@ The engine stops knowing there is a settings window or a login item.
 4. Remove `open_settings_at_launch` / `welcome_shown` from `Session`; the
    shells read them from `Settings`.
 5. Replace `Session::from_settings`/`snapshot` with the adapter; delete the
-   engine's `Settings` dependency; make `serde` optional in the engine.
+   engine's `Settings` dependency; make `serde` optional in the engine (removed
+   outright in phase 3).
+<!-- Updated: Validation Session 1 - serde leaves the engine with macros in phase 3 -->
 6. Gates on three targets; fixture test green.
 
 ## Success Criteria

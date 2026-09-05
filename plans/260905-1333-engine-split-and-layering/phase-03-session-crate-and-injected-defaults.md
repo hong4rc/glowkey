@@ -50,8 +50,11 @@ impl ExclusionList {
   `set_frontmost_app(AppId)`; the shells construct `AppId` from what they know.
 - `glowkey-input` depends on `glowkey-session` (for `Session`) and
   `glowkey-engine`; `app` depends on all three.
-- The engine keeps `Macro`/`WordOverride` as data types (they are text
-  policy, not product), re-exported by the session crate.
+- `Macro`, `MacroConflict`, `WordOverride`, `WordPreference` move here too
+  (decided in validation: a bare IME consumer does not want text expansion or
+  a per-user word list). `tests/macro_table.rs` and `tests/word_overrides.rs`
+  move with them. After this the engine has no `serde` dependency at all.
+<!-- Updated: Validation Session 1 - macros and overrides are session, not core -->
 
 ## Related Code Files
 - Create: `crates/glowkey-session/{Cargo.toml,src/lib.rs,src/session.rs,src/exclusion.rs,src/builder.rs,tests/*}`, `app/src/default_exclusions.rs`
@@ -59,7 +62,7 @@ impl ExclusionList {
   (remove session, exclusion), `crates/glowkey-input/Cargo.toml` and `src`,
   `app/**` imports, `app/src/session_adapter.rs`, `.github/workflows/ci.yml`
   (Linux job adds `-p glowkey-session`)
-- Delete: `crates/glowkey-engine/src/{session,exclusion}.rs`
+- Delete: `crates/glowkey-engine/src/{session,exclusion,macros,overrides}.rs`; `serde` from the engine's `Cargo.toml`
 
 ## Implementation Steps
 1. Create the crate; move `session.rs`, `exclusion.rs`, the five test files.
@@ -75,8 +78,9 @@ impl ExclusionList {
 
 ## Success Criteria
 - [ ] `grep -rn "\.exe\|com\.\|terminal" crates/glowkey-session/src` is empty.
-- [ ] `cargo test -p glowkey-session` green with test files moved, not edited
-      beyond `use`.
+- [ ] `cargo test -p glowkey-session` green with the seven moved test files
+      edited only in `use` lines.
+- [ ] `cargo tree -p glowkey-engine` shows `vi` and `phf` only.
 - [ ] `glowkey-input` tests unchanged and green.
 - [ ] Linux CI job covers all three library crates.
 

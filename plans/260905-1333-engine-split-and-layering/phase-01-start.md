@@ -28,8 +28,8 @@ crates/glowkey-engine/src/
   method.rs       InputMethod, PlacementStyle, SIMPLE_TELEX definition, Strategy selection
   engine.rs       Engine, KeyResponse, BackspaceOutcome, BoundaryBackspace
   tones.rs        remove_tones and tone-mark helpers
-  macros.rs       Macro, MacroConflict, parse_table/format_table, expansion lookup
-  overrides.rs    WordOverride, WordPreference, lookup
+  macros.rs       Macro, MacroConflict, parse_table/format_table (moves out in phase 3)
+  overrides.rs    WordOverride, WordPreference, lookup (moves out in phase 3)
   session.rs      Session, InputMode, ExclusionToggle (moves out in phase 3)
   exclusion.rs    unchanged (moves out in phase 3)
   config.rs       Settings (moves out in phase 2)
@@ -57,6 +57,8 @@ No item changes visibility or name. `lib.rs` keeps `pub use` for everything
 - [ ] Public API list identical before and after.
 - [ ] No file over 600 lines in the engine crate.
 - [ ] Clippy and doc warnings zero.
+
+<!-- Updated: Validation Session 1 - macros/overrides leave the core in phase 3 -->
 
 ## Risk Assessment
 - Private helpers shared across the new modules need `pub(crate)`; that is the

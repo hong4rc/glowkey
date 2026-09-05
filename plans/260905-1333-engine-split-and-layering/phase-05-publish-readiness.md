@@ -31,8 +31,10 @@ semver guard rails, a stated MSRV.
   `hoongf`, print `hồng`.
 - `#[non_exhaustive]` on `InputMethod`, `KeyResponse`-adjacent enums, `Decision`.
 - `CHANGELOG.md` per crate (Keep a Changelog), starting at 0.1.0.
-- CI: `cargo semver-checks check-release -p glowkey-engine` on PRs once a
-  baseline tag exists; `cargo doc --no-deps -D warnings`; an MSRV job.
+- CI: `cargo semver-checks check-release -p glowkey-engine` on PRs, added now
+  with `continue-on-error: true` until the first tag, then strict (decided in
+  validation); `cargo doc --no-deps -D warnings`; an MSRV job.
+<!-- Updated: Validation Session 1 - semver step present from day one -->
 - Root `README.md` "Layout" section: the four layers and which crate to take.
 
 ## Related Code Files

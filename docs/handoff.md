@@ -734,9 +734,14 @@ compile-checked only** and has not been run.
    only; the pixels are item 1 above.
 4. **Publishing.** `cargo publish --dry-run -p glowkey-engine` is green. The
    session and input crates cannot be packaged until the engine is on
-   crates.io; `ci.yml` says where to add them. Before a first tag: drop
-   `continue-on-error` from the semver job, and make the session README louder
-   that `Session::builder()` without `.exclusions(..)` has no terminal rule.
+   crates.io; `ci.yml` says where to add them. The semver job (2026-09-05) now
+   checks against the `v0.1.0` git tag rather than a crates.io baseline —
+   `cargo package` resolves path dependencies against the registry, so a
+   registry baseline would need all three crates published, and only the
+   engine is — so it is real and enforced without waiting on that. Move its
+   `baseline-rev` to the newest tag at each release. Also still open: make the
+   session README louder that `Session::builder()` without `.exclusions(..)`
+   has no terminal rule.
 5. The older items below still stand: the freeze fix (§6.9) has never been
    verified live, and the omnibox `EMIT took=` number in §7 is an estimate.
 

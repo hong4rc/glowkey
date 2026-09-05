@@ -52,18 +52,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
       - run: cargo check -p glowkey-engine -p glowkey-session -p glowkey-input --all-targets --all-features
 
-  # A public API change that needs a major version bump fails here. There is no
-  # published baseline yet, so the step may fail without failing the build;
-  # drop `continue-on-error` at the first tag.
+  # A public API change that needs a major version bump fails here. The
+  # baseline comes from the `v0.1.0` git tag, not crates.io: `cargo package`
+  # resolves path dependencies against the registry, so a registry baseline
+  # would need every crate published first, and only the engine is. A git
+  # baseline needs no publish step and stays in sync with tags this repo
+  # already makes.
   semver:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: glowkey-engine,glowkey-session,glowkey-input
+          baseline-rev: v0.1.0
 
   # The Windows shell: a WH_KEYBOARD_LL hook and SendInput, linked and its tests
   # run. This job is worth more than it looks — it is the first place Windows

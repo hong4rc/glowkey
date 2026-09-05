@@ -1,7 +1,7 @@
 ---
 phase: 1
 title: "Carve the engine into modules, no behaviour change"
-status: pending
+status: completed
 priority: P1
 effort: "4h"
 dependencies: []
@@ -53,10 +53,10 @@ No item changes visibility or name. `lib.rs` keeps `pub use` for everything
 5. Diff the public API list; it must be identical.
 
 ## Success Criteria
-- [ ] All tests pass with zero test-file edits.
-- [ ] Public API list identical before and after.
-- [ ] No file over 600 lines in the engine crate.
-- [ ] Clippy and doc warnings zero.
+- [x] All tests pass with zero test-file edits.
+- [x] Public API list identical before and after.
+- [ ] No file over 600 lines in the engine crate. **Deferred to phase 3:** `session.rs` is 1,156 lines and leaves the crate there, where it gets `builder.rs`, `corrections.rs`, `macros.rs`; `engine.rs` is 613, split in phase 5 if it still bothers.
+- [x] Clippy and doc warnings zero.
 
 <!-- Updated: Validation Session 1 - macros/overrides leave the core in phase 3 -->
 

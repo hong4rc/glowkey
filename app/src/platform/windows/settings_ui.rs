@@ -291,9 +291,35 @@ fn segmented<T: PartialEq + Copy>(
     let total = egui::vec2(widths.iter().sum(), HEIGHT);
     let (track, _) = ui.allocate_exact_size(total, egui::Sense::hover());
     // One id per control from the auto-id sequence, so two controls in one
-    // scope cannot answer each other's clicks.
+    // scope cannot answer each other's clicks. The same id is the control's
+    // keyboard focus: Tab reaches it, arrows move the selection.
     let base_id = ui.next_auto_id();
     ui.skip_ahead_auto_ids(1);
+    // The track is the focusable widget. egui drops focus from an id that was
+    // not drawn as a widget this frame, so registering interest alone is not
+    // enough; the track's interaction is what keeps the id alive.
+    let track_response = ui.interact(track, base_id, egui::Sense::focusable_noninteractive());
+    let focused = track_response.has_focus();
+    if focused {
+        let selected = options.iter().position(|(v, _)| *v == *value).unwrap_or(0);
+        let last = options.len().saturating_sub(1);
+        let next = ui.input(|i| {
+            if i.key_pressed(egui::Key::ArrowRight) {
+                Some(selected.saturating_add(1).min(last))
+            } else if i.key_pressed(egui::Key::ArrowLeft) {
+                Some(selected.saturating_sub(1))
+            } else if i.key_pressed(egui::Key::Home) {
+                Some(0)
+            } else if i.key_pressed(egui::Key::End) {
+                Some(last)
+            } else {
+                None
+            }
+        });
+        if let Some(next) = next {
+            *value = options[next].0;
+        }
+    }
 
     let dark = ui.visuals().dark_mode;
     let (track_fill, raised_fill, hover_fill, shadow) = if dark {
@@ -319,8 +345,15 @@ fn segmented<T: PartialEq + Copy>(
         let rect =
             egui::Rect::from_min_size(egui::pos2(x, track.min.y), egui::vec2(*width, HEIGHT));
         let response = ui.interact(rect, base_id.with(i), egui::Sense::click());
+        let selected = options[i].0 == *value;
+        // What a screen reader hears for this segment.
+        let label = options[i].1.clone();
+        response.widget_info(move || {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &label)
+        });
         if response.clicked() {
             *value = options[i].0;
+            track_response.request_focus();
         }
         rects.push((rect, response.hovered()));
         x += width;
@@ -339,6 +372,14 @@ fn segmented<T: PartialEq + Copy>(
             };
             painter.add(raised.as_shape(inner, egui::Rounding::same(ROUNDING - INSET)));
             painter.rect_filled(inner, egui::Rounding::same(ROUNDING - INSET), raised_fill);
+            if focused {
+                // The focus ring, on the raised segment: this is what Tab landed on.
+                painter.rect_stroke(
+                    inner.expand(1.5),
+                    egui::Rounding::same(ROUNDING),
+                    egui::Stroke::new(2.0_f32, ui.visuals().selection.stroke.color),
+                );
+            }
         } else if *hovered {
             painter.rect_filled(inner, egui::Rounding::same(ROUNDING - INSET), hover_fill);
         }
@@ -1706,6 +1747,112 @@ mod tests {
         });
         let _ = ctx.run(release, |ctx| frame(ctx, &mut value, &mut rects));
         assert_eq!(value, 1, "the second segment was clicked");
+    }
+
+    /// Drives one segmented control headlessly: click a segment by position.
+    fn click_segment(
+        ctx: &egui::Context,
+        frame: &mut dyn FnMut(&egui::Context),
+        target: egui::Pos2,
+    ) -> egui::FullOutput {
+        let mut moved = egui::RawInput::default();
+        moved.events.push(egui::Event::PointerMoved(target));
+        let _ = ctx.run(moved, |ctx| frame(ctx));
+        let mut press = egui::RawInput::default();
+        press.events.push(egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(press, |ctx| frame(ctx));
+        let mut release = egui::RawInput::default();
+        release.events.push(egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        ctx.run(release, |ctx| frame(ctx))
+    }
+
+    fn key_press(key: egui::Key) -> egui::RawInput {
+        let mut input = egui::RawInput::default();
+        input.events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        input
+    }
+
+    /// After a click the control holds keyboard focus; the arrow keys then move
+    /// the selection, so the window is usable without a mouse.
+    #[test]
+    fn arrow_keys_move_a_focused_segmented_selection() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let value = std::cell::Cell::new(0u8);
+        let rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+        let mut frame = |ctx: &egui::Context| {
+            egui::Area::new(egui::Id::new("segmented_keys"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let mut v = value.get();
+                    *rects.borrow_mut() = segmented(
+                        ui,
+                        &mut v,
+                        [
+                            (0u8, "One".to_string()),
+                            (1, "Two".to_string()),
+                            (2, "Three".to_string()),
+                        ],
+                    );
+                    value.set(v);
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        let target = rects.borrow()[1].center();
+        let _ = click_segment(&ctx, &mut frame, target);
+        assert_eq!(value.get(), 1, "clicked the second segment");
+
+        let _ = ctx.run(key_press(egui::Key::ArrowRight), |ctx| frame(ctx));
+        assert_eq!(value.get(), 2, "ArrowRight moved to the third segment");
+        let _ = ctx.run(key_press(egui::Key::Home), |ctx| frame(ctx));
+        assert_eq!(value.get(), 0, "Home jumped to the first");
+    }
+
+    /// With a screen reader on, a clicked segment reports its label.
+    #[test]
+    fn a_segment_reports_itself_to_a_screen_reader() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|o| o.screen_reader = true);
+        apply_style(&ctx);
+        let value = std::cell::Cell::new(0u8);
+        let rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+        let mut frame = |ctx: &egui::Context| {
+            egui::Area::new(egui::Id::new("segmented_sr"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let mut v = value.get();
+                    *rects.borrow_mut() = segmented(
+                        ui,
+                        &mut v,
+                        [(0u8, "One".to_string()), (1, "Two".to_string())],
+                    );
+                    value.set(v);
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        let target = rects.borrow()[1].center();
+        let output = click_segment(&ctx, &mut frame, target);
+        let spoke = output.platform_output.events.iter().any(|e| match e {
+            egui::output::OutputEvent::Clicked(info) => info.label.as_deref() == Some("Two"),
+            _ => false,
+        });
+        assert!(spoke, "{:?}", output.platform_output.events);
     }
 
     #[test]

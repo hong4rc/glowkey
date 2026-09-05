@@ -53,6 +53,7 @@ pub mod settings_ui;
 pub mod shell;
 pub mod single_instance;
 pub mod startup;
+pub mod theme;
 pub mod tray;
 
 /// Starts the hook and runs until the process exits.

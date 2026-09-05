@@ -17,11 +17,46 @@ use std::process::Command;
 fn main() {
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     watch_git_head(&root);
+    stamp_windows_resources(&root);
 
     let commit = describe(&root).unwrap_or_default();
     // Always set, possibly empty: `env!` is a compile error on a missing
     // variable, so the alternative is a conditional in every consumer.
     println!("cargo:rustc-env=GLOWKEY_COMMIT={commit}");
+}
+
+/// Stamps the application icon and version metadata into the Windows executable.
+///
+/// Without it the binary has no icon at all: a blank sheet in Explorer, in
+/// Alt-Tab, on the taskbar and in the "Windows protected your PC" dialog an
+/// unsigned download shows. For a keyboard hook that already asks for more trust
+/// than most programs, looking anonymous is not a neutral choice.
+///
+/// The .ico is **committed**, exactly as the macOS .icns is, so an ordinary build
+/// needs no image tooling.  regenerates it from the shared
+/// vector master when the artwork changes.
+///
+/// Absent icon file: a warning, not an error. A source checkout missing the
+/// resource should still produce a working input method.
+#[allow(unused_variables)]
+fn stamp_windows_resources(root: &Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let icon = root.join("Resources").join("AppIcon.ico");
+        println!("cargo:rerun-if-changed={}", icon.display());
+        if !icon.exists() {
+            println!("cargo:warning=no AppIcon.ico — the executable will have no icon");
+            return;
+        }
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon(&icon.to_string_lossy());
+        res.set("ProductName", "GlowKey");
+        res.set("FileDescription", "GlowKey — Vietnamese input method");
+        res.set("LegalCopyright", "MIT licensed");
+        if let Err(err) = res.compile() {
+            println!("cargo:warning=could not stamp the icon: {err}");
+        }
+    }
 }
 
 /// Rebuild when the checked-out commit changes.

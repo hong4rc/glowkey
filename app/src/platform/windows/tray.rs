@@ -28,10 +28,10 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
     DestroyMenu, DestroyWindow, GetCursorPos, PostMessageW, PostQuitMessage, RegisterClassW,
-    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_CHECKED,
-    MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
-    WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE,
-    WNDCLASSW, WS_OVERLAPPED,
+    RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON, ICONINFO, MF_BYPOSITION,
+    MF_CHECKED, MF_DISABLED, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_RETURNCMD,
+    TPM_RIGHTALIGN, TPM_RIGHTBUTTON, WM_APP, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP, WM_NULL,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WNDCLASSW, WS_OVERLAPPED,
 };
 
 use crate::strings::t;
@@ -54,6 +54,7 @@ mod cmd {
     pub const CLIPBOARD_LOWER: usize = 7;
     pub const REVEAL_LOG: usize = 8;
     pub const SETTINGS: usize = 9;
+    pub const ABOUT: usize = 12;
     pub const REINSTALL_HOOK: usize = 10;
     pub const QUIT: usize = 11;
 }
@@ -75,6 +76,111 @@ struct Tray {
     /// is the only place the user learns **which** window cannot be typed into.
     /// Comparing state alone would leave it naming the first one forever.
     shown_app: Option<String>,
+}
+
+/// GlowKey's own icon, from the resource `build.rs` stamps into the executable.
+///
+/// Loaded once and never freed: it lives as long as the process, and a shared
+/// resource icon must not be destroyed by the code that borrowed it.
+///
+/// `None` when the resource is missing, which happens in a source build made
+/// without `scripts/make-icon.ps1` having run. Everything that uses it degrades
+/// to text rather than failing.
+fn app_icon() -> Option<HICON> {
+    use std::sync::OnceLock;
+    static ICON: OnceLock<isize> = OnceLock::new();
+    let raw = *ICON.get_or_init(|| {
+        // SAFETY: our own module, and the first icon resource in it — which is the
+        // one `winresource` writes.
+        let module = unsafe {
+            windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null())
+        };
+        // SAFETY: `IDI_APPLICATION`-style lookup by ordinal 1, the id
+        // `winresource` assigns. Loaded at the small-icon size, which is what a
+        // menu and a title bar want.
+        let icon = unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::LoadImageW(
+                module,
+                // MAKEINTRESOURCE(1): the resource id `winresource` assigns to
+                // the icon. An integer id is passed in the pointer slot, which is
+                // the Win32 convention and not a real pointer — it is never
+                // dereferenced.
+                std::ptr::without_provenance(1),
+                windows_sys::Win32::UI::WindowsAndMessaging::IMAGE_ICON,
+                0,
+                0,
+                windows_sys::Win32::UI::WindowsAndMessaging::LR_DEFAULTSIZE,
+            )
+        };
+        icon as isize
+    });
+    (raw != 0).then_some(raw as HICON)
+}
+
+/// The logo as a menu bitmap, drawn once.
+///
+/// A menu item's bitmap has to be an `HBITMAP`, not an `HICON`, so the icon is
+/// drawn into a DIB at the size Windows uses for menu check marks — which is what
+/// keeps it aligned with the check marks on the items below it rather than
+/// floating at some size of its own.
+fn logo_bitmap() -> Option<windows_sys::Win32::Graphics::Gdi::HBITMAP> {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL};
+    static BITMAP: OnceLock<isize> = OnceLock::new();
+
+    let icon = app_icon()?;
+    let raw = *BITMAP.get_or_init(|| {
+        // SAFETY: a standard offscreen composition; every object is released
+        // except the bitmap, which is returned and kept for the process.
+        unsafe {
+            let size = windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics(
+                windows_sys::Win32::UI::WindowsAndMessaging::SM_CXMENUCHECK,
+            )
+            .max(16);
+            let screen = GetDC(std::ptr::null_mut());
+            let dc = CreateCompatibleDC(screen);
+
+            let mut header: BITMAPINFO = std::mem::zeroed();
+            header.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            header.bmiHeader.biWidth = size;
+            header.bmiHeader.biHeight = -size;
+            header.bmiHeader.biPlanes = 1;
+            header.bmiHeader.biBitCount = 32;
+            header.bmiHeader.biCompression = BI_RGB;
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            let bmp = CreateDIBSection(
+                dc,
+                &header,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
+            if bmp.is_null() {
+                DeleteDC(dc);
+                ReleaseDC(std::ptr::null_mut(), screen);
+                return 0;
+            }
+            let old = SelectObject(dc, bmp.cast());
+            DrawIconEx(
+                dc,
+                0,
+                0,
+                icon,
+                size,
+                size,
+                0,
+                std::ptr::null_mut(),
+                DI_NORMAL,
+            );
+            GdiFlush();
+            SelectObject(dc, old);
+            DeleteDC(dc);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            bmp as isize
+        }
+    });
+    (raw != 0).then_some(raw as windows_sys::Win32::Graphics::Gdi::HBITMAP)
 }
 
 /// The broadcast Explorer sends when the notification area is rebuilt.
@@ -117,6 +223,11 @@ pub fn install() -> bool {
     let mut wc: WNDCLASSW = unsafe { std::mem::zeroed() };
     wc.lpfnWndProc = Some(wnd_proc);
     wc.lpszClassName = class.as_ptr();
+    // The class icon, so any window of ours that Windows asks for one gets the
+    // product's own rather than the generic default.
+    if let Some(icon) = app_icon() {
+        wc.hIcon = icon;
+    }
     // SAFETY: `wc` is fully initialised and `class` outlives the call.
     unsafe { RegisterClassW(&wc) };
 
@@ -309,51 +420,6 @@ fn tooltip_units(text: &str, capacity: usize) -> Vec<u16> {
     units
 }
 
-/// Whether the taskbar is drawn light.
-///
-/// Read fresh each time rather than cached: the user can change it while GlowKey
-/// is running, and an icon that only matches the theme it started under is the
-/// same class of wrong as an icon that never matched at all. It is a registry
-/// read on a repaint, not on a keystroke.
-///
-/// `SystemUsesLightTheme` is the taskbar and system chrome. **Not**
-/// `AppsUseLightTheme`, which is application windows — the two are set
-/// independently, and it is the taskbar this icon sits on.
-fn taskbar_is_light() -> bool {
-    use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ,
-        REG_VALUE_TYPE,
-    };
-
-    let path = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-    let name = wide("SystemUsesLightTheme");
-    let mut key: HKEY = std::ptr::null_mut();
-    // SAFETY: `path` is NUL-terminated and `key` is a valid out-pointer.
-    let opened = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key) };
-    if opened != 0 {
-        // Absent on a system that has never had the setting touched. Dark is the
-        // Windows 11 default, so a light glyph is the better guess.
-        return false;
-    }
-    let mut value: u32 = 0;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    let mut kind: REG_VALUE_TYPE = 0;
-    // SAFETY: `value`/`size` describe a matched buffer for a REG_DWORD.
-    let read = unsafe {
-        RegQueryValueExW(
-            key,
-            name.as_ptr(),
-            std::ptr::null_mut(),
-            &mut kind,
-            std::ptr::addr_of_mut!(value).cast(),
-            &mut size,
-        )
-    };
-    // SAFETY: opened above, not used after this.
-    unsafe { RegCloseKey(key) };
-    read == 0 && value == 1
-}
-
 /// The glyph colour for a state, against a light or dark taskbar.
 ///
 /// Split from the drawing so the contrast rule can be tested, and because it is
@@ -407,7 +473,7 @@ fn glyph_colour(state: Indicator, light_taskbar: bool) -> (u8, u8, u8) {
 fn draw_glyph(state: Indicator) -> HICON {
     const SIZE: i32 = 16;
     let text = wide(state.glyph());
-    let (r, g, b) = glyph_colour(state, taskbar_is_light());
+    let (r, g, b) = glyph_colour(state, super::theme::taskbar_is_light());
 
     // A 32-bit DIB section with an explicit alpha channel, not a
     // `CreateCompatibleBitmap`.
@@ -651,6 +717,23 @@ fn show_menu(hwnd: HWND) {
             return;
         }
 
+        // The product, named and badged, at the top — the way a Mac menu is
+        // headed by the application. Disabled: it is an identity, not an action.
+        // `id 0` is the non-clickable value the breakage line below also uses.
+        item(menu, MF_STRING | MF_DISABLED, 0, "GlowKey");
+        if let Some(logo) = logo_bitmap() {
+            // SAFETY (inherited from the enclosing block): a live menu, a bitmap
+            // owned for the process, and position 0 — the item just appended.
+            windows_sys::Win32::UI::WindowsAndMessaging::SetMenuItemBitmaps(
+                menu,
+                0,
+                MF_BYPOSITION,
+                logo,
+                logo,
+            );
+        }
+        separator(menu);
+
         // The breakage, first and unmissable, when there is one. A user whose
         // GlowKey is dead should not have to read past four toggles to find out.
         if let Indicator::Broken(cause) = snapshot.indicator {
@@ -745,6 +828,12 @@ fn show_menu(hwnd: HWND) {
         item(
             menu,
             MF_STRING,
+            cmd::ABOUT,
+            t("About GlowKey", "Giới thiệu GlowKey"),
+        );
+        item(
+            menu,
+            MF_STRING,
             cmd::QUIT,
             t("Quit GlowKey", "Thoát GlowKey"),
         );
@@ -826,6 +915,7 @@ fn handle_command(id: usize) {
         }
         cmd::REVEAL_LOG => super::shell::reveal_log(),
         cmd::SETTINGS => super::shell::open_settings(),
+        cmd::ABOUT => super::shell::show_about(),
         cmd::REINSTALL_HOOK => super::shell::reinstall_hook(),
         cmd::QUIT => {
             remove();
@@ -898,12 +988,6 @@ mod tests {
                 assert!(excluded < active, "on a dark taskbar, dimmer is darker");
             }
         }
-    }
-
-    /// Reading the theme must not panic, and must not disagree with itself.
-    #[test]
-    fn the_theme_probe_is_stable() {
-        assert_eq!(taskbar_is_light(), taskbar_is_light());
     }
 
     /// Every command id is distinct. They cross a C boundary as plain integers,

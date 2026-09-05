@@ -11,17 +11,25 @@
 //! **Shaped after the macOS window, deliberately.** GlowKey is one product, and
 //! the macOS settings window (`app/src/prefs/`) is where its shape was decided:
 //! four tabs of 460×540 points — General, Typing, Corrections, Apps & macros —
-//! with About and the three list editors (Excluded apps, Macros, Personal words)
-//! as their own small windows opened from inside those tabs. This file
-//! reproduces that, tab for tab and window for window, rather than inventing a
-//! second layout; the `t(english, vietnamese)` pairs are copied verbatim from
-//! the macOS source so the two interfaces cannot drift into naming the same
-//! setting two different things. The separate windows are `egui::Window`
-//! overlays — the nearest thing this toolkit has to an auxiliary window.
+//! with the three list editors (Excluded apps, Macros, Personal words) as their
+//! own small windows opened from inside those tabs. This file reproduces that,
+//! tab for tab and window for window, rather than inventing a second layout; the
+//! `t(english, vietnamese)` pairs are copied verbatim from the macOS source so
+//! the two interfaces cannot drift into naming the same setting two different
+//! things. The list editors are `egui::Window` overlays — the nearest thing this
+//! toolkit has to an auxiliary window.
 //!
-//! One thing here is not decoration: the interface font is taken from the system
-//! (see [`install_system_font`]), because egui's bundled font cannot draw
-//! Vietnamese at all.
+//! About is **not** here. It belongs next to Settings in the tray menu, where
+//! macOS keeps it (`menu_bar.rs`), and it is a native message box
+//! (`shell::show_about`) because winit permits one event loop per process: once
+//! this window has opened, a second toolkit window cannot.
+//!
+//! Two things here are not decoration. The interface font is taken from the
+//! system (see [`install_system_font`]), because egui's bundled font cannot draw
+//! Vietnamese at all; and the light/dark choice is read from the registry (see
+//! [`apply_theme`]), because the toolkit's own detection failed to resolve and
+//! its fallback is dark — which is how a light-themed machine got a black
+//! window.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -119,12 +127,18 @@ const INDENT: f32 = 22.0;
 /// Gap between one group of settings and the next.
 const GROUP_GAP: f32 = 14.0;
 
-/// The size of each auxiliary window, matching its macOS counterpart:
-/// `about_window.rs` and the three list windows in `prefs/`.
-const ABOUT_SIZE: [f32; 2] = [340.0, 180.0];
-const EXCLUDED_SIZE: [f32; 2] = [420.0, 380.0];
-const MACROS_SIZE: [f32; 2] = [460.0, 400.0];
-const WORDS_SIZE: [f32; 2] = [460.0, 400.0];
+/// The size of each list-editor window.
+///
+/// The macOS ones are 420×380 and 460×400 (`prefs/excluded.rs`,
+/// `macros_window.rs`, `personal_words.rs`), and those are *separate* windows
+/// there. Here they are overlays inside a 460×540 frame, so at their macOS
+/// widths they covered it edge to edge with no frame left showing — which reads
+/// as the window having been replaced rather than something having opened on top
+/// of it. Inset to leave a margin of the parent visible on every side; they are
+/// resizable, so the macOS size is still one drag away.
+const EXCLUDED_SIZE: [f32; 2] = [372.0, 320.0];
+const MACROS_SIZE: [f32; 2] = [396.0, 340.0];
+const WORDS_SIZE: [f32; 2] = [396.0, 340.0];
 
 /// Loads the system UI font into egui.
 ///
@@ -179,10 +193,6 @@ fn install_system_font(ctx: &egui::Context) -> bool {
 /// preference changes, so anything written to only one of them is lost the
 /// moment the user turns on dark mode.
 fn apply_style(ctx: &egui::Context) {
-    // The default already is "follow the system"; saying so is cheap and makes
-    // the intent visible next to the rest of the theming.
-    ctx.set_theme(egui::ThemePreference::System);
-
     ctx.all_styles_mut(|style| {
         use egui::FontFamily::{Monospace, Proportional};
         use egui::{FontId, TextStyle};
@@ -211,6 +221,48 @@ fn apply_style(ctx: &egui::Context) {
     });
 }
 
+/// Light or dark, asked of Windows rather than of the toolkit.
+///
+/// `ThemePreference::System` was wrong here: winit's theme detection does not
+/// resolve on every machine, and egui's fallback when it cannot tell is **dark**
+/// — so the window came up black, Done button and all, on a system whose apps
+/// are set to light. `theme::apps_are_light` reads the value Windows actually
+/// keeps (`AppsUseLightTheme`, the one about application windows, not the
+/// taskbar's `SystemUsesLightTheme` — users mix the two).
+///
+/// Called every frame, not once: the user can switch theme while the window is
+/// open, and a registry read on a repaint costs nothing. Nothing on the hook's
+/// path calls this.
+fn apply_theme(ctx: &egui::Context) {
+    ctx.set_theme(theme_preference(
+        crate::platform::windows::theme::apps_are_light(),
+    ));
+}
+
+/// The mapping itself, separated from the registry so it can be asserted.
+fn theme_preference(apps_are_light: bool) -> egui::ThemePreference {
+    if apps_are_light {
+        egui::ThemePreference::Light
+    } else {
+        egui::ThemePreference::Dark
+    }
+}
+
+/// The colour of a caption or any other secondary line.
+///
+/// Not `Visuals::weak_text_color`: that greys the text *towards the background*,
+/// which on the light theme lands near 3:1 against the panel — under the 4.5:1
+/// this text needs at 11.5 points. These two are the macOS `secondaryLabelColor`
+/// equivalents, dark enough on light and light enough on dark to stay readable
+/// in both.
+fn secondary_color(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_gray(170)
+    } else {
+        egui::Color32::from_gray(90)
+    }
+}
+
 /// The secondary line under a control whose label cannot carry its meaning — the
 /// macOS window's `caption`. The text comes from the engine's own documentation
 /// of what the option does and why its default is what it is.
@@ -225,7 +277,7 @@ fn intro(ui: &mut egui::Ui, text: &str) {
 }
 
 fn caption_inset(ui: &mut egui::Ui, text: &str, inset: f32) {
-    let color = ui.visuals().weak_text_color();
+    let color = secondary_color(ui);
     egui::Frame::none()
         .inner_margin(egui::Margin {
             left: inset,
@@ -354,8 +406,7 @@ struct SettingsApp {
     tab: Tab,
     result_slot: Rc<RefCell<Option<Option<Settings>>>>,
 
-    // ----- The auxiliary windows, open or not -----
-    about_open: bool,
+    // ----- The list-editor windows, open or not -----
     excluded_open: bool,
     macros_open: bool,
     words_open: bool,
@@ -393,7 +444,6 @@ impl SettingsApp {
             initial,
             tab: Tab::General,
             result_slot,
-            about_open: false,
             excluded_open: false,
             macros_open: false,
             words_open: false,
@@ -446,9 +496,12 @@ impl SettingsApp {
 
     // ----- Tabs -------------------------------------------------------------
 
-    /// General: the interface language and what happens at launch. (The macOS
-    /// tab also carries "Launch at login" and the toggle-hotkey picker; on
-    /// Windows both live in the tray menu, which owns them.)
+    /// General: the interface language and what happens at launch.
+    ///
+    /// Shorter than the macOS tab on purpose. "Launch at login", the
+    /// toggle-hotkey picker and About all live in the tray menu on this
+    /// platform, and the tray owns them; duplicating a control here would give
+    /// the same setting two places to disagree with itself.
     fn general_tab(&mut self, ui: &mut egui::Ui) {
         // The picker applies immediately rather than at save, so the window is
         // in the chosen language before the user has to decide whether they
@@ -481,15 +534,6 @@ impl SettingsApp {
                  GlowKey vẫn chạy dưới khay hệ thống.",
             )),
         );
-
-        group_gap(ui);
-
-        if ui
-            .button(t("About GlowKey", "Giới thiệu GlowKey"))
-            .clicked()
-        {
-            self.about_open = true;
-        }
     }
 
     /// Typing: how keys become Vietnamese.
@@ -669,68 +713,7 @@ impl SettingsApp {
         );
     }
 
-    // ----- The auxiliary windows -------------------------------------------
-
-    /// About: name, version, commit and the one Windows limitation worth
-    /// warning about. Mirrors `app/src/about_window.rs` — plain, centred, text
-    /// only — with the elevation note this platform needs and macOS does not.
-    fn about_body(&self, ui: &mut egui::Ui) {
-        ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("GlowKey").heading().strong());
-
-            // The version alone does not identify a build: GlowKey is installed
-            // from a working tree as often as from a tag, so the commit is the
-            // part that answers "which GlowKey are you running?". Set by the
-            // build and possibly empty (a source build with no `git`), so this
-            // never fails to compile — it just has nothing to add.
-            let commit = option_env!("GLOWKEY_COMMIT").unwrap_or("");
-            let build = if commit.is_empty() {
-                env!("CARGO_PKG_VERSION").to_string()
-            } else {
-                format!("{} ({commit})", env!("CARGO_PKG_VERSION"))
-            };
-            let color = ui.visuals().weak_text_color();
-            // Selectable, because this is the one string in the app someone is
-            // ever asked to quote back, and retyping a commit hash by eye is how
-            // the wrong build gets investigated.
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(t("Version {}", "Phiên bản {}").replace("{}", &build))
-                        .small()
-                        .color(color),
-                )
-                .selectable(true),
-            );
-
-            ui.add_space(6.0);
-            ui.label(t(
-                "Vietnamese Telex & VNI input for Windows",
-                "Bộ gõ tiếng Việt Telex & VNI cho Windows",
-            ));
-            ui.label(
-                egui::RichText::new(t(
-                    "A UniKey-style input method, written entirely in Rust.",
-                    "Bộ gõ kiểu UniKey, viết hoàn toàn bằng Rust.",
-                ))
-                .small()
-                .color(color),
-            );
-        });
-
-        ui.add_space(8.0);
-        ui.separator();
-        intro(
-            ui,
-            t(
-                "Windows blocks synthetic input across integrity levels: if a program \
-                 runs as administrator and GlowKey does not, it cannot receive the \
-                 keystrokes GlowKey injects. Run both at the same elevation.",
-                "Windows chặn phím giả lập giữa hai mức toàn vẹn: nếu một chương trình chạy \
-                 với quyền quản trị còn GlowKey thì không, chương trình đó sẽ không nhận \
-                 được phím do GlowKey gửi. Hãy chạy cả hai ở cùng một mức quyền.",
-            ),
-        );
-    }
+    // ----- The list-editor windows -----------------------------------------
 
     /// Excluded apps, as its own window — `app/src/prefs/excluded.rs`.
     fn excluded_body(&mut self, ui: &mut egui::Ui) {
@@ -1067,20 +1050,6 @@ impl SettingsApp {
 
     /// Every auxiliary window, drawn over the tabs.
     fn show_aux_windows(&mut self, ctx: &egui::Context) {
-        let mut open = self.about_open;
-        if open {
-            aux_window(
-                ctx,
-                "glowkey_about",
-                t("About GlowKey", "Giới thiệu GlowKey"),
-                ABOUT_SIZE,
-                false,
-                &mut open,
-                |ui| self.about_body(ui),
-            );
-            self.about_open = open;
-        }
-
         let mut open = self.excluded_open;
         if open {
             aux_window(
@@ -1131,6 +1100,10 @@ impl SettingsApp {
     /// is how the tabs are smoke-tested. `eframe::Frame` is not used here and
     /// there is nothing else to keep the two together.
     fn ui(&mut self, ctx: &egui::Context) {
+        // Before anything is laid out, so a theme the user switched while the
+        // window was open takes effect on this frame rather than the next one.
+        apply_theme(ctx);
+
         // The OS/window-manager close (title-bar X, Alt+F4, …) also has to
         // decide what to hand back, exactly like the explicit Close button.
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -1457,6 +1430,43 @@ mod tests {
         }
     }
 
+    /// A light system gets a light window.
+    ///
+    /// This is the regression: the window asked the toolkit to follow the system
+    /// theme, the toolkit could not tell, and its fallback is dark — so a
+    /// machine with `AppsUseLightTheme = 1` got a black window with a black Done
+    /// button. The choice is now made here, from the registry value, and there
+    /// is no third answer to fall back to.
+    #[test]
+    fn the_theme_follows_windows_rather_than_guessing() {
+        assert_eq!(theme_preference(true), egui::ThemePreference::Light);
+        assert_eq!(theme_preference(false), egui::ThemePreference::Dark);
+    }
+
+    /// Secondary text has to stay readable in both themes.
+    ///
+    /// Captions carry the reason a setting exists, at 11.5 points, and
+    /// `weak_text_color` fades towards the background — under 4.5:1 on light.
+    /// Both of these clear it: gray 90 on the light panel and gray 170 on the
+    /// dark one are roughly 6.6:1 and 7.4:1.
+    #[test]
+    fn caption_colour_contrasts_in_both_themes() {
+        let ctx = egui::Context::default();
+        for (preference, expected) in [
+            (egui::ThemePreference::Light, egui::Color32::from_gray(90)),
+            (egui::ThemePreference::Dark, egui::Color32::from_gray(170)),
+        ] {
+            ctx.set_theme(preference);
+            let mut seen = None;
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    seen = Some(secondary_color(ui));
+                });
+            });
+            assert_eq!(seen, Some(expected), "{preference:?}");
+        }
+    }
+
     /// The interface font has to be able to *draw* Vietnamese.
     ///
     /// egui's bundled proportional font stops at Latin Extended-A, so every
@@ -1508,7 +1518,6 @@ mod tests {
         let slot = Rc::new(RefCell::new(None));
         let mut app = SettingsApp::new(settings, Rc::clone(&slot));
         // Every auxiliary window open at once, so all four are built.
-        app.about_open = true;
         app.excluded_open = true;
         app.macros_open = true;
         app.words_open = true;
@@ -1528,7 +1537,7 @@ mod tests {
         }
 
         assert!(
-            app.about_open && app.excluded_open && app.macros_open && app.words_open,
+            app.excluded_open && app.macros_open && app.words_open,
             "an auxiliary window closed itself"
         );
         assert!(

@@ -82,6 +82,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
 ] }
 
+# Stamps the application icon and version metadata into the executable. A build
+# dependency, so it costs nothing at runtime — and the .ico it embeds is
+# committed (scripts/make-icon.ps1 regenerates it), so building GlowKey needs no
+# image tooling.
 # The settings window, and only the settings window. The tray is raw Win32 and
 # stays that way: it is the always-resident half, and a background input method
 # must never be the reason a machine feels slow. This window is created on
@@ -92,3 +96,6 @@ windows-sys = { version = "0.61", features = [
 # templates cost the most and buy the least.
 eframe = { version = "0.29", default-features = false, features = ["glow", "wayland", "x11"] }
 egui = "0.29"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winresource = "0.1"

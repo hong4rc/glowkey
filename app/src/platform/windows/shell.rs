@@ -191,6 +191,65 @@ pub fn open_settings() {
     refresh_indicator();
 }
 
+/// Shows the About box.
+///
+/// From the tray menu, next to Settings — which is where macOS has it
+/// (`menu_bar.rs`: "About GlowKey" / "Giới thiệu GlowKey"), and where a user who
+/// has the Mac app will look for it. It was briefly a button inside the settings
+/// window, which is neither.
+///
+/// A native `MessageBoxW` rather than another `eframe` window, for a reason
+/// beyond taste: **winit permits one event loop per process**, so a second
+/// toolkit window cannot open once the settings window has been. A message box
+/// needs no event loop, appears instantly, and already looks like the system —
+/// which is what `docs/ui-design.md` asks for.
+pub fn show_about() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
+
+    // The commit is stamped by `build.rs` and may be empty in a source build, so
+    // the version line carries it only when there is one. It is the thing a bug
+    // report actually needs — "0.1.0" names a dozen builds.
+    let version = match option_env!("GLOWKEY_COMMIT") {
+        Some(commit) if !commit.is_empty() => {
+            format!("{} ({commit})", env!("CARGO_PKG_VERSION"))
+        }
+        _ => env!("CARGO_PKG_VERSION").to_string(),
+    };
+
+    let body = format!(
+        "{}\n\n{}\n\n{}",
+        crate::strings::t(
+            "GlowKey — Vietnamese input for Windows",
+            "GlowKey — bộ gõ tiếng Việt cho Windows",
+        ),
+        crate::strings::t("Version", "Phiên bản").to_string() + " " + &version,
+        crate::strings::t(
+            "GlowKey cannot type into windows that run as administrator. \
+             Windows blocks input from ordinary programs into elevated windows.",
+            "GlowKey không gõ được vào cửa sổ chạy với quyền quản trị. \
+             Windows chặn nhập liệu từ chương trình thường vào những cửa sổ đó.",
+        ),
+    );
+
+    let text = wide(&body);
+    let title = wide(crate::strings::t("About GlowKey", "Giới thiệu GlowKey"));
+    // SAFETY: both strings are NUL-terminated and outlive the call. A null owner
+    // is correct for a process with no window of its own.
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
+    }
+}
+
+/// A NUL-terminated UTF-16 string, which is what every `…W` entry point takes.
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
 /// Reinstalls the keyboard hook after Windows removed it.
 ///
 /// The remedy the `⚠` menu offers for [`super::indicator::Breakage::HookGone`].

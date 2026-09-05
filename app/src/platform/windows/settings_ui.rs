@@ -193,50 +193,93 @@ pub(super) fn apply_style(ctx: &egui::Context) {
     });
 }
 
-/// A segmented control: one choice, every option visible, the chosen one
-/// filled. The macOS window uses `NSSegmentedControl` for every choice and so
-/// does this one; radio buttons were the one place the two windows still
-/// looked like different products.
+/// A segmented control: one choice, every option visible, the chosen one raised.
 ///
-/// Segments are joined: no gap, outer corners rounded, inner corners square,
-/// on a grey track with a hairline border.
+/// The shape of `NSSegmentedControl` since Big Sur, which the macOS window uses
+/// for every choice: a soft rounded track a shade darker than the window, the
+/// selected segment lifted on it — white in light, a lighter grey in dark — with
+/// a small shadow, no hairlines anywhere, and every label in the normal text
+/// colour. Painted directly rather than through egui's selectable labels, whose
+/// selected state draws a stroke and recolours the text, which is what made the
+/// first version look like a row of bordered buttons.
+///
+/// Returns each segment's rectangle, in order; the tests click by position.
 fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     value: &mut T,
     options: impl IntoIterator<Item = (T, String)>,
-) {
+) -> Vec<egui::Rect> {
+    const HEIGHT: f32 = 22.0;
+    const PAD_X: f32 = 10.0;
+    const INSET: f32 = 1.0;
+    const ROUNDING: f32 = 6.0;
+
     let options: Vec<(T, String)> = options.into_iter().collect();
-    let last = options.len().saturating_sub(1);
-    let visuals = ui.visuals().clone();
-    egui::Frame::none()
-        .fill(visuals.widgets.inactive.weak_bg_fill)
-        .stroke(visuals.widgets.noninteractive.bg_stroke)
-        .rounding(egui::Rounding::same(5.0))
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            ui.horizontal(|ui| {
-                for (i, (option, label)) in options.iter().enumerate() {
-                    let rounding = egui::Rounding {
-                        nw: if i == 0 { 5.0 } else { 0.0 },
-                        sw: if i == 0 { 5.0 } else { 0.0 },
-                        ne: if i == last { 5.0 } else { 0.0 },
-                        se: if i == last { 5.0 } else { 0.0 },
-                    };
-                    let widgets = &mut ui.visuals_mut().widgets;
-                    for w in [
-                        &mut widgets.inactive,
-                        &mut widgets.hovered,
-                        &mut widgets.active,
-                    ] {
-                        w.rounding = rounding;
-                    }
-                    let selected = *value == *option;
-                    if ui.selectable_label(selected, label).clicked() {
-                        *value = *option;
-                    }
-                }
-            });
-        });
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text_color = ui.visuals().text_color();
+    let galleys: Vec<_> = options
+        .iter()
+        .map(|(_, label)| {
+            ui.painter()
+                .layout_no_wrap(label.clone(), font.clone(), text_color)
+        })
+        .collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 2.0 * PAD_X).collect();
+    let total = egui::vec2(widths.iter().sum(), HEIGHT);
+    let (track, _) = ui.allocate_exact_size(total, egui::Sense::hover());
+
+    let dark = ui.visuals().dark_mode;
+    let (track_fill, raised_fill, hover_fill, shadow) = if dark {
+        (
+            egui::Color32::from_gray(58),
+            egui::Color32::from_gray(105),
+            egui::Color32::from_gray(66),
+            egui::Color32::from_black_alpha(100),
+        )
+    } else {
+        (
+            egui::Color32::from_gray(220),
+            egui::Color32::WHITE,
+            egui::Color32::from_gray(228),
+            egui::Color32::from_black_alpha(46),
+        )
+    };
+
+    // Interact first, so a click is known before anything is painted this frame.
+    let mut rects = Vec::with_capacity(options.len());
+    let mut x = track.min.x;
+    for (i, width) in widths.iter().enumerate() {
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(x, track.min.y), egui::vec2(*width, HEIGHT));
+        let response = ui.interact(rect, ui.id().with(("segment", i)), egui::Sense::click());
+        if response.clicked() {
+            *value = options[i].0;
+        }
+        rects.push((rect, response.hovered()));
+        x += width;
+    }
+
+    let painter = ui.painter();
+    painter.rect_filled(track, egui::Rounding::same(ROUNDING), track_fill);
+    for (i, (rect, hovered)) in rects.iter().enumerate() {
+        let inner = rect.shrink(INSET);
+        if options[i].0 == *value {
+            let raised = egui::epaint::Shadow {
+                offset: egui::vec2(0.0, 1.0),
+                blur: 3.0,
+                spread: 0.0,
+                color: shadow,
+            };
+            painter.add(raised.as_shape(inner, egui::Rounding::same(ROUNDING - INSET)));
+            painter.rect_filled(inner, egui::Rounding::same(ROUNDING - INSET), raised_fill);
+        } else if *hovered {
+            painter.rect_filled(inner, egui::Rounding::same(ROUNDING - INSET), hover_fill);
+        }
+        let galley = &galleys[i];
+        let pos = rect.center() - galley.size() / 2.0;
+        painter.galley(pos, galley.clone(), text_color);
+    }
+    rects.into_iter().map(|(rect, _)| rect).collect()
 }
 
 /// Light or dark, asked of Windows rather than of the toolkit.
@@ -1488,6 +1531,58 @@ mod tests {
         let icon = window_icon();
         assert_eq!((icon.width, icon.height), (64, 64));
         assert_eq!(icon.rgba.len(), 64 * 64 * 4);
+    }
+
+    /// One rect per option, and a click on a segment selects its option.
+    #[test]
+    fn a_segment_click_selects_its_option() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let options = || {
+            [
+                (0u8, "One".to_string()),
+                (1, "Two".to_string()),
+                (2, "Three".to_string()),
+            ]
+        };
+        let mut value = 0u8;
+        let mut rects: Vec<egui::Rect> = Vec::new();
+        let frame = |ctx: &egui::Context, value: &mut u8, rects: &mut Vec<egui::Rect>| {
+            egui::Area::new(egui::Id::new("segmented_test"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    *rects = segmented(ui, value, options());
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            frame(ctx, &mut value, &mut rects)
+        });
+        assert_eq!(rects.len(), 3);
+        assert!(rects[1].min.x >= rects[0].max.x - 0.01, "segments overlap");
+
+        // egui hit-tests a press against where the pointer already was, so the
+        // move lands in its own frame before the press.
+        let target = rects[1].center();
+        let mut moved = egui::RawInput::default();
+        moved.events.push(egui::Event::PointerMoved(target));
+        let _ = ctx.run(moved, |ctx| frame(ctx, &mut value, &mut rects));
+        let mut press = egui::RawInput::default();
+        press.events.push(egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(press, |ctx| frame(ctx, &mut value, &mut rects));
+        let mut release = egui::RawInput::default();
+        release.events.push(egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(release, |ctx| frame(ctx, &mut value, &mut rects));
+        assert_eq!(value, 1, "the second segment was clicked");
     }
 
     #[test]

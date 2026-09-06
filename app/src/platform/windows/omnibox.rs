@@ -122,8 +122,27 @@ pub fn start() {
             // messages, and an STA that never pumps deadlocks cross-process
             // calls.
             unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) };
+
+            // The bootstrap. GlowKey can start with the address bar already
+            // focused, and no focus event is coming for it — the same gap
+            // `foreground::bootstrap` exists to close.
+            //
+            // The class name is logged once per run because the alternative is
+            // indistinguishable: a resolver that never works and a user who
+            // never focused an address bar produce exactly the same silence. It
+            // is structural UI metadata, not typed text, and it is truncated
+            // because a page element carries the page's whole CSS class list.
+            match focused_class() {
+                Some(class) => {
+                    let shown: String = class.chars().take(48).collect();
+                    FOCUS_IS_OMNIBOX.store(class == OMNIBOX_CLASS, Ordering::Relaxed);
+                    crate::log::log(&format!("OMNIBOX resolver sees focus class {shown:?}"));
+                }
+                None => crate::log::log("OMNIBOX resolver sees no class on the focused element"),
+            }
+
             while rx.recv().is_ok() {
-                let is_omnibox = focused_class_is(OMNIBOX_CLASS);
+                let is_omnibox = focused_class().is_some_and(|c| c == OMNIBOX_CLASS);
                 let was = FOCUS_IS_OMNIBOX.swap(is_omnibox, Ordering::Relaxed);
                 // Only the edges, and only into the address bar. Focus changes
                 // constantly — a line per change would be the noise the flush
@@ -143,7 +162,7 @@ pub fn start() {
     }
 }
 
-/// Whether the focused element's UIA class name is `class`.
+/// The focused element's UIA class name, if it has one.
 ///
 /// The class name is asked for **in the cache request**, so the answer arrives
 /// inside the returned array and no second call is needed. That is also what
@@ -151,7 +170,10 @@ pub fn start() {
 /// never extracted from the array, so it is released by `SafeArrayDestroy` along
 /// with everything else, and the only thing this function owns is one copied
 /// `VARIANT`.
-fn focused_class_is(class: &str) -> bool {
+///
+/// Returns the name rather than a yes/no so the caller can log what it actually
+/// saw. A wrong class name and a broken resolver are the same silence otherwise.
+fn focused_class() -> Option<String> {
     let mut condition = UiaCondition {
         ConditionType: ConditionType_True,
     };
@@ -179,10 +201,10 @@ fn focused_class_is(class: &str) -> bool {
         )
     };
 
-    let matched = if hr >= 0 && !results.is_null() {
-        read_class(results).is_some_and(|name| name == class)
+    let class = if hr >= 0 && !results.is_null() {
+        read_class(results)
     } else {
-        false
+        None
     };
 
     if !tree.is_null() {
@@ -194,7 +216,7 @@ fn focused_class_is(class: &str) -> bool {
         // which releases the focused node we deliberately never took out of it.
         unsafe { SafeArrayDestroy(results) };
     }
-    matched
+    class
 }
 
 /// The cached class name, from `[0][1]` of the returned array.

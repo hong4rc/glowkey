@@ -86,6 +86,17 @@ pub fn focus_is_omnibox() -> bool {
     FOCUS_IS_OMNIBOX.load(Ordering::Relaxed)
 }
 
+/// Sets the flag directly. Tests only.
+///
+/// Exists so `inject` can prove the emitted key sequence follows the flag
+/// without a browser, a focus change or a UI Automation call — the join between
+/// the rule and the injection is what was broken, so it is the part worth
+/// pinning.
+#[cfg(test)]
+pub fn set_focus_is_omnibox_for_test(on: bool) {
+    FOCUS_IS_OMNIBOX.store(on, Ordering::Relaxed);
+}
+
 /// A focus change happened. Called from the WinEvent callback.
 ///
 /// Does two things and neither of them can block: clears the flag, so the

@@ -266,23 +266,27 @@ mod tests {
         (vk != 0).then_some(vk)
     }
 
-    /// **A Chromium edit sends no forward-delete while focus is elsewhere.**
+    /// **The forward-delete follows the focus flag, in the emitted keys.**
     ///
-    /// The regression this pins is the user's text disappearing, so it is
-    /// asserted against the actual input sequence rather than trusted to a call
-    /// site. `VK_DELETE` here removes the character after the caret, and in a
-    /// page body there is always one.
+    /// `needs_omnibox_guard` is tested and the flag is tested; this is the join
+    /// between them, which is the part that was actually broken. Asserted against
+    /// the real input sequence rather than the rule, because a call site that
+    /// stops consulting the rule would pass every other test here.
     ///
-    /// Runs through `edit_inputs`, which reads the live focus flag — false in a
-    /// test process, since nothing has ever focused an address bar here. That is
-    /// the same default the flag holds at startup and after every focus change,
-    /// so this also pins that the *default* is the safe one.
+    /// One test rather than two: the flag is process-wide and cargo runs tests in
+    /// parallel, so flipping it in one test while another reads it is a flake
+    /// waiting for a slow machine.
     #[test]
-    fn a_chromium_edit_sends_no_forward_delete_without_omnibox_focus() {
+    fn the_forward_delete_follows_the_focus_flag() {
+        // The default, which is also the state after every focus change: safe.
         assert!(
             !super::super::omnibox::focus_is_omnibox(),
-            "the flag must default to false, or this test proves nothing"
+            "the flag must default to false, or the rest of this proves nothing"
         );
+
+        // **Focus elsewhere — a page body.** A forward-delete here deletes the
+        // character to the right of the caret, silently. This is the case that
+        // ate text in Gmail and Slack.
         for app in ["chrome.exe", "msedge.exe", "slack.exe", "code.exe"] {
             let inputs = edit_inputs(2, "ồ", Some(app));
             assert!(
@@ -294,6 +298,26 @@ mod tests {
                 "{app}: the edit still deletes what it meant to"
             );
         }
+
+        // **Focus in the address bar.** The guard fires, and it fires *first* —
+        // clearing the inline-autocomplete selection has to happen before the
+        // backspaces, or the first of them is eaten and the edit lands short,
+        // which is the `hoongf` -> `hoồng` bug itself.
+        super::super::omnibox::set_focus_is_omnibox_for_test(true);
+        let inputs = edit_inputs(2, "ồ", Some("msedge.exe"));
+        let first_vk = inputs.iter().find_map(vk_of);
+        assert_eq!(
+            first_vk,
+            Some(VK_DELETE),
+            "the guard must precede the backspaces"
+        );
+
+        // Non-Chromium is still untouched even with the flag set, since an
+        // address bar cannot be focused there.
+        let inputs = edit_inputs(2, "ồ", Some("notepad.exe"));
+        assert!(!inputs.iter().any(|i| vk_of(i) == Some(VK_DELETE)));
+
+        super::super::omnibox::set_focus_is_omnibox_for_test(false);
     }
 
     /// **`hoongf` emits exactly three backspaces and `ồng`, in that order.**

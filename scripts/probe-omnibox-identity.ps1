@@ -1,11 +1,11 @@
-# Capture the UI Automation identity of whatever you focus.
+﻿# Capture the UI Automation identity of whatever you focus.
 #
 # The Chromium address bar needs a forward-delete before an edit (its inline
 # autocomplete keeps a trailing selection that eats the first Backspace); a text
 # box in a page must never get one, because there the forward-delete deletes a
 # real character. Telling the two apart is the whole of the fix in phase 3.1 of
 # `plans/260905-1643-glowkey-production-hardening/`, and it needs a stable
-# property to test — one that is not the element's *name*, which is localized and
+# property to test - one that is not the element's *name*, which is localized and
 # changes between Chrome and Edge and between releases.
 #
 # So: run this, focus the things below in turn, and it prints what UIA says about
@@ -41,7 +41,7 @@ function Describe($element, $label) {
     if ($null -eq $element) { return }
     $c = $element.Current
     Write-Output ""
-    Write-Output "── $label ─────────────────────────────────────────────"
+    Write-Output "-- $label ---------------------------------------------"
     Write-Output ("  ControlType   : {0}" -f $c.ControlType.ProgrammaticName)
     Write-Output ("  LocalizedType : {0}" -f $c.LocalizedControlType)
     Write-Output ("  Name          : {0}" -f $c.Name)

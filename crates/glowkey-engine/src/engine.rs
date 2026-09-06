@@ -215,8 +215,25 @@ impl Engine {
     /// Re-enters composing with a previously committed word's `raw` keys and its
     /// on-screen `rendered` form, so the next keystrokes keep editing it (Telex
     /// re-composition after the trailing boundary is backspaced).
+    ///
+    /// **The escape state comes back too, and is derived rather than passed.** A
+    /// word the mid-word spell check refused is rendered as its raw keys, so its
+    /// stored rendering is not what those keys naturally produce — and that
+    /// difference is the only thing that can cause it. Restoring without it left
+    /// the re-opened word believing it had never been escaped, which broke the
+    /// Backspace after it in a way that looked like a defect in re-composition:
+    /// the unescape could not fire, so `backspace_visible_char` went looking for
+    /// a raw removal that re-renders to "the render minus its last character" —
+    /// impossible for a word whose render *is* its raw keys — and the engine
+    /// flushed instead of lifting the escape.
+    ///
+    /// Reported as `hoongfb`␣`ss`⌫⌫⌫⌫ not returning to `hồng` (2026-09-06), where
+    /// the identical keystrokes without the intervening boundary always had.
+    /// Derived instead of added to the signature because the answer is already
+    /// in the arguments, and because `restore` is published API.
     pub fn restore(&mut self, raw: Vec<char>, rendered: String) {
         self.raw = raw;
+        self.escaped = self.render_keys(&self.raw) != rendered;
         self.rendered = rendered;
     }
 

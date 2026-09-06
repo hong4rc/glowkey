@@ -369,3 +369,45 @@ fn a_digit_after_a_valid_word_is_not_escaped() {
     // difference the option exists to make.
     assert_eq!(typed("hoongfc", false), "hồngc");
 }
+
+/// **A re-opened word remembers that it was escaped.** Reported 2026-09-06.
+///
+/// Typed: `hoongfb` (the `b` escapes the word to its raw keys), space, `ss`,
+/// then Backspace four times. The last one deletes the boundary, which re-opens
+/// `hoongfb` behind the caret, and the one after it should lift the escape and
+/// give `hồng` — exactly as it does when the word never committed.
+///
+/// It did not. `Engine::restore` put back `raw` and `rendered` and left
+/// `escaped` false, so the re-opened word did not know it was being rendered
+/// verbatim: the unescape could not fire, `backspace_visible_char` went looking
+/// for a raw removal that re-renders to "the render minus its last character" —
+/// impossible for an escaped word, whose render *is* its raw keys — and the
+/// engine flushed instead.
+///
+/// Asserted through `restore` directly, which is the seam the session uses to
+/// re-open a committed word.
+#[test]
+fn a_restored_escaped_word_can_still_unescape() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_strict_spell_check(true);
+    for ch in "hoongfb".chars() {
+        engine.process_key(ch);
+    }
+    // The escape is what puts the raw keys on screen.
+    assert_eq!(engine.current_word(), "hoongfb");
+    let raw = engine.raw_vec();
+    let rendered = engine.current_word().to_string();
+
+    // The boundary commits it, and a later Backspace re-opens it — what the
+    // session does through `recompose_after_boundary_backspace`.
+    engine.reset();
+    engine.restore(raw, rendered);
+
+    // Now the Backspace the user pressed. It must lift the escape, not flush.
+    match engine.backspace_visible_char() {
+        BackspaceOutcome::Repair(edit) => {
+            assert_eq!(edit.insert, "hồng", "the escape must lift to the render");
+        }
+        other => panic!("expected the escape to lift, got {other:?}"),
+    }
+}

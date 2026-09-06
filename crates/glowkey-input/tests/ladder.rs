@@ -903,3 +903,56 @@ fn select_all() -> KeyEvent {
         ..KeyEvent::character('a')
     }
 }
+
+/// **`hoongfb` ␣ `ss` then four Backspaces returns to `hồng`.** Reported
+/// 2026-09-06, with the log to go with it.
+///
+/// The `b` escapes the word to its raw keys, the space commits it, `ss` starts a
+/// new word, and deleting back through both should re-open `hoongfb` and then
+/// lift its escape — the same two features that work individually, meeting.
+///
+/// They did not meet. `Engine::restore` put back the keys and the rendering but
+/// not the escape state, so the re-opened word did not know it was verbatim, the
+/// unescape could not fire, and the fourth Backspace flushed. In the log
+/// (`#114`-`#118`) that reads as four `Passthrough` lines and a
+/// `FLUSH backspace-out-of-step` where the repair should have been.
+///
+/// Driven through `decide` rather than the engine so the whole ladder is in the
+/// path: the mid-word branch, the boundary re-open, and the unescape all have to
+/// agree for this to pass.
+#[test]
+fn deleting_back_into_an_escaped_word_lifts_its_escape() {
+    let mut tap = Tap::active();
+    tap.session.set_strict_spell_check(true);
+
+    for ch in "hoongfb".chars() {
+        tap.decide(&KeyEvent::character(ch));
+    }
+    // The escape is what puts the raw keys on screen.
+    assert_eq!(tap.session.current_word(), "hoongfb");
+
+    // Commit it, then type a new word behind the caret.
+    tap.decide(&KeyEvent::character(' '));
+    for ch in "ss".chars() {
+        tap.decide(&KeyEvent::character(ch));
+    }
+
+    // Three Backspaces clear `ss` and the boundary, re-opening the word.
+    for _ in 0..3 {
+        tap.decide(&KeyEvent::key(Key::Backspace));
+    }
+    assert!(
+        tap.session.is_composing(),
+        "deleting the boundary must re-open the committed word"
+    );
+    assert_eq!(tap.session.current_word(), "hoongfb");
+
+    // The fourth is the one the user pressed expecting `hồng`.
+    match tap.decide(&KeyEvent::key(Key::Backspace)) {
+        Decision::Emit(edit) => assert_eq!(
+            edit.insert, "hồng",
+            "the escape must lift, as it does without the intervening boundary"
+        ),
+        other => panic!("expected the escape to lift, got {other:?}"),
+    }
+}

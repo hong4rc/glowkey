@@ -19,7 +19,8 @@
 //! This callback is on the same footing as the keyboard one: a low-level mouse
 //! hook is called for every mouse event on the machine, and a slow one is removed
 //! by `LowLevelHooksTimeout` exactly the same way. It does the least possible
-//! work — a button test, then a flush that touches only in-memory session state —
+//! work — a button test, then a flush that touches only in-memory session state,
+//! plus one queued log line when a word was actually discarded —
 //! and never logs, queries or allocates.
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -73,7 +74,9 @@ unsafe extern "system" fn mouse_callback(code: i32, wparam: WPARAM, lparam: LPAR
     // HC_ACTION is 0. Anything else passes through unexamined.
     if code == 0 && is_button_down(wparam as u32) {
         // Wrapped, because a panic must not unwind into Win32's C frames.
-        let _ = std::panic::catch_unwind(super::hook::flush_session);
+        let _ = std::panic::catch_unwind(|| {
+            super::hook::flush_session_because(glowkey_input::FlushCause::MouseButton);
+        });
     }
     // SAFETY: the documented chaining call. Always chained: this hook observes,
     // it never decides.

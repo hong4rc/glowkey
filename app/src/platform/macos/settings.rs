@@ -384,7 +384,14 @@ impl TapState {
             emits.clear();
         }
         if let Ok(mut session) = self.session.try_borrow_mut() {
+            let discarded = session.remembers_position();
             session.flush();
+            if discarded {
+                crate::log::log(&format!(
+                    "FLUSH {} — composing word discarded",
+                    glowkey_input::FlushCause::Reset
+                ));
+            }
         }
     }
     /// Every recorded word decision, for the Personal Words window.

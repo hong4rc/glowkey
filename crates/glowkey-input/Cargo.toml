@@ -1,6 +1,6 @@
 [package]
 name = "glowkey-input"
-version = "0.1.0"
+version = "0.2.0"
 description = "GlowKey's keyboard policy: the decision ladder, hotkey matching, and the Platform port a shell implements."
 edition = "2021"
 license = "MIT"

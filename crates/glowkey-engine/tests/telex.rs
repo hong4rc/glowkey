@@ -226,3 +226,35 @@ fn repeating_the_diacritic_key_rejects_it() {
     assert_eq!(type_word("hoongf"), "hồng");
     assert_eq!(type_word("hoongff"), "hôngf");
 }
+
+/// **A digit ends the syllable; a letter extends it.**
+///
+/// The boundary half of an asymmetry reported as a bug on 2026-09-06: `hoongfc`
+/// comes back as raw keys while `hoongf4` stays `hồng4`. This is where the
+/// difference starts — `c` extends the syllable and is re-rendered with it,
+/// while `4` is a word boundary exactly like a space, arriving after `hồng` has
+/// already committed. `is_syllable_char` admits digits only under VNI, where
+/// they carry tones.
+///
+/// The escape to verbatim keys that makes `hoongfc` visible to the user belongs
+/// to the mid-word spell check a layer up; `midword_spell_check.rs` pins that
+/// half. Pinned in both places so the asymmetry reads as intended rather than as
+/// a defect, and so changing `is_syllable_char` has to argue with a test. The
+/// rejected alternative — treating a digit glued to a syllable as evidence the
+/// token is not Vietnamese — would break `tầng2`, `quận1` and `phường7`, which
+/// people type without a space.
+#[test]
+fn a_digit_ends_the_word_where_a_letter_extends_it() {
+    // The letter joins the syllable and is rendered with it.
+    assert_eq!(type_word("hoongfc"), "hồngc");
+
+    // The digit ends it: `hồng` had already committed, and the digit is ordinary
+    // text after it.
+    assert_eq!(type_word("hoongf4"), "hồng4");
+
+    // Which is the same rule a space follows.
+    assert_eq!(type_word("hoongf 4"), "hồng 4");
+
+    // A digit opening a word is just a digit — there is no syllable to end.
+    assert_eq!(type_word("4hoongf"), "4hồng");
+}

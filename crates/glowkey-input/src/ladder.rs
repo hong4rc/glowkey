@@ -23,7 +23,7 @@
 
 use glowkey_session::{BackspaceOutcome, BoundaryBackspace, InputMethod, Session};
 
-use crate::decision::{Decision, Effects};
+use crate::decision::{Decision, Effects, FlushCause};
 use crate::event::{Key, KeyEvent};
 use crate::hotkey::{self, Hotkey};
 
@@ -44,6 +44,29 @@ pub struct Ctx {
     pub toggle_hotkey: Hotkey,
 }
 
+/// Flushes and records why, when there was anything to lose.
+///
+/// A helper rather than two lines at each site: the pair must not drift apart,
+/// and a `session.flush()` that forgot to say why is exactly the silence this
+/// exists to remove. Reports the *first* cause in a keystroke — a second flush in
+/// the same event is flushing an already-empty session and is not worth
+/// overwriting the real reason with.
+///
+/// **Gated on [`Session::remembers_position`]**, and the gate is load-bearing on
+/// the hot path rather than tidiness. Arrow keys flush, arrows auto-repeat at
+/// around thirty a second, and the macOS shell writes its log synchronously from
+/// the tap callback (`docs/decisions/0008`): an ungated report turns a held arrow
+/// key into a burst of disk writes on the thread every keystroke on the machine
+/// waits behind. Every flush after the first in that burst discards nothing, so
+/// there is nothing to say.
+fn flush(session: &mut Session, effects: &mut Effects, cause: FlushCause) {
+    let discarded = session.remembers_position();
+    session.flush();
+    if discarded {
+        effects.flushed.get_or_insert(cause);
+    }
+}
+
 /// Decides what to do with one key-down event: pass it through, suppress it, or
 /// suppress it and emit an edit.
 ///
@@ -62,7 +85,14 @@ pub fn decide(
     // VN/EN toggle hotkey (user-configurable preset): flip mode and consume the
     // key. Checked before the shortcut filter, since it is one.
     if ctx.toggle_hotkey.matches(event) {
+        // `toggle_mode` calls `forget_position` itself — the same loss a flush
+        // causes, under a different name — so it is reported the same way. Read
+        // before the toggle, because the toggle is what destroys the answer.
+        let discarded = session.remembers_position();
         let mode = session.toggle_mode();
+        if discarded {
+            effects.flushed.get_or_insert(FlushCause::ModeToggle);
+        }
         effects.mode_toggled = Some(mode);
         // The persistent menu-bar glyph too: the toggle happened here rather than
         // via the menu, so nothing else is going to repaint it.
@@ -114,7 +144,7 @@ pub fn decide(
         // A shortcut may move the caret or change the selection (⌘A select-all,
         // ⌘V paste, ⌘←). Flush so a later edit is not computed against a stale
         // baseline, then let it through.
-        session.flush();
+        flush(session, effects, FlushCause::Shortcut);
         return Decision::Passthrough;
     }
 
@@ -167,7 +197,7 @@ pub fn decide(
             BackspaceOutcome::Repair(edit) => Decision::Emit(edit),
             BackspaceOutcome::InStep => Decision::Passthrough,
             BackspaceOutcome::Flush => {
-                session.flush();
+                flush(session, effects, FlushCause::UnfollowableBackspace);
                 Decision::Passthrough
             }
         };
@@ -179,7 +209,7 @@ pub fn decide(
         // Arrow / Home / End / Page keys move the caret without our knowledge, so
         // the engine's diff baseline (and any re-composition memory) is now stale.
         // Flush and let the key through — same contract as a mouse click.
-        session.flush();
+        flush(session, effects, FlushCause::CaretMove);
         return Decision::Passthrough;
     }
 

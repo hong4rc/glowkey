@@ -972,6 +972,19 @@ impl Session {
         self.forget_position();
     }
 
+    /// Whether a flush would actually discard something.
+    ///
+    /// Not the same question as "is a word being composed". [`flush`](Self::flush)
+    /// also clears the **committed history** — the stack that lets `hồng`␣⌫⌫
+    /// re-open the word behind the caret — and that survives the word itself. A
+    /// caller that logged only when `is_composing()` was true would stay silent
+    /// for exactly the case this reporting exists for: a click after a word has
+    /// committed, which silently removes the ability to restore it.
+    #[must_use]
+    pub fn remembers_position(&self) -> bool {
+        self.engine.is_composing() || !self.committed.is_empty() || self.correctable.is_some()
+    }
+
     /// Flushes any in-progress word without changing mode or focus.
     ///
     /// The engine's edits ([`KeyResponse::backspaces`]) assume the current word's

@@ -467,7 +467,7 @@ fn hotkey_recording_cancelled_by_mouse_click() {
     // forgotten recording cannot capture a later ⌃/⌥ combo.
     let state = active_state();
     state.begin_hotkey_recording();
-    state.flush();
+    state.flush(glowkey_input::FlushCause::MouseButton);
     assert!(!state.is_recording_hotkey());
     assert_eq!(state.toggle_hotkey(), HotkeyPreset::CtrlShiftSpace);
 }

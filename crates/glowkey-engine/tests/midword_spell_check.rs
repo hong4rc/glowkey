@@ -344,3 +344,28 @@ fn deleting_a_verbatim_word_away_clears_the_escape() {
         "the escape leaked into the next word"
     );
 }
+
+/// **`hoongfc` escapes to raw keys; `hoongf4` does not.** Reported as an
+/// inconsistency on 2026-09-06, and it is the two rules meeting rather than a
+/// defect.
+///
+/// `c` extends the syllable, so the render is re-judged, fails, and the word is
+/// handed back verbatim. `4` ends the syllable, so `hồng` had already committed
+/// as valid Vietnamese and there is nothing for the check to refuse. The
+/// boundary half is pinned in `telex.rs`; this is the escape half, and it needs
+/// the option on because that is how the user who reported it was configured.
+#[test]
+fn a_digit_after_a_valid_word_is_not_escaped() {
+    // The letter drags the whole word into invalidity, so it renders verbatim.
+    assert_eq!(typed("hoongfc", true), "hoongfc");
+
+    // The digit half is asserted in `telex.rs`, against reconstructed screen
+    // text. It cannot be asserted here: `typed` returns `current_word`, which is
+    // empty after a boundary either way, so it could not tell "the digit
+    // committed the word cleanly" from "the digit ate it".
+    assert_eq!(typed("hoongf", true), "hồng");
+
+    // And with the check off the letter case is an ordinary render, which is the
+    // difference the option exists to make.
+    assert_eq!(typed("hoongfc", false), "hồngc");
+}

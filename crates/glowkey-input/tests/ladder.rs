@@ -13,7 +13,7 @@
 //! a bad adapter shows itself.
 
 use glowkey_input::{
-    decide, hotkey, Ctx, Decision, Effects, HotkeyPreset, Key, KeyEvent, Modifiers,
+    decide, hotkey, Ctx, Decision, Effects, FlushCause, HotkeyPreset, Key, KeyEvent, Modifiers,
 };
 use glowkey_session::{
     ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, KeyResponse, PlacementStyle,
@@ -775,4 +775,131 @@ fn a_recorded_custom_hotkey_toggles_and_the_old_preset_stops() {
         InputMode::English,
         "the replaced preset must not toggle anymore"
     );
+}
+
+/// **Every flush the ladder performs names its cause.**
+///
+/// The reason this exists: on 2026-09-06 a user reported that deleting back did
+/// not restore a word, and the log could not say whether the session had been
+/// flushed or the restore was broken — because a flush wrote nothing at all. A
+/// flush is correct behaviour and indistinguishable from a defect without the
+/// reason on record.
+///
+/// Asserted per cause rather than "some cause was set", because the value is
+/// entirely in which one it was: `caret-move` and `shortcut` send a reader to
+/// completely different places.
+#[test]
+fn every_ladder_flush_reports_why() {
+    // A caret move.
+    let mut tap = Tap::active();
+    for ch in "hoo".chars() {
+        tap.decide(&KeyEvent::character(ch));
+    }
+    tap.decide(&KeyEvent::key(Key::CaretMove));
+    assert_eq!(tap.effects.flushed, Some(FlushCause::CaretMove));
+
+    // A shortcut — select-all and friends may move the caret or replace the
+    // selection.
+    let mut tap = Tap::active();
+    for ch in "hoo".chars() {
+        tap.decide(&KeyEvent::character(ch));
+    }
+    tap.decide(&select_all());
+    assert_eq!(tap.effects.flushed, Some(FlushCause::Shortcut));
+}
+
+/// **A flush that discards nothing says nothing.**
+///
+/// Load-bearing on the hot path rather than tidiness. Arrows auto-repeat at
+/// roughly thirty a second and the macOS shell logs synchronously from the tap
+/// callback (`docs/decisions/0008`), so an ungated report turns a held arrow key
+/// into a burst of disk writes on the thread every keystroke on the machine
+/// waits behind — and every flush after the first discards nothing.
+#[test]
+fn a_flush_with_nothing_to_lose_is_not_reported() {
+    let mut tap = Tap::active();
+
+    // Nothing composing and nothing behind the caret.
+    tap.decide(&KeyEvent::key(Key::CaretMove));
+    assert_eq!(tap.effects.flushed, None);
+
+    // A second one in a row — the auto-repeat case — is just as quiet.
+    tap.decide(&KeyEvent::key(Key::CaretMove));
+    assert_eq!(tap.effects.flushed, None);
+
+    // And an ordinary keystroke never reports one, so the field stays a signal.
+    tap.decide(&KeyEvent::character('h'));
+    assert_eq!(tap.effects.flushed, None);
+}
+
+/// **A flush after the word committed is still reported.**
+///
+/// The regression the first cut of this shipped: gating on "is a word being
+/// composed" stays silent for a committed word plus a click — where the engine
+/// buffer is empty but the re-composition stack behind the caret is still live,
+/// and losing it is exactly why deleting back then stops re-opening the word.
+/// That is the shape of the report this was built for, so it must not be the one
+/// case that writes nothing.
+#[test]
+fn a_flush_after_a_committed_word_is_reported() {
+    let mut tap = Tap::active();
+    for ch in "hoongf".chars() {
+        tap.decide(&KeyEvent::character(ch));
+    }
+    // The boundary commits the word and pushes it behind the caret.
+    tap.decide(&KeyEvent::character(' '));
+    assert!(
+        !tap.session.is_composing(),
+        "the space must have committed the word"
+    );
+    assert!(
+        tap.session.remembers_position(),
+        "the committed word is still restorable, which is what a flush destroys"
+    );
+
+    tap.effects.clear();
+    tap.decide(&KeyEvent::key(Key::CaretMove));
+    assert_eq!(
+        tap.effects.flushed,
+        Some(FlushCause::CaretMove),
+        "a flush that loses the restore stack must be reported even with nothing composing"
+    );
+}
+
+/// The tags are the product — a runbook greps for them — so they are pinned
+/// literally rather than merely asserted distinct.
+#[test]
+fn every_flush_cause_has_its_own_tag() {
+    let expected = [
+        (FlushCause::Shortcut, "shortcut"),
+        (FlushCause::UnfollowableBackspace, "backspace-out-of-step"),
+        (FlushCause::CaretMove, "caret-move"),
+        (FlushCause::MouseButton, "mouse-button"),
+        (FlushCause::AppSwitch, "app-switch"),
+        (FlushCause::ModeToggle, "mode-toggle"),
+        (FlushCause::ExclusionToggle, "exclusion-toggle"),
+        (FlushCause::Reset, "reset-input"),
+        (FlushCause::TapRecovered, "tap-recovered"),
+    ];
+    for (cause, tag) in expected {
+        assert_eq!(cause.tag(), tag);
+        assert_eq!(cause.to_string(), tag, "Display must match the tag");
+    }
+
+    let mut tags: Vec<&str> = expected.iter().map(|(_, t)| *t).collect();
+    let count = tags.len();
+    tags.sort_unstable();
+    tags.dedup();
+    assert_eq!(tags.len(), count, "two causes share a tag");
+}
+
+/// Select-all, as the shortcut filter sees it.
+fn select_all() -> KeyEvent {
+    KeyEvent {
+        mods: Modifiers {
+            command: true,
+            ..Modifiers::default()
+        },
+        ..KeyEvent::character('a')
+    }
 }

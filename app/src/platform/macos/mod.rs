@@ -188,7 +188,18 @@ impl TapState {
             self.cancel_hotkey_recording();
         }
         if let Ok(mut session) = self.session.try_borrow_mut() {
+            // `set_frontmost_app` forgets the caret position itself, so the word
+            // and the restore stack go with the switch. Worth a line for the same
+            // reason a click is: an application that activates *itself* mid-word
+            // takes the word with it and the user never touched anything.
+            let discarded = session.remembers_position();
             session.set_frontmost_app(bundle_id);
+            if discarded {
+                crate::log::log(&format!(
+                    "FLUSH {} — composing word discarded",
+                    glowkey_input::FlushCause::AppSwitch
+                ));
+            }
         }
         *self.last_bundle_id.borrow_mut() = Some(bundle_id.to_string());
     }
@@ -220,10 +231,17 @@ impl TapState {
     /// is still the document tail, so this must run when the caret may have moved
     /// (a mouse click). A click also cancels an armed hotkey recording: the user
     /// has moved on, and a forgotten recorder must not capture a later ⌃/⌥ combo.
-    fn flush(&self) {
+    fn flush(&self, cause: glowkey_input::FlushCause) {
         self.cancel_hotkey_recording();
         if let Ok(mut session) = self.session.try_borrow_mut() {
+            // Logged only when something was actually discarded. A click with
+            // nothing composing is the ordinary case, and a line per click would
+            // bury the ones that explain a lost word.
+            let discarded = session.remembers_position();
             session.flush();
+            if discarded {
+                crate::log::log(&format!("FLUSH {cause} — composing word discarded"));
+            }
         }
     }
     /// Resolves the frontmost app at a word start (not mid-word) and, on a change,
@@ -369,7 +387,7 @@ fn tap_dispatch(
         // the caret — the blind model's one invariant (§5). Diffing the next
         // keystroke against that stale render would delete characters the user
         // typed themselves.
-        ctx.state.flush();
+        ctx.state.flush(glowkey_input::FlushCause::TapRecovered);
         return event.as_ptr();
     }
 
@@ -379,7 +397,7 @@ fn tap_dispatch(
         event_type,
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown
     ) {
-        ctx.state.flush();
+        ctx.state.flush(glowkey_input::FlushCause::MouseButton);
         return event.as_ptr();
     }
 

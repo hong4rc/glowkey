@@ -117,6 +117,9 @@ impl Platform for TapPort<'_> {
                 );
             }
             Notice::PersonalWordsChanged => self.deferred.personal_words_changed = true,
+            Notice::Flushed(cause) => {
+                crate::log::log(&format!("FLUSH {cause} — composing word discarded"));
+            }
             Notice::Corrected { was, becomes } => {
                 crate::log::log(&format!(
                     "CORRECT {was:?} -> {becomes:?} — swapped and remembered"

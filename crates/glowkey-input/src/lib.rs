@@ -41,7 +41,7 @@ pub mod hotkey;
 mod ladder;
 mod platform;
 
-pub use decision::{Decision, Effects};
+pub use decision::{Decision, Effects, FlushCause};
 pub use event::{Key, KeyEvent, Modifiers};
 pub use hotkey::{Hotkey, HotkeyCapture, HotkeyKey, HotkeyPreset};
 pub use ladder::{decide, Ctx};

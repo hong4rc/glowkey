@@ -16,7 +16,7 @@ use std::fmt;
 
 use glowkey_session::{AppId, ExclusionToggle, InputMode, Session};
 
-use crate::decision::{Decision, Effects};
+use crate::decision::{Decision, Effects, FlushCause};
 use crate::event::KeyEvent;
 use crate::ladder::{decide, Ctx};
 
@@ -93,6 +93,12 @@ pub enum Notice<'a> {
     /// The toggle hotkey was pressed before any application was known. The key
     /// is consumed anyway (it is GlowKey's), but nothing changed.
     NoAppInFront,
+    /// The composing word was discarded, for this reason.
+    ///
+    /// Correct behaviour, and worth a line anyway: a flush is why a Backspace
+    /// the user expected to be handled passed through instead, and without the
+    /// reason on record that is indistinguishable from a defect.
+    Flushed(FlushCause),
 }
 
 /// Handles one key-down event end to end: decides, then carries the decision
@@ -127,6 +133,9 @@ pub fn handle<P: Platform + ?Sized>(
     if let Some((was, becomes)) = &effects.corrected {
         platform.notify(Notice::Corrected { was, becomes });
     }
+    if let Some(cause) = effects.flushed {
+        platform.notify(Notice::Flushed(cause));
+    }
     if effects.refresh_glyph {
         platform.request_indicator();
     }
@@ -138,7 +147,14 @@ pub fn handle<P: Platform + ?Sized>(
         Decision::Passthrough | Decision::Consume => {}
         Decision::ToggleApp => match platform.app_in_front() {
             Some(app) => {
+                // Like the mode toggle, this calls `forget_position` internally,
+                // so the word and the restore stack go with it. Asked before the
+                // toggle, which is what destroys the answer.
+                let discarded = session.remembers_position();
                 let outcome = session.toggle_app_exclusion(app.as_str());
+                if discarded {
+                    platform.notify(Notice::Flushed(FlushCause::ExclusionToggle));
+                }
                 platform.notify(Notice::AppToggled { app: &app, outcome });
                 // A session-only suspension changes nothing persisted: by design
                 // the saved list still excludes the terminal.

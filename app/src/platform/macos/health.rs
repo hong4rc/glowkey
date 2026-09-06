@@ -77,7 +77,10 @@ const HEALTH_FAILURES_PER_LOG_LINE: u32 = 30;
 /// key — but those arrive *through the tap*, and the tap is precisely what was
 /// dead. Nothing else was ever going to notice.
 fn flush_after_gap(ctx: &TapContext, why: &str) {
-    ctx.state.flush();
+    // `TapRecovered` rather than a cause of its own: the HEALTH line below says
+    // which gap it was, so a second FLUSH line naming the same event would be
+    // one line of noise per recovery.
+    ctx.state.flush(glowkey_input::FlushCause::TapRecovered);
     crate::log::log(&format!(
         "HEALTH {why} — flushed the composing word (keys typed while the tap was \
          down reached the document without us)"

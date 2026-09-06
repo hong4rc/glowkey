@@ -210,17 +210,6 @@ pub fn with_session<T>(f: impl FnOnce(&mut Session) -> T) -> Option<T> {
     })
 }
 
-/// Flushes the composing word, because something moved the caret.
-///
-/// Called from the mouse hook. GlowKey is blind: the engine's belief about what
-/// it rendered is only true while the caret has not moved, and a click moves it
-/// with no keyboard event at all. Without this, typing `hoong`, clicking
-/// elsewhere and typing `f` emits three backspaces against unrelated text and
-/// deletes three characters the user typed themselves.
-///
-/// Touches only in-memory session state — no allocation, no syscall, no lock a
-/// non-hook thread holds — because it runs inside a low-level hook callback,
-/// where `decisions/0008` applies exactly as it does to the keyboard one.
 /// The whole preferences file as it stands now: the session's state over the
 /// product-only fields. `None` before the session exists or while it is busy.
 pub fn snapshot() -> Option<Settings> {
@@ -245,14 +234,56 @@ pub fn replace_settings(settings: &Settings) {
     });
 }
 
-pub fn flush_session() {
-    STATE.with(|state| {
-        if let Ok(mut borrowed) = state.try_borrow_mut() {
-            if let Some(state) = borrowed.as_mut() {
+/// Flushes and says why.
+///
+/// The mouse hook's entry point. A click never reaches the keyboard callback, so
+/// without this the composing word vanishes with nothing on record and the next
+/// Backspace passing through looks like a defect rather than the caret having
+/// moved.
+///
+/// Logged only when a word was actually discarded: a click with nothing
+/// composing is the common case and a line per click would bury the ones that
+/// matter.
+/// Flushes the composing word, because something moved the caret.
+///
+/// GlowKey is blind: the engine's belief about what it rendered is only true
+/// while the caret has not moved, and a click moves it with no keyboard event at
+/// all. Without this, typing `hoong`, clicking elsewhere and typing `f` emits
+/// three backspaces against unrelated text and deletes three characters the user
+/// typed themselves.
+///
+/// Runs inside a low-level hook callback, where `decisions/0008` applies exactly
+/// as it does to the keyboard one — so the only work here is in-memory session
+/// state plus, when a word was actually lost, one line handed to `hook_log`'s
+/// bounded queue, which drops rather than blocks.
+pub fn flush_session_because(cause: glowkey_input::FlushCause) {
+    let mut reached = false;
+    let discarded = STATE.with(|state| {
+        state.try_borrow_mut().ok().is_some_and(|mut borrowed| {
+            borrowed.as_mut().is_some_and(|state| {
+                reached = true;
+                // `remembers_position`, not `is_composing`: a flush also clears
+                // the committed history, so a click *after* a word committed
+                // silently removes the ability to restore it — which is the exact
+                // report this reporting was built for, and an `is_composing`
+                // gate would have stayed quiet for it.
+                let discarded = state.session.remembers_position();
                 state.session.flush();
-            }
-        }
+                discarded
+            })
+        })
     });
+    if !reached {
+        // The session was already borrowed, so nothing was flushed and the
+        // baseline is now stale — the state in which a later edit deletes the
+        // user's own characters. Not reachable today (neither hook callback
+        // pumps messages, so a click cannot nest inside a keystroke), and said
+        // out loud anyway: the consequence is the worst one here and it would
+        // otherwise be perfectly silent.
+        hook_log::log(format!("FLUSH {cause} SKIPPED — session busy, baseline now stale"));
+    } else if discarded {
+        hook_log::log(format!("FLUSH {cause} — composing word discarded"));
+    }
 }
 
 /// Marks the settings dirty from outside the callback — a menu toggle, a settings
@@ -535,6 +566,9 @@ impl Platform for HookPort<'_> {
             // ⌃⇧E look broken rather than early.
             Notice::NoAppInFront => {
                 hook_log::log("TOGGLE app ignored — no foreground application resolved yet".into())
+            }
+            Notice::Flushed(cause) => {
+                hook_log::log(format!("FLUSH {cause} — composing word discarded"));
             }
             // No personal-words editor on this platform reloads live.
             _ => {}

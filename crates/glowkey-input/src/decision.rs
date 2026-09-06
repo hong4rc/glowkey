@@ -25,6 +25,68 @@ pub enum Decision {
     EmitThenReplayKey(KeyResponse),
 }
 
+/// Why the composing word was discarded.
+///
+/// A flush is invisible from the outside: the engine simply stops vouching for
+/// what is on screen, and the next Backspace passes through instead of being
+/// handled. That is correct — the blind model must forget when the caret may
+/// have moved without us — but it looks identical to a bug, and until this
+/// existed there was no way to tell the two apart from a log.
+///
+/// Reported rather than logged, because three of the six sites are in this
+/// crate, which has no output of its own.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushCause {
+    /// A ⌘/Ctrl/Alt shortcut, which may select, paste or move the caret.
+    Shortcut,
+    /// A mid-word Backspace the engine could not stay in step with.
+    UnfollowableBackspace,
+    /// An arrow, Home, End or Page key.
+    CaretMove,
+    /// A mouse button went down somewhere.
+    MouseButton,
+    /// The frontmost application changed.
+    ///
+    /// Includes an application activating *itself* mid-word — a call popup, a
+    /// finished build — which takes the word with it and is the hardest version
+    /// of this to explain without a log line.
+    AppSwitch,
+    /// The VN/EN mode was toggled.
+    ModeToggle,
+    /// The frontmost application was added to or removed from the ignore list.
+    ExclusionToggle,
+    /// "Reset input" — the user asking for the composing state to be dropped.
+    Reset,
+    /// The tap was re-enabled after the system disabled it, so keystrokes were
+    /// delivered natively while it was off and the render is stale.
+    TapRecovered,
+}
+
+impl FlushCause {
+    /// A short, greppable tag for the log line.
+    #[must_use]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Shortcut => "shortcut",
+            Self::UnfollowableBackspace => "backspace-out-of-step",
+            Self::CaretMove => "caret-move",
+            Self::MouseButton => "mouse-button",
+            Self::AppSwitch => "app-switch",
+            Self::ModeToggle => "mode-toggle",
+            Self::ExclusionToggle => "exclusion-toggle",
+            Self::Reset => "reset-input",
+            Self::TapRecovered => "tap-recovered",
+        }
+    }
+}
+
+impl core::fmt::Display for FlushCause {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.tag())
+    }
+}
+
 /// What the platform must do besides the keystroke, reported as plain data.
 ///
 /// The ladder used to write to the log, flash the on-screen indicator and repaint
@@ -33,6 +95,7 @@ pub enum Decision {
 /// test with no window server — and the platform performs the effects in field
 /// order, immediately after `decide` returns, so the log still reads in the order
 /// it always has.
+#[non_exhaustive]
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Effects {
     /// The VN/EN mode was toggled to this. The platform announces it and flashes
@@ -44,6 +107,16 @@ pub struct Effects {
     /// Absent even on a successful correction when the engine had nothing to
     /// describe.
     pub corrected: Option<(String, String)>,
+    /// The composing word was discarded, for this reason.
+    ///
+    /// Only the ladder's own flushes appear here. A shell that flushes on its
+    /// own account — a mouse click, an application switch — reports that itself,
+    /// because it never enters `decide`.
+    ///
+    /// Positioned before `refresh_glyph` deliberately: the effects are carried
+    /// out in field order, and the reason a word vanished belongs in the log
+    /// before the repaint that followed it.
+    pub flushed: Option<FlushCause>,
     /// The menu-bar glyph no longer reflects the state.
     pub refresh_glyph: bool,
     /// Something changed that has to survive a quit; write the settings file.

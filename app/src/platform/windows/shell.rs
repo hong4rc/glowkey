@@ -75,7 +75,17 @@ pub fn snapshot() -> Option<Snapshot> {
 /// defect `docs/decisions/0007` exists to forbid, and startup is exactly when a
 /// user looks at it.
 pub fn foreground_changed(app: &str) {
-    hook::with_session(|session| session.set_frontmost_app(app));
+    hook::with_session(|session| {
+        // Same loss as a flush, under a different name — see the macOS side.
+        let discarded = session.remembers_position();
+        session.set_frontmost_app(app);
+        if discarded {
+            super::hook_log::log(format!(
+                "FLUSH {} — composing word discarded",
+                glowkey_input::FlushCause::AppSwitch
+            ));
+        }
+    });
     refresh_indicator();
 }
 

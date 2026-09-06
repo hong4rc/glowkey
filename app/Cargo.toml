@@ -80,6 +80,12 @@ windows-sys = { version = "0.61", features = [
     # %SystemRoot%, so neither the launched `explorer.exe` nor the directory the
     # font parser is pointed at comes from an inherited environment variable.
     "Win32_System_SystemInformation",
+    # SAFEARRAY and VARIANT, for the flat UI Automation call behind the one
+    # question the Chromium address-bar guard turns on: is the focused element
+    # the omnibox? Answered on a worker thread, never on the keystroke path
+    # (`platform/windows/omnibox.rs`). `Win32_System_Ole`, listed below for the
+    # clipboard, carries the SAFEARRAY half.
+    "Win32_System_Variant",
     # The tray icon's window class and menu, and the GDI needed to draw the
     # four indicator glyphs rather than ship four .ico files.
     "Win32_Graphics_Gdi",

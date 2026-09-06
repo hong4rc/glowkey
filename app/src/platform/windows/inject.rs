@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_BACK,
+    VK_DELETE,
 };
 
 /// Whether the current run of injection refusals has already been reported.
@@ -92,30 +93,33 @@ fn edit_inputs(backspaces: usize, text: &str, app: Option<&str>) -> Vec<INPUT> {
     //
     // A forward-delete first clears the selection. With no selection and the
     // caret at the end of the text — GlowKey's normal position while composing —
-    // it deletes nothing, so it is a no-op in the ordinary case.
+    // it deletes nothing.
     //
-    // **Not sent, since 2026-09-05.** This used to fire for every Chromium
+    // **It took two attempts to get the condition right, and the wrong one is
+    // worth remembering.** From 2026-09-05 this fired for *every* Chromium
     // application, on the argument that reaching a mid-field caret required
-    // moving it without flushing. That argument was wrong: a mouse click *does*
-    // flush and *does* leave the caret mid-field, so the next edit carrying
-    // backspaces sent a forward-delete into ordinary text. `is_chromium_app`
-    // matches Electron too, so that is Chrome, Edge, Slack, VS Code and Discord,
-    // and the failure is silent — the user cannot tell a character went missing.
-    // Worse than the bug it prevents, which is a visible `hoongf` -> `hoồng` in
-    // the address bar and is now back.
+    // moving it without flushing. That was wrong: a mouse click *does* flush and
+    // *does* leave the caret mid-field, so the next edit carrying backspaces sent
+    // a forward-delete into ordinary text. `is_chromium_app` matches Electron
+    // too, so that was Chrome, Edge, Slack, VS Code and Discord — and the failure
+    // was silent, which makes it worse than the visible mis-render it prevented.
+    // It was disabled the same day.
     //
-    // macOS keeps its guard because it can afford to ask first: an accessibility
-    // read tells it whether a selection actually exists. The Windows equivalent
-    // is a UI Automation call — cross-process, COM, on the keystroke path — which
-    // `decisions/0008` forbids and `LowLevelHooksTimeout` punishes by removing
-    // the hook, so it cannot simply be added here.
+    // macOS could always afford the missing half: an accessibility read tells it
+    // whether a selection exists. The Windows equivalent is a UI Automation call
+    // — cross-process, COM — which `decisions/0008` forbids on this path and
+    // `LowLevelHooksTimeout` punishes by removing the hook.
     //
-    // The way back is to learn focus off the hot path: extend the WinEvent hook
-    // in `foreground.rs` with `EVENT_OBJECT_FOCUS`, cache whether the focused
-    // element is the omnibox, and require that here as the second condition.
-    // `needs_omnibox_guard` is the first condition and is kept and still tested
-    // rather than deleted — the rule it encodes is right, it is only half of one.
-    let _ = app;
+    // So the answer is resolved *elsewhere*: `omnibox` watches focus changes on a
+    // worker thread and stores one `bool`, and reading it here costs an atomic
+    // load. Every focus change clears that flag before the resolver runs, so a
+    // stale answer can only ever be `false` — the mis-render comes back, and a
+    // character is never deleted in a page body. The failure direction is the
+    // whole design.
+    if needs_omnibox_guard(backspaces, app, super::omnibox::focus_is_omnibox()) {
+        inputs.push(key_input(VK_DELETE, false));
+        inputs.push(key_input(VK_DELETE, true));
+    }
 
     for _ in 0..backspaces {
         inputs.push(key_input(VK_BACK, false));
@@ -230,22 +234,21 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
     }
 }
 
-/// Whether an edit into `app` is in scope for the Chromium address-bar guard.
+/// Whether this edit needs the Chromium address-bar forward-delete.
 ///
-/// Split out so the rule is testable without injecting anything.
+/// Both conditions, and both are load-bearing:
 ///
-/// **Not currently a trigger.** [`edit_inputs`] no longer consults it: fired as
-/// the only condition it deleted real text in Chromium page bodies, and the
-/// comment there records why. This is the first of the two conditions the guard
-/// needs — a Chromium application with backspaces to send — and it stays, tested,
-/// for the focus-cached second one to join.
-// Not called while the forward-delete is disabled. Kept rather than deleted:
-// this is the first of the guard's two conditions, it is covered by tests, and
-// re-deriving it later from the same evidence would be work done twice.
-#[allow(dead_code)]
+/// - a Chromium application with backspaces to send — without it the guard is
+///   pointless, since no other host keeps an inline-autocomplete selection;
+/// - **the focused element is the address bar** — without it the guard deletes
+///   the character to the right of the caret in every page body, which is what
+///   it did until 2026-09-05 and why it was switched off.
+///
+/// `focus_is_omnibox` is passed in rather than read here so the rule is testable
+/// without a browser, a focus change or a UI Automation call.
 #[must_use]
-pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>) -> bool {
-    backspaces > 0 && app.is_some_and(crate::default_exclusions::is_chromium_app)
+pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>, focus_is_omnibox: bool) -> bool {
+    focus_is_omnibox && backspaces > 0 && app.is_some_and(crate::default_exclusions::is_chromium_app)
 }
 
 #[cfg(test)]
@@ -263,14 +266,23 @@ mod tests {
         (vk != 0).then_some(vk)
     }
 
-    /// **A Chromium edit sends no forward-delete.**
+    /// **A Chromium edit sends no forward-delete while focus is elsewhere.**
     ///
     /// The regression this pins is the user's text disappearing, so it is
     /// asserted against the actual input sequence rather than trusted to a call
-    /// site staying commented out. `VK_DELETE` here removes the character after
-    /// the caret, and in a page body there is always one.
+    /// site. `VK_DELETE` here removes the character after the caret, and in a
+    /// page body there is always one.
+    ///
+    /// Runs through `edit_inputs`, which reads the live focus flag — false in a
+    /// test process, since nothing has ever focused an address bar here. That is
+    /// the same default the flag holds at startup and after every focus change,
+    /// so this also pins that the *default* is the safe one.
     #[test]
-    fn a_chromium_edit_sends_no_forward_delete() {
+    fn a_chromium_edit_sends_no_forward_delete_without_omnibox_focus() {
+        assert!(
+            !super::super::omnibox::focus_is_omnibox(),
+            "the flag must default to false, or this test proves nothing"
+        );
         for app in ["chrome.exe", "msedge.exe", "slack.exe", "code.exe"] {
             let inputs = edit_inputs(2, "ồ", Some(app));
             assert!(
@@ -340,38 +352,50 @@ mod tests {
         assert_eq!(units, "ồng".encode_utf16().collect::<Vec<_>>());
     }
 
-    /// The guard's scope answers yes for a Chromium browser with backspaces to
-    /// send, and no for everything else.
+    /// The guard fires for a Chromium edit **with focus in the address bar**, and
+    /// for nothing else.
     ///
-    /// Both halves matter. Missing it in Edge is the `hoongf` -> `hoồng` bug;
-    /// answering yes anywhere else would spend a forward-delete on a field that
-    /// never had a selection — which is what happened while this was wired up as
-    /// the only condition, and why it no longer is.
+    /// Every negative here is a character the user would otherwise lose. The
+    /// focus condition is the one that was missing between 2026-09-05 and
+    /// 2026-09-06: with only the first two, a forward-delete went into every
+    /// Chromium page body, silently.
     #[test]
-    fn the_omnibox_guard_scope_covers_only_chromium_edits() {
-        assert!(needs_omnibox_guard(1, Some("msedge.exe")));
-        assert!(needs_omnibox_guard(3, Some("chrome.exe")));
+    fn the_omnibox_guard_needs_focus_in_the_address_bar() {
+        // All three conditions.
+        assert!(needs_omnibox_guard(1, Some("msedge.exe"), true));
+        assert!(needs_omnibox_guard(3, Some("chrome.exe"), true));
+
+        // **A Chromium edit with focus anywhere else.** This is the page body,
+        // and it is the case that ate characters in Gmail and Slack.
+        assert!(!needs_omnibox_guard(1, Some("msedge.exe"), false));
+        assert!(!needs_omnibox_guard(3, Some("chrome.exe"), false));
+        assert!(!needs_omnibox_guard(1, Some("slack.exe"), false));
 
         // No backspaces: nothing to protect, and a forward-delete would be pure
         // risk for no benefit.
-        assert!(!needs_omnibox_guard(0, Some("msedge.exe")));
+        assert!(!needs_omnibox_guard(0, Some("msedge.exe"), true));
 
-        // Not a browser.
-        assert!(!needs_omnibox_guard(1, Some("notepad.exe")));
-        assert!(!needs_omnibox_guard(1, Some("code.exe")));
+        // Not a browser — an address bar cannot be focused in Notepad, but the
+        // app condition is checked rather than assumed.
+        assert!(!needs_omnibox_guard(1, Some("notepad.exe"), true));
 
-        // Not yet resolved: fail safe, and do not delete anything.
-        assert!(!needs_omnibox_guard(1, None));
+        // No application resolved yet: fail safe, and do not delete anything.
+        assert!(!needs_omnibox_guard(1, None, true));
     }
 
     /// The guard reads the shipped Chromium table rather than its own list, so a
-    /// browser added there is covered without a second edit here.
+    /// browser added there is covered without a second edit here — and none of
+    /// them is guarded without focus in the address bar.
     #[test]
     fn the_guard_uses_the_shipped_chromium_table() {
         for app in crate::default_exclusions::CHROMIUM_APP_PREFIXES {
             assert!(
-                needs_omnibox_guard(1, Some(app)),
+                needs_omnibox_guard(1, Some(app), true),
                 "{app} is in the shipped table and must be guarded"
+            );
+            assert!(
+                !needs_omnibox_guard(1, Some(app), false),
+                "{app} must not be guarded when focus is not the address bar"
             );
         }
     }

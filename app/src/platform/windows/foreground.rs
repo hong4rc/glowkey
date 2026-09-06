@@ -34,8 +34,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, HKL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS,
+    GetForegroundWindow, GetWindowThreadProcessId, EVENT_OBJECT_FOCUS, EVENT_SYSTEM_FOREGROUND,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 use super::elevation::Reach;
@@ -142,6 +142,30 @@ pub fn reach() -> Reach {
 /// WinEvent hook is delivered by that thread's message pump, so installing it
 /// anywhere else means the notifications are never delivered and the foreground
 /// silently never changes.
+/// The second WinEvent hook: focus changes within a window.
+///
+/// Separate from the foreground hook rather than widening that one's range,
+/// because the two event ids sit at opposite ends of the space
+/// (`EVENT_SYSTEM_FOREGROUND` is 0x0003, `EVENT_OBJECT_FOCUS` is 0x8005) and one
+/// hook spanning them would deliver every event in between — thousands a second
+/// on a busy desktop, all of them dispatched on the thread the keyboard hook
+/// shares.
+fn install_focus_hook() -> bool {
+    // SAFETY: the callback matches WINEVENTPROC and lives for the program.
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_FOCUS,
+            EVENT_OBJECT_FOCUS,
+            std::ptr::null_mut(),
+            Some(win_event_callback),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    !hook.is_null()
+}
+
 pub fn install() -> bool {
     // SAFETY: the callback matches WINEVENTPROC and lives for the program.
     let hook = unsafe {
@@ -162,6 +186,15 @@ pub fn install() -> bool {
     // The bootstrap: GlowKey can start while an application is already frontmost,
     // so no notification is coming for it. One query, once — the same shape the
     // macOS side settled on.
+    // Best effort, and deliberately not fatal: without it the address-bar guard
+    // never fires and the omnibox keeps the mis-render it has had since the
+    // guard was disabled, which is the direction this whole path fails in.
+    if install_focus_hook() {
+        super::omnibox::start();
+    } else {
+        crate::log::log("FOCUS hook FAILED to install — the address-bar guard will not fire");
+    }
+
     bootstrap();
     true
 }
@@ -192,6 +225,16 @@ unsafe extern "system" fn win_event_callback(
     // OBJID_WINDOW is 0. A foreground event for a child object is not an
     // application switch, and resolving one would replace a correct answer with a
     // less correct one.
+    // A focus change inside the same window: the address-bar guard's question
+    // has a new answer. Only signalled here — resolving it means a cross-process
+    // UIA call, and this callback runs on the thread that serves the keyboard
+    // hook, so blocking here removes the hook exactly as blocking in the hook
+    // would (`omnibox` module header).
+    if event == EVENT_OBJECT_FOCUS {
+        super::omnibox::note_focus_changed();
+        return;
+    }
+
     if event != EVENT_SYSTEM_FOREGROUND || id_object != 0 || hwnd.is_null() {
         return;
     }

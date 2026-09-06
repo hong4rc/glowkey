@@ -49,6 +49,7 @@ pub mod hook_log;
 pub mod indicator;
 pub mod inject;
 pub mod mouse;
+mod omnibox;
 pub mod paths;
 pub mod settings_ui;
 pub mod shell;

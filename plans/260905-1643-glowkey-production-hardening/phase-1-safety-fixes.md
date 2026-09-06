@@ -1,3 +1,12 @@
+---
+phase: 1
+title: "Safety fixes: data loss, memory safety, silence"
+status: completed
+priority: P1
+effort: "1d"
+dependencies: []
+---
+
 # Phase 1 — Safety fixes
 
 **Status:** ready. No dependencies, no open decisions, no file contention with

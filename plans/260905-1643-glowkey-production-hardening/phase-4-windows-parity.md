@@ -1,3 +1,12 @@
+---
+phase: 4
+title: "Windows shell parity and UI polish"
+status: pending
+priority: P2
+effort: "5-8d"
+dependencies: [3]
+---
+
 # Phase 4 — Windows shell parity and UI polish
 
 **Depends on:** phase 3 (both edit `hook.rs`; 3 lands first).

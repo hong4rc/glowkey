@@ -1,3 +1,12 @@
+---
+phase: 8
+title: "Linux (IBus engine) — skipped by decision"
+status: pending
+priority: P3
+effort: "20d"
+dependencies: []
+---
+
 # Phase 8 — Linux
 
 **Status: NOT SCHEDULED — skipped by decision, 2026-09-05.**

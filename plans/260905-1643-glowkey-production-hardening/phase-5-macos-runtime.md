@@ -1,3 +1,12 @@
+---
+phase: 5
+title: "macOS runtime verification"
+status: pending
+priority: P1
+effort: "1d"
+dependencies: []
+---
+
 # Phase 5 — macOS runtime verification
 
 **Blocked on:** a Mac. Nothing else.
@@ -55,7 +64,10 @@ things this restructuring put at risk:
 
 ## Also needing a machine (Windows, same class of blocker)
 
-- The Gmail mid-paragraph test that decides phase 3.1.
+- ~~The Gmail mid-paragraph test that decides phase 3.1.~~ **Answered
+  2026-09-06**: the surviving `hoồng` is the address bar only, and page bodies
+  are clean. Still worth one deliberate Gmail run when convenient, as the
+  acceptance check for 3.1's *real* guard rather than as an open question.
 - The League `B` test that decides phase 3.4.
 - A dead-hook reproduction to validate phase 3.2's watchdog.
 - Windows Tier 1 re-run with EVKey **stopped** — the only verification round so

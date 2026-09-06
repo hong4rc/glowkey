@@ -1,7 +1,20 @@
+---
+title: "GlowKey — production hardening, cross-platform completion, UI polish"
+status: in-progress
+created: 2026-09-05
+updated: 2026-09-06
+branch: hardening/phase-1-safety-fixes
+blockedBy: []
+blocks: []
+---
+
 # GlowKey — production hardening, cross-platform completion, UI polish
 
-**Status:** in progress, 2026-09-05. Phase 1 done; phases 2 and 3 partly done.
-Branch `hardening/phase-1-safety-fixes`, commits `0fc89ad` and `4d99de4`.
+**Status:** in progress, updated 2026-09-06. Phase 1 done; phases 2 and 3 partly
+done. Branch `hardening/phase-1-safety-fixes`, commits `0fc89ad` … `ce7e3d7`.
+**2026-09-06:** a live typing session confirmed 3.1's interim works and the
+remaining `hoồng` is the address bar only; it also exposed a diagnostic blind
+spot (a flush logs nothing), now phase 3.5.
 **Base:** `main` @ `ce51ff0`.
 **Origin:** six parallel audits + an adversarial arbiter pass,
 `plans/reports/orchestrate-260905-1643/` (read `arbiter/result.md` first — it is
@@ -45,7 +58,7 @@ Shipping more surface on top of a text-eating bug makes the product worse.
 |---|---|---|---|
 | 1 | [Safety fixes](phase-1-safety-fixes.md) — data loss, memory safety, silence | — | **DONE** |
 | 2 | [Privacy and the log](phase-2-privacy-and-logging.md) | 1 | **2.1–2.2, 2.4 done**; 2.3 file permissions open |
-| 3 | [Chromium guard and the Windows watchdog](phase-3-correctness.md) | 1 | **3.1 interim done**; 3.2–3.4 need hardware |
+| 3 | [Correctness: guard, watchdog, flush logging](phase-3-correctness.md) | 1 | **3.1 interim done + verified live**; 3.5 flush logging is next and needs no hardware |
 | 4 | [Windows shell parity](phase-4-windows-parity.md) | 3 (hook.rs contention) | decisions B4, B8 |
 | 5 | [macOS runtime verification](phase-5-macos-runtime.md) | — | **a Mac**; gates every macOS-side change |
 | 6 | [Release and signing](phase-6-release.md) | 1, 2 | decisions A4, A5 |
@@ -58,8 +71,11 @@ Shipping more surface on top of a text-eating bug makes the product worse.
   scan is bounded; panics and save failures reach the log; macros have one
   validator; `explorer.exe` and the font directory come from the API; `cargo
   audit` runs in CI with justified ignores; `SECURITY.md` exists.
-- **Phase 3.1 interim.** The Windows Chromium forward-delete is disabled and a
-  test pins that no Chromium edit contains one.
+- **Phase 3.1 interim, and verified on screen 2026-09-06.** The Windows Chromium
+  forward-delete is disabled, a test pins that no Chromium edit contains one, and
+  a live session proved the emitted diff is correct every time — the surviving
+  `hoồng` is Edge's address bar absorbing a backspace into its autocomplete
+  selection, not GlowKey. Page bodies are clean.
 - **Phase 2.1, 2.2 and 2.4.** `PRIVACY.md` is platform-neutral and accurate; the
   log no longer records typed text unless the user turns it on in Settings →
   General → Diagnostics.

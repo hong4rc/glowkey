@@ -1,3 +1,12 @@
+---
+phase: 6
+title: "Release, signing and distribution"
+status: in-progress
+priority: P2
+effort: "2-3d"
+dependencies: [1, 2]
+---
+
 # Phase 6 — Release, signing and distribution
 
 **Depends on:** phases 1 and 2 (do not distribute more widely while the app can

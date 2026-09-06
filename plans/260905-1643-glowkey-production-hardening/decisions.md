@@ -1,6 +1,6 @@
 # Decisions
 
-**Answered 2026-09-05** — 1 (disable the guard), 2 (redact by default,
+**Answered 2026-09-05** — 1 (disable the guard, since **confirmed** live), 2 (redact by default,
 opt-in verbose), 3 (stay developer-audience and say so), 9 (**no Linux for now**).
 The rest remain open.
 
@@ -25,8 +25,13 @@ asks accessibility whether a selection actually exists; Windows asks nothing.
 mis-render in one field is recoverable; silent deletion in a document is not,
 and the user cannot even tell it happened.
 
-*Flips it:* the 30-second Gmail mid-paragraph test shows no deletion in practice.
-That test is item 1 of the hardware list and should be run before deciding.
+**Confirmed 2026-09-06, and the decision stands.** A live session in Edge typed
+`hoongf` six times: GlowKey emitted the correct diff (`bs=3 ins=3u`) every time,
+the first attempt rendered `hoồng` and the five after it rendered `hồng`. Only
+the first token of a freshly cleared field fails, which is the inline-autocomplete
+signature — a page-body defect would fail every time. The silent deletion is gone;
+what is left is a visible address-bar mis-render. Evidence:
+`plans/reports/orchestrate-260905-1643/` and phase 3.1.
 
 ---
 

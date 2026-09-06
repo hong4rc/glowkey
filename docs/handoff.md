@@ -748,9 +748,17 @@ and that Accessibility must be re-granted after every macOS update.
 
 **The three biggest things still open**, all needing a human at a machine:
 
-- **The Gmail test.** Type Vietnamese mid-paragraph in a Chrome draft and see
-  whether a character vanishes. Thirty seconds, and it settles whether the guard
-  above can ever be re-enabled as it was.
+- ~~**The Gmail test.**~~ **Answered 2026-09-06.** A live session in Edge typed
+  `hoongf` six times: GlowKey emitted the correct diff every time, the first
+  attempt rendered `hoồng` and the five after it rendered `hồng`. Only the first
+  token into a freshly cleared field fails — the inline-autocomplete signature.
+  The silent page-body deletion is gone; the address bar mis-render remains, and
+  the real guard (focus cached off the hot path) is phase 3.1 of
+  `plans/260905-1643-glowkey-production-hardening/`.
+- **A flush writes nothing to the log**, so "GlowKey stopped mid-word and I don't
+  know why" is unfalsifiable. `mouse.rs:76` flushes on every click and logs
+  nothing; there are six flush sites and the shell can see none of them. Phase
+  3.5, and the cheapest item in the plan.
 - **No Windows hook-liveness check exists.** `hook.rs`'s comment claimed one; it
   was corrected rather than implemented. Windows removes a slow hook silently and
   the tray goes on saying VI. macOS has `health.rs`; Windows has nothing.

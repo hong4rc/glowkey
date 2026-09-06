@@ -1,3 +1,12 @@
+---
+phase: 2
+title: "Privacy and the log"
+status: in-progress
+priority: P1
+effort: "1-2d"
+dependencies: [1]
+---
+
 # Phase 2 — Privacy and the log
 
 **Depends on:** phase 1 (shares `log.rs`).

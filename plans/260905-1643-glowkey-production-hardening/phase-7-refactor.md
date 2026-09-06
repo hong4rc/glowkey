@@ -1,3 +1,12 @@
+---
+phase: 7
+title: "Refactor and de-duplication"
+status: pending
+priority: P3
+effort: "3-5d"
+dependencies: [5]
+---
+
 # Phase 7 — Refactor and de-duplication
 
 **Depends on:** phase 5 for anything macOS-side (unverifiable until then).

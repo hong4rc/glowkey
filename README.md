@@ -47,6 +47,7 @@ crates/glowkey-session/     Typing policy over it: mode, ignore list, auto-fix, 
 crates/glowkey-input/       The decision ladder and the `Platform` port every shell implements.
 app/src/platform/macos/     macOS shell (objc2): event tap, menu bar, Settings, HUD.
 app/src/platform/windows/   Windows shell: WH_KEYBOARD_LL hook, SendInput, tray, settings.
+justfile                    Task runner, both platforms: `just --list` shows what this one can do.
 scripts/build-app.sh        Builds a universal macOS app bundle (release or dev variant).
 scripts/make-dmg.sh         Packages build/GlowKey.app into a distributable disk image.
 scripts/release-install.sh  Builds GlowKey.app, installs it to /Applications, launches it.

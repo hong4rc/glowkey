@@ -644,14 +644,45 @@ reading it needs a granted build and someone typing in Chrome.
 
 ## 8. Build / test / run
 
+**`just` is the front door, on either platform**, and `just --list` shows what
+the platform you are on can do. Recipes that differ between the two are defined
+once per platform under the same name, so these mean the same thing on a Mac and
+on a Windows box:
+
+```text
+just install       # the app you type with, running the code you just changed
+just install-only  # build it, don't launch it
+just dev           # foreground, with GLOWKEY_DEBUG=1 echoing every decision
+just test          # 367 tests over 23 suites; the headless proof
+just lint          # must be silent — a warning is a failure here
+just check         # lint + test, in the order that fails fastest
+just log           # follow the live log; read this first for a typing bug
+just stop          # quit it
+```
+
+What that runs underneath is not the same thing at all. On macOS `install` builds
+a signed universal bundle into `/Applications`; on Windows there is no bundle, so
+it builds `target/release/GlowKey.exe` and launches that — which is what
+`manual-verification-windows.md` tells a person to do by hand. Three recipes have
+no Windows counterpart and are hidden there rather than faked: `dmg`, `signing`
+and `uninstall`/`uninstall-all`.
+
+Two Windows details worth knowing before editing the recipes: the executable is
+**locked while it runs**, so every build recipe depends on `stop` (a build during
+a live session fails with `os error 5`), and the recipes run in **PowerShell**
+rather than `sh`, so `just` needs no POSIX shell on that machine.
+
+The raw commands, if you would rather not use `just`:
+
 ```bash
-cargo test --workspace         # 194 tests, all green; the headless proof
+cargo test --workspace                   # the headless proof
 cargo clippy --workspace --all-targets   # must be 0 warnings
-cargo bench -p glowkey-session  # keystroke latency numbers (criterion)
-bash scripts/release-install.sh          # build GlowKey.app → /Applications → launch
-bash scripts/dev-run.sh                  # build+run "GlowKey Dev" w/ GLOWKEY_DEBUG=1
-bash scripts/build-app.sh [release|dev] [release|debug]   # bundle only, no install
-bash scripts/make-dmg.sh                 # package build/GlowKey.app as a .dmg
+cargo bench -p glowkey-session           # keystroke latency numbers (criterion)
+bash scripts/release-install.sh          # macOS: build GlowKey.app → /Applications → launch
+bash scripts/dev-run.sh                  # macOS: build+run "GlowKey Dev" w/ GLOWKEY_DEBUG=1
+bash scripts/build-app.sh [release|dev] [release|debug]   # macOS: bundle only, no install
+bash scripts/make-dmg.sh                 # macOS: package build/GlowKey.app as a .dmg
+cargo build --release -p glowkey         # Windows: the executable, run from target/release
 ```
 
 Manual checks that no test can reach — every Settings control, the HUD variants,

@@ -19,12 +19,29 @@ on the live desktop, with the machine to yourself** — the handoff's "ask first
 is a real requirement, not caution. The isolated wrapper is still fine for a
 harness that only observes.
 
-**An agent cannot run these for you.** A coding agent's shell lives in a
-non-interactive window station: `GetForegroundWindow()` returns 0 and `SendInput`
-fails with 5, from the shell and from any process it spawns. Launching GlowKey
-that way *does* work (the hook installs and transforms the user's real typing),
-so the log is readable evidence an agent can gather — but the keystrokes have to
-come from a person. Plan the verification session accordingly.
+**An agent can run these, and should not do so while you are working.**
+Corrected 2026-09-06; the previous version of this paragraph said injection was
+impossible for an agent, and that was wrong.
+
+`SendInput` works from an agent-spawned process. The failure that produced the
+wrong conclusion was `ERROR_ACCESS_DENIED` with an **elevated Windows Terminal in
+the foreground** — UIPI blocks injection into a higher-integrity foreground
+window from any ordinary process, agent or not. With an ordinary window in front,
+the same call returns `sent=2 err=0`. `scripts/probe-sendinput.ps1` reports the
+result next to the foreground window and its elevation, so the next person does
+not repeat the inference.
+
+Two real limits remain:
+
+- **Taking the foreground needs `AttachThreadInput`.** `SetForegroundWindow`
+  alone is refused for a background process.
+- **Focusing the Chromium address bar is unreliable while a page holds the
+  keyboard.** A YouTube player swallowed `Ctrl+L`, `Alt+D` and `F6` across
+  several attempts. Open a plain tab first.
+
+And one that is not technical: these harnesses take over the screen and type. Run
+them on an idle machine. Asking first is a real requirement — ignoring it
+interrupted the user mid-session while this very paragraph was being researched.
 
 ## Before you start
 

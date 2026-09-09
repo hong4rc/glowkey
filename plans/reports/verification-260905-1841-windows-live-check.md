@@ -62,16 +62,23 @@ exists for, and it announces itself rather than looking dead.
 
 ## What could not be established, and why
 
-**`SendInput` fails with `ERROR_ACCESS_DENIED` (5) from an agent's shell and
-from every process it spawns.** Probed directly: the spawned process reports
-desktop `Default` but `GetForegroundWindow()` returns `0` — it is not on the
-interactive window station, and `SendInput` requires the caller to be on the
-desktop receiving input.
+**`SendInput` failed with `ERROR_ACCESS_DENIED` (5).** The conclusion drawn
+from that — that an agent cannot synthesize keystrokes here — was **wrong, and is
+corrected below.**
 
-Notably **this does not stop GlowKey from working** when launched the same way:
-a `WH_KEYBOARD_LL` hook is session-wide, so it installed and transformed the
-user's real typing correctly. Receiving input works; synthesizing it does not.
-So an agent can gather log evidence but cannot generate the keystrokes.
+**Correction, 2026-09-06.** `SendInput` works from an agent-spawned process:
+`sent=2 err=0` with an ordinary window in the foreground. The original failure
+was **UIPI**, not the window station — an elevated Windows Terminal was the
+foreground window, and Windows blocks injection into a higher-integrity
+foreground from any ordinary process. One observation was generalised into a
+platform limit without testing the alternative explanation, and it was written
+into this report and the handoff before anything checked it.
+
+What is true: taking the foreground from a background process needs
+`AttachThreadInput` (`SetForegroundWindow` alone is refused), and focusing the
+Chromium address bar is unreliable while a page holds the keyboard.
+`scripts/probe-sendinput.ps1` now reports the foreground window and its elevation
+alongside the result, so the same inference is harder to repeat.
 
 **`verify-windows-isolated.ps1` cannot run a typing harness at all** — not an
 implementation gap but a contradiction: `SendInput` needs the created desktop to
@@ -79,6 +86,11 @@ be the *input* desktop, which requires `SwitchDesktop`, which is the visible
 screen switch the script exists to avoid. It remains valid for observational
 harnesses. The handoff listed it as "written, not yet verified"; it is now
 verified as unusable for this purpose.
+
+**This half survived the correction above.** Re-tested 2026-09-06 with
+`scripts/probe-sendinput.ps1` on a created desktop: `foreground: Idle (pid 0)`,
+`sent=0/2 err=5`. Nothing is in the foreground on a desktop that is not receiving
+input, so there is no UIPI explanation to reach for here — the limit is real.
 
 **Tier 1 had no target on Windows 11.** Notepad is a WinUI application with no
 classic `Edit` control, so `WM_GETTEXT` reads nothing and the smoke test had

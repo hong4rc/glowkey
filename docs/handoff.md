@@ -56,7 +56,7 @@ Cargo workspace, four layers, each depending only on the one below
   **re-derives** the whole rendering each key via the `vi` crate (`vi::TELEX` /
   `vi::VNI`), producing a **`KeyResponse { handled, backspaces, insert }`** diff
   (backspaces in **UTF-16 code units**). `is_invalid_vietnamese` (the spell
-  check, including the stop-coda tone rule `vi` lacks) and `diff` are public
+  check, including the three phonotactic rules `vi` lacks) and `diff` are public
   here because the layer above needs them too.
 - `method.rs`, `tones.rs`: `InputMethod`, `PlacementStyle`, `remove_tones`.
 
@@ -149,7 +149,27 @@ Cargo workspace, four layers, each depending only on the one below
   `mãt` and `hòp` valid; they are not. This is not academic — Telex's `f`, `r`
   and `x` are exactly those three tones, so before the rule was added `left` came
   out `lèt`, `soft` `sòt`, `gift` `gìt` and `lift` `lìt`, and auto-fix would not
-  rescue them because it had been told they were valid Vietnamese. One exemption: a word starting with **đ** is
+  rescue them because it had been told they were valid Vietnamese.
+
+  Two more rules `vi` lacks, added 2026-09-06 by the same method — state the
+  rule, probe `vi`, watch it accept something impossible:
+
+  - **The open diphthong `ưa` takes no coda.** Closed, it must be written `ươ`
+    (`ươm`, `mượn`), never `ưam`. Reported from live use: `wasm` came out `ưám`
+    (`w`→ư, `a`, `s`→sắc, `m`) and auto-fix left it, and so did `wast`→`ưát` and
+    `wasp`→`ưáp`. Those two carry sắc, which a stop coda allows, so the tone rule
+    above could not reach them. The `ia`/`ua` siblings share the rule and are
+    **deliberately not implemented**: in `quan`, `quát`, `gian`, `giam` the u/i
+    belongs to the initial, not the nucleus, so a surface match would reject real
+    words. `ưa` needs no such exclusion — Vietnamese has no `qư-`/`gư-` initial.
+  - **`nh` and `ch` close only a front vowel** (a, ă, â, e, ê, i, y). `ưnh`,
+    `ônh`, `ơch` are not rimes; `vi` accepts them all. It is the vowel next to
+    the coda that counts, so `oanh`, `uynh`, `hoạch` and `huênh` are unaffected.
+
+  Both rules judge the nucleus with tone marks stripped but the vowel's modifier
+  kept (the horn on `ư`/`ơ`, the breve on `ă`, the circumflex on `â`/`ê`/`ô`).
+  `remove_tones` is the wrong tool for that — it flattens to plain ASCII, which
+  would collapse `ưa` into `ua`. One exemption: a word starting with **đ** is
   kept as-is. A leading đ costs `dd` (Telex) or `d9` (VNI) and no English word
   begins with either, so it is always deliberate — this is what keeps the everyday
   abbreviations `đc`, `đt`, `đk` from being handed back as `ddc`, `ddt`, `ddk`.

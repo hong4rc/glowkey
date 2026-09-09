@@ -223,7 +223,8 @@ inferred (3.7).
 Reported as a bug. It is the documented rule, and the rule is being kept —
 written down here so it is not re-litigated.
 
-`engine.rs:293-295`: in **Telex a digit is not a syllable character**, so it ends
+`engine.rs:310` (`is_syllable_char`; corrected 2026-09-06 from `:293-295`, which
+is the repeat-key rejection comment): in **Telex a digit is not a syllable character**, so it ends
 the word exactly like a space. By the time `4` arrives, `hồng` has already
 committed as valid Vietnamese and auto-fix has nothing to restore. A **letter**
 behaves differently because it *extends* the syllable, so the whole word is
@@ -249,8 +250,9 @@ the log shows `FLUSH mouse-button` and passthrough follows.
 
 If the no-click run *still* passes the backspaces through, the cause is not the
 click and this becomes a real re-composition defect — at which point the
-committed-history stack (`session.rs:775-788`, where a restored word clears the
-stack deliberately) is the place to look.
+committed-history stack (`crates/glowkey-session/src/session.rs:775-788` —
+path corrected 2026-09-06, there is no `glowkey-engine/src/session.rs`; a
+restored word clears the stack deliberately via `self.committed.clear()`) is the place to look.
 
 ## Work order
 

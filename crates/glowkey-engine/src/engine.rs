@@ -635,25 +635,83 @@ pub(crate) fn render(
     } else {
         raw
     };
-    let lowered: String = raw.iter().map(|c| c.to_ascii_lowercase()).collect();
     let definition = match method {
         InputMethod::Telex => &vi::TELEX,
         InputMethod::Vni => &vi::VNI,
         InputMethod::SimpleTelex => &SIMPLE_TELEX,
     };
     let mut buffer = IncrementalBuffer::new_with_style(definition, style.into());
-    for ch in lowered.chars() {
-        buffer.push(ch);
+    // The keys `vi` was given, and the letters withheld from it with where they
+    // belong in the rendering (counted in characters).
+    let mut fed = String::new();
+    let mut withheld: Vec<(usize, char)> = Vec::new();
+    let mut run = 0usize;
+    for (i, ch) in raw.iter().enumerate() {
+        let lower = ch.to_ascii_lowercase();
+        run = if i > 0 && raw[i - 1].to_ascii_lowercase() == lower {
+            run + 1
+        } else {
+            1
+        };
+        if run > 3 && is_cancelled_repeat(lower, method) {
+            withheld.push((buffer.view().chars().count(), *ch));
+            continue;
+        }
+        buffer.push(lower);
+        fed.push(lower);
     }
     let out = buffer.view();
 
     // No Vietnamese transformation occurred: emit the keys exactly as typed so all
     // original case survives. This is the common case for English words.
-    if out == lowered {
+    if out == fed {
         return raw.iter().collect();
     }
 
-    apply_case(out, raw)
+    let rendered = apply_case(out, raw);
+    if withheld.is_empty() {
+        return rendered;
+    }
+    // Back in at the positions they were typed at. In typing order, so each
+    // insertion shifts the ones after it by one.
+    let mut chars: Vec<char> = rendered.chars().collect();
+    for (inserted, (at, ch)) in withheld.iter().enumerate() {
+        let index = (at + inserted).min(chars.len());
+        chars.insert(index, *ch);
+    }
+    chars.into_iter().collect()
+}
+
+/// Whether this key is one the user has already cancelled, so a further press
+/// of it is a letter rather than another try at the diacritic.
+///
+/// Only reached from the fourth press onward. A doubled key carries a diacritic
+/// (`oo`→ô, `aa`→â, `ee`→ê, `dd`→đ) and the third press takes it back, leaving
+/// the two letters as typed — `oo` is a real Vietnamese sequence (`xoong`,
+/// `boong`, `moóc`), which is why that gesture exists. What the fourth press
+/// must not do is start over.
+///
+/// `vi` gets that right for three of the four keys and wrong for `o`, and the
+/// reason is a gap in its syllable validator. Its rule is: re-apply the
+/// modification, then keep the result only if `is_valid_syllable` accepts it.
+/// `âa` and `êe` are refused, so the key falls through to being a literal — but
+/// **`ôo` is accepted**, though no Vietnamese syllable has `ô` followed by a
+/// bare `o`. So `oooo` came out `ôo` — two characters for four keys — and
+/// because composing continues, every key after it built on an impossible
+/// syllable: `oooof` gave `ồo`, `oooong` gave `ôong`. Neither auto-fix nor the
+/// spell check rescues those, since both ask the same validator that let it in.
+/// Reported 2026-09-09.
+///
+/// Withholding the key from `vi` rather than post-processing its output is what
+/// keeps the rest of the word working: the tone in `mooosc`→`moóc` and
+/// `xooongf`→`xoòng` is applied by `vi` to a syllable it still sees whole.
+///
+/// VNI is excluded because it has no doubling rule at all — there a diacritic is
+/// a digit, and four `o`s are four `o`s.
+fn is_cancelled_repeat(lowered_key: char, method: InputMethod) -> bool {
+    /// The keys whose doubling carries a diacritic in the Telex family.
+    const DOUBLED_KEYS: [char; 4] = ['a', 'e', 'o', 'd'];
+    method.is_telex_family() && DOUBLED_KEYS.contains(&lowered_key)
 }
 
 /// Re-applies the raw keys' case pattern to a transformed lowercase rendering.

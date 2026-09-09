@@ -47,6 +47,16 @@ gesture — how you type a word that only looks like Telex.
 | `ddd` | `dd` | |
 | `cass` | `cas` | a repeated tone key drops the tone, the extra key stays |
 | `hoongff` | `hôngf` | |
+| `oooo` | `ooo` | after the cancel, each further press is one more letter |
+
+**`oo` is a real Vietnamese sequence**, which is why the cancel exists — and it
+takes tones, so a tone key typed after the cancel still reaches the vowel:
+
+| You type | You get | |
+| --- | --- | --- |
+| `xooong` | `xoong` | a saucepan |
+| `mooosc` | `moóc` | *xe moóc*, a trailer |
+| `sooocs` | `soóc` | *quần soóc*, shorts |
 
 **Backspace after a cancel undoes the cancel.** The delete takes back the
 keystroke that rejected the diacritic, not just a character:

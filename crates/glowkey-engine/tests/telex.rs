@@ -258,6 +258,78 @@ fn repeating_the_diacritic_key_rejects_it() {
     assert_eq!(type_word("hoongff"), "hôngf");
 }
 
+/// **A cancelled repeat stays cancelled**, however many more keys arrive.
+///
+/// Reported 2026-09-09: `ooo` gives the literal `oo`, so a fourth `o` should
+/// give `ooo` — instead the circumflex came back as `ôo`, two characters for
+/// four keys, and composing carried on from there (`oooof` → `ồo`).
+///
+/// `vi` re-applies the modification on the fourth press and keeps the result if
+/// its syllable validator accepts it. `âa` and `êe` are refused, so `a` and `e`
+/// fall through to a literal; **`ôo` is accepted**, though no Vietnamese
+/// syllable has `ô` before a bare `o`. Hence the one-letter difference.
+#[test]
+fn a_cancelled_repeat_stays_cancelled() {
+    // The run: two letters for the first three keys, then one each.
+    assert_eq!(type_word("oo"), "ô");
+    assert_eq!(type_word("ooo"), "oo");
+    assert_eq!(type_word("oooo"), "ooo");
+    assert_eq!(type_word("ooooo"), "oooo");
+    assert_eq!(type_word("oooooo"), "ooooo");
+
+    // Mid-word, and with letters after the run.
+    assert_eq!(type_word("hoooo"), "hooo");
+    assert_eq!(type_word("cooool"), "coool");
+    assert_eq!(type_word("oooong"), "ooong");
+
+    // Case survives a cancelled run.
+    assert_eq!(type_word("OOOO"), "OOO");
+    assert_eq!(type_word("Oooo"), "Ooo");
+
+    // The other three doubling keys, which `vi` already got right and which this
+    // must not change.
+    assert_eq!(type_word("aaaa"), "aaa");
+    assert_eq!(type_word("aaaaa"), "aaaa");
+    assert_eq!(type_word("eeee"), "eee");
+    assert_eq!(type_word("dddd"), "ddd");
+
+    // Not doubling keys in Telex, so a run of them is only ever letters.
+    assert_eq!(type_word("uuuu"), "uuuu");
+    assert_eq!(type_word("iii"), "iii");
+}
+
+/// **What the fix above had to leave alone**, pinned so it cannot be traded away
+/// for the shorter rule a second time.
+///
+/// The first attempt at the fix ended the syllable at the cancel and started the
+/// next key fresh — which reads as the tidier rule, and breaks real words. `oo`
+/// is a Vietnamese sequence, and it takes tones: `moóc` (xe moóc, a trailer) and
+/// `soóc` (quần soóc, shorts) are typed *through* the cancel, so the tone key
+/// after it must still reach the vowel. Withholding only the fourth press keeps
+/// that, because `vi` still sees the whole syllable.
+#[test]
+fn a_tone_after_a_cancelled_repeat_still_lands() {
+    // The words that caught it. `s` is sắc, typed after the cancelling third `o`.
+    assert_eq!(type_word("mooosc"), "moóc");
+    assert_eq!(type_word("sooocs"), "soóc");
+    assert_eq!(type_word("xooongf"), "xoòng");
+
+    // And the toneless `oo` words, which only need the cancel itself.
+    assert_eq!(type_word("xooong"), "xoong");
+    assert_eq!(type_word("booong"), "boong");
+    assert_eq!(type_word("looong"), "loong");
+    assert_eq!(type_word("toooi"), "tooi");
+    assert_eq!(type_word("hooo"), "hoo");
+
+    // A run of exactly three is `vi`'s business and is untouched, including
+    // where its answer is odd: the tone still applies (`hoò`), which is the same
+    // rule that makes `moóc` work.
+    assert_eq!(type_word("hooof"), "hoò");
+    // `a` differs here only because `vi` refuses `âa`, not because of anything
+    // this engine does.
+    assert_eq!(type_word("haaaf"), "haaf");
+}
+
 /// **A digit ends the syllable; a letter extends it.**
 ///
 /// The boundary half of an asymmetry reported as a bug on 2026-09-06: `hoongfc`

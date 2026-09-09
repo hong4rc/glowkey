@@ -2,8 +2,8 @@
 
 Purpose: give a fresh session everything needed to continue GlowKey — the goal,
 how it works, what's built, what's broken, and how to build/test/diagnose. Read
-this first, then the `decisions/` records for depth (`docs/checkpoint.md` is a
-superseded historical note).
+this first, then the `decisions/` records for depth. For what GlowKey does to a
+keystroke, as a user reads it, see `docs/typing-rules.md`.
 
 ---
 
@@ -712,8 +712,19 @@ stop both variants first.
   **engine layering and the `Platform` port** (`0012`, 2026-09-05, with the plan
   `260905-1333-engine-split-and-layering`). `0008` is the one to read before
   touching anything under `platform/`.
-- Reports: `plans/reports/`. UI design: `docs/ui-design.md`. Checkpoint:
-  superseded pointer only.
+- Reports: `plans/reports/`. UI design: `docs/ui-design.md`. The typing rules
+  as a user reads them — every transformation with its keystrokes, grouped:
+  `docs/typing-rules.md`.
+- Manual verification: `docs/manual-verification.md` (macOS),
+  `docs/manual-verification-windows.md` (Windows). Both are checklists to run on
+  a live desktop, which is why they are two files and not one.
+
+Two observations from the superseded IMK checkpoint (`git log -- docs/checkpoint.md`)
+that are still true of the engine:
+
+- `www` → `ww` is upstream `vi` Telex behaviour, not a bug of ours.
+- Whole-word uppercase tone placement works by case-folding in `render()` /
+  `apply_case()`; interior mixed case is best-effort.
 
 ## 10b. Audit and hardening pass (2026-09-05, later that day)
 

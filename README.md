@@ -52,7 +52,7 @@ scripts/make-dmg.sh         Packages build/GlowKey.app into a distributable disk
 scripts/release-install.sh  Builds GlowKey.app, installs it to /Applications, launches it.
 scripts/dev-run.sh          Builds and runs "GlowKey Dev" with debug logging.
 scripts/verify-windows-*.ps1  Windows verification harnesses (type into Notepad, check code points).
-docs/                       Handoff (start here), decision records, manual verification, UI design.
+docs/                       Handoff (start here), typing rules, decision records, manual verification, UI design.
 ```
 
 Which crate to take: `glowkey-engine` for Vietnamese typing alone;

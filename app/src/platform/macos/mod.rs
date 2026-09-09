@@ -36,8 +36,8 @@
 //! [`adapt`] and [`dispatch`]). The tests below still drive the whole path with
 //! real `CGEvent`s, which is what proves the translation.
 //! Only the system-level parts — installing the tap, delivering synthesized events
-//! to an app — need Accessibility and a live session to verify. See
-//! `docs/checkpoint.md`.
+//! to an app — need Accessibility and a live session to verify. The checklist for
+//! that is `docs/manual-verification.md`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;

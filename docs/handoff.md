@@ -714,7 +714,10 @@ stop both variants first.
   touching anything under `platform/`.
 - Reports: `plans/reports/`. UI design: `docs/ui-design.md`. The typing rules
   as a user reads them — every transformation with its keystrokes, grouped:
-  `docs/typing-rules.md`.
+  `docs/typing-rules.md`. Each group there names the tests that pin it, and
+  `app/tests/spec-references.rs` fails if one of those names stops matching the
+  suite, so a renamed test cannot leave the document quietly pointing at
+  nothing.
 - Manual verification: `docs/manual-verification.md` (macOS),
   `docs/manual-verification-windows.md` (Windows). Both are checklists to run on
   a live desktop, which is why they are two files and not one.

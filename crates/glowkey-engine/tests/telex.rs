@@ -74,6 +74,34 @@ fn immediate_circumflex() {
     assert_eq!(type_word("caption"), "caption"); // no false trigger without doubling
 }
 
+/// **Every key of the Telex alphabet, one row each**, so the rules table in
+/// `docs/typing-rules.md` §1 has something that fails when one of them moves.
+/// The five tones and the diacritics were each only asserted inside a word, and
+/// `z` — which takes a tone off — was asserted nowhere.
+#[test]
+fn each_telex_key_does_its_own_job() {
+    // The diacritics.
+    assert_eq!(type_word("oo"), "ô");
+    assert_eq!(type_word("aa"), "â");
+    assert_eq!(type_word("ee"), "ê");
+    assert_eq!(type_word("aw"), "ă");
+    assert_eq!(type_word("ow"), "ơ");
+    assert_eq!(type_word("uw"), "ư");
+    assert_eq!(type_word("w"), "ư");
+    assert_eq!(type_word("dd"), "đ");
+
+    // The five tones: sắc, huyền, hỏi, ngã, nặng.
+    assert_eq!(type_word("cas"), "cá");
+    assert_eq!(type_word("caf"), "cà");
+    assert_eq!(type_word("car"), "cả");
+    assert_eq!(type_word("cax"), "cã");
+    assert_eq!(type_word("caj"), "cạ");
+
+    // `z` takes the tone back off — and is a plain letter when there is none.
+    assert_eq!(type_word("casz"), "ca");
+    assert_eq!(type_word("caz"), "caz");
+}
+
 #[test]
 fn hard_nuclei_and_onsets() {
     assert_eq!(type_word("nguyeenx"), "nguyễn");

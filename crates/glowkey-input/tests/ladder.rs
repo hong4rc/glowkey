@@ -476,6 +476,21 @@ fn backspace_case_4_undoing_an_escape_emits_instead_of_passing_through() {
     }
 }
 
+/// Backspacing a rejected diacritic brings the diacritic back.
+///
+/// `ooo` shows a literal `oo` — the third key rejects the circumflex — so three
+/// keys hold two characters and no single removal can produce `o`. The delete
+/// undoes the rejecting keystroke instead, which the tap must emit itself: the
+/// repair covers the character the user asked to delete, so letting the host
+/// delete as well would eat one too many.
+#[test]
+fn backspace_after_a_rejected_diacritic_restores_it() {
+    let mut tap = Tap::active();
+    assert_eq!(type_with_deletes(&mut tap, "ooo⌫"), "ô");
+    // Still composing, so the tone key that follows lands on the vowel.
+    assert_eq!(type_with_deletes(&mut Tap::active(), "ooo⌫f"), "ồ");
+}
+
 /// Case 5 — if the engine cannot stay in step, flush and stop composing.
 ///
 /// Deleting `viêt` back to `vi` has no single raw-key removal that produces it —

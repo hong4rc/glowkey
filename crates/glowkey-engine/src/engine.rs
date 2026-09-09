@@ -12,15 +12,17 @@ use super::*;
 /// once and eats a character of the user's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackspaceOutcome {
-    /// Nothing composed, or no single key removal reproduces what the screen will
-    /// show. The caller flushes and lets the delete happen normally.
+    /// Nothing composed, or the delete empties the word. The caller flushes and
+    /// lets the delete happen normally.
     Flush,
     /// The engine is in step with what the host's delete will leave behind. The
     /// caller passes the keystroke through, as it always has.
     InStep,
-    /// The word was being rendered verbatim because the mid-word spell check had
-    /// refused it, and deleting this character makes it spellable again — so the
-    /// transformation comes back.
+    /// The engine could not simply shrink by a character, so it rewrote the word.
+    /// Two things reach this: the mid-word spell check had refused the word and
+    /// deleting this character makes it spellable again, so the transformation
+    /// comes back; or the last visible character was not the work of a single key
+    /// and the last *keystroke* was undone instead (`ooo`⌫ → `ô`).
     ///
     /// The caller must **suppress** the Backspace and apply this edit: the
     /// user's delete is accounted for inside it, and the backspace count covers
@@ -348,10 +350,15 @@ impl Engine {
     /// the engine's idea of the text no longer matches the screen. So search the
     /// raw log from the end for the one key whose removal re-renders to the target.
     ///
-    /// Returns [`BackspaceOutcome::Flush`] when no single removal reproduces the
-    /// target (the caller then flushes and stops composing), which also covers
-    /// deleting the last character of a word that only exists through a
-    /// transformation (`oo`⌫).
+    /// When no single removal reproduces the target, the last visible character
+    /// is not the work of one key — it exists only through a transformation — so
+    /// the last *keystroke* is undone instead and the word is rewritten as a
+    /// [`BackspaceOutcome::Repair`]: `ooo`⌫ is `ô`, the state the first two keys
+    /// produced, not the bare `o` that deleting a character would leave.
+    ///
+    /// Returns [`BackspaceOutcome::Flush`] when neither works — when undoing that
+    /// keystroke would empty the word or would not shorten it by exactly one
+    /// character (`oo`⌫, `viê`⌫). The caller then flushes and stops composing.
     ///
     /// **Deleting the key that caused an escape undoes the escape.** The mid-word
     /// spell check renders a refused word verbatim, and that used to be one-way:
@@ -406,7 +413,45 @@ impl Engine {
                 return BackspaceOutcome::InStep;
             }
         }
-        BackspaceOutcome::Flush
+        // No removal reproduces the screen minus a character, which means the
+        // last visible character is not the work of one key: it exists only
+        // because of a transformation. Undo the last *keystroke* instead and
+        // rewrite the word.
+        //
+        // `ooo`⌫ is the case that named this. The third `o` rejects the
+        // circumflex, so the screen reads `oo` for three keys; deleting a
+        // character used to flush, leaving a bare `o` with the second one
+        // stranded as a literal. Popping the `o` puts the word back in the state
+        // the first two keys produced — `ô` — and keeps it composing.
+        //
+        // Only accepted when it lands exactly one visible character back, which
+        // is the one thing a Backspace must do. Undoing a key that shortens the
+        // word by nothing would answer the user's delete with an edit that
+        // leaves the screen the same length: `viêt`⌫⌫ is the case that pins it —
+        // dropping the second `e` of `viee` renders `vie`, still three
+        // characters, so the delete would appear to do nothing. Flushing is the
+        // honest answer there, and it is what the engine has always done.
+        //
+        // Only reachable unescaped: while escaped the render *is* the raw keys,
+        // so dropping the last one always reproduces the target and the loop
+        // above has already returned.
+        let mut candidate = self.raw.clone();
+        candidate.pop();
+        if candidate.is_empty() {
+            // Nothing left to compose. Let the host's delete stand.
+            return BackspaceOutcome::Flush;
+        }
+        let undone = self.render_keys(&candidate);
+        if undone.chars().count() + 1 != on_screen.chars().count() {
+            return BackspaceOutcome::Flush;
+        }
+        self.raw = candidate;
+        self.rendered = undone;
+        BackspaceOutcome::Repair(KeyResponse {
+            handled: true,
+            backspaces: on_screen.encode_utf16().count(),
+            insert: self.rendered.clone(),
+        })
     }
 
     /// Whether the escaped word would be spellable again if the escape were

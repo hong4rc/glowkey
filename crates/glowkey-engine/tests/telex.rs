@@ -201,14 +201,45 @@ fn mid_word_backspace_drops_a_visible_char_and_keeps_composing() {
 #[test]
 fn mid_word_backspace_reports_failure_when_it_cannot_stay_in_step() {
     // `oo` renders as the single character ô. Deleting it leaves nothing to
-    // compose and no single raw key removal reproduces an empty target, so the
-    // engine says so and the caller flushes.
+    // compose: no single raw key removal reproduces an empty target, and undoing
+    // the second `o` gives `o` — one character still, so the delete would appear
+    // to do nothing. The engine says so and the caller flushes.
     let mut engine = Engine::new(PlacementStyle::New);
     for ch in "oo".chars() {
         engine.process_key(ch);
     }
     assert_eq!(engine.current_word(), "ô");
     assert_eq!(engine.backspace_visible_char(), BackspaceOutcome::Flush);
+}
+
+#[test]
+fn mid_word_backspace_after_a_rejected_diacritic_restores_the_diacritic() {
+    // Reported 2026-09-09: `oo` is ô and `ooo` rejects the circumflex back to a
+    // literal `oo`, so three keys show two characters. Deleting one used to flush
+    // and leave a bare `o` — the second one stranded as a literal, the engine no
+    // longer composing. Undoing the keystroke that rejected the diacritic puts
+    // the word back where the first two keys had it.
+    let mut engine = Engine::new(PlacementStyle::New);
+    for ch in "ooo".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.current_word(), "oo");
+
+    match engine.backspace_visible_char() {
+        BackspaceOutcome::Repair(edit) => {
+            assert_eq!(edit.backspaces, 2, "both on-screen o's are replaced");
+            assert_eq!(edit.insert, "ô");
+        }
+        other => panic!("expected a repair, got {other:?}"),
+    }
+    assert_eq!(engine.current_word(), "ô");
+    assert_eq!(engine.raw_string(), "oo");
+
+    // Still composing, so the next key is a Telex key rather than a literal.
+    let r = engine.process_key('f');
+    let mut screen = String::from("ô");
+    apply(&mut screen, &r.insert, r.backspaces);
+    assert_eq!(screen, "ồ");
 }
 
 #[test]

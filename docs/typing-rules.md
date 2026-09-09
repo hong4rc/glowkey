@@ -30,7 +30,9 @@ Each keystroke re-derives the whole word, so there is no "too late" to add a
 tone or a diacritic. More examples: `nguyeenx`→`nguyễn`, `dduwowcj`→`được`,
 `nguoiwf`→`người`, `quar`→`quả`, `khuyru`→`khuỷu`.
 
-**Case is kept**: `Hoongf`→`Hồng`, `NGUYEENX`→`NGUYỄN`.
+**Case is kept**: `Hoongf`→`Hồng`, `NGUYEENX`→`NGUYỄN`. The tone and diacritic
+keys do not count towards it, so you can let go of Shift for them —
+`HOONGf`→`HỒNG`, and `O` `A` `f`→`OÀ`.
 
 ---
 

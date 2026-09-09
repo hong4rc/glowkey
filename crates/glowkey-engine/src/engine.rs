@@ -645,6 +645,9 @@ pub(crate) fn render(
     // belong in the rendering (counted in characters).
     let mut fed = String::new();
     let mut withheld: Vec<(usize, char)> = Vec::new();
+    // The keys that put a character on screen, in order — the word's own
+    // letters, with the diacritic and tone keys left out. See [`apply_case`].
+    let mut letters: Vec<char> = Vec::new();
     let mut run = 0usize;
     for (i, ch) in raw.iter().enumerate() {
         let lower = ch.to_ascii_lowercase();
@@ -655,10 +658,18 @@ pub(crate) fn render(
         };
         if run > 3 && is_cancelled_repeat(lower, method) {
             withheld.push((buffer.view().chars().count(), *ch));
+            // Withheld from `vi`, but it is a letter of the word.
+            letters.push(*ch);
             continue;
         }
+        let before = buffer.view().chars().count();
         buffer.push(lower);
         fed.push(lower);
+        // A key that lengthened the rendering spelled a letter; one that did not
+        // was consumed as a mark.
+        if buffer.view().chars().count() > before {
+            letters.push(*ch);
+        }
     }
     let out = buffer.view();
 
@@ -668,7 +679,7 @@ pub(crate) fn render(
         return raw.iter().collect();
     }
 
-    let rendered = apply_case(out, raw);
+    let rendered = apply_case(out, if letters.is_empty() { raw } else { &letters });
     if withheld.is_empty() {
         return rendered;
     }
@@ -714,16 +725,24 @@ fn is_cancelled_repeat(lowered_key: char, method: InputMethod) -> bool {
     method.is_telex_family() && DOUBLED_KEYS.contains(&lowered_key)
 }
 
-/// Re-applies the raw keys' case pattern to a transformed lowercase rendering.
+/// Re-applies the typed case pattern to a transformed lowercase rendering.
 ///
-/// `raw` is always non-empty here (an empty or untransformed word takes the
-/// verbatim path in [`render`]) and contains only ASCII letters (only
-/// [`is_syllable_char`] keys reach the buffer).
-pub(crate) fn apply_case(lower: &str, raw: &[char]) -> String {
-    if raw.iter().all(|c| c.is_ascii_uppercase()) {
+/// **Judged on the keys that spelled a letter, not on every key typed.** A tone
+/// or diacritic key is not a letter of the word, and people let go of Shift for
+/// it: `O` `A` `f` is how an all-caps `ÒA` is typed, and counting that `f` as
+/// part of the pattern made the word Title case instead — `Òa`, with the `A`
+/// demoted. Reported 2026-09-09. The same slip hit `HOONGf` (→ `Hồng`) and every
+/// all-caps VNI word, where the marks are digits and so never uppercase
+/// (`VIET65` → `Việt`).
+///
+/// `keys` is always non-empty here (an empty or untransformed word takes the
+/// verbatim path in [`render`]) and holds the keys as typed, so their case is
+/// the user's.
+pub(crate) fn apply_case(lower: &str, keys: &[char]) -> String {
+    if keys.iter().all(|c| c.is_ascii_uppercase()) {
         return lower.to_uppercase();
     }
-    if raw[0].is_ascii_uppercase() {
+    if keys[0].is_ascii_uppercase() {
         // Title-case: uppercase the first character of the rendering.
         let mut chars = lower.chars();
         return match chars.next() {

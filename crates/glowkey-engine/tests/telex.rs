@@ -9,7 +9,32 @@ use glowkey_engine::{BackspaceOutcome, Engine, PlacementStyle};
 /// same edits the shell would apply to a document. This exercises the real diff
 /// path, not just the internal view.
 fn type_word(input: &str) -> String {
+    type_word_in(input, PlacementStyle::New)
+}
+
+/// The same, in the traditional placement style (`hòa`, not `hoà`).
+fn type_word_old_style(input: &str) -> String {
+    type_word_in(input, PlacementStyle::Old)
+}
+
+/// Types `input` under VNI, where the marks are digits.
+fn type_vni(input: &str) -> String {
     let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_method(glowkey_engine::InputMethod::Vni);
+    let mut screen = String::new();
+    for ch in input.chars() {
+        let resp = engine.process_key(ch);
+        if resp.handled {
+            apply(&mut screen, &resp.insert, resp.backspaces);
+        } else {
+            screen.push(ch);
+        }
+    }
+    screen
+}
+
+fn type_word_in(input: &str, style: PlacementStyle) -> String {
+    let mut engine = Engine::new(style);
     let mut screen = String::new();
     for ch in input.chars() {
         let resp = engine.process_key(ch);
@@ -64,6 +89,48 @@ fn hard_nuclei_and_onsets() {
 fn uppercase_and_mixed_case() {
     assert_eq!(type_word("Hoongf"), "Hồng");
     assert_eq!(type_word("NGUYEENX"), "NGUYỄN");
+}
+
+/// **An unshifted tone key does not demote an all-caps word.**
+///
+/// Reported 2026-09-09 as `O` `A` `f` giving `Òa`: the case pattern was read off
+/// every key typed, so the lowercase `f` — a tone key, not a letter of the word
+/// — failed the all-caps test and the word came out Title case with its `A`
+/// demoted. Releasing Shift for the mark is how people type these.
+#[test]
+fn a_lowercase_mark_key_keeps_an_all_caps_word_in_caps() {
+    // The report, in both placement styles: the tone sits on a different vowel,
+    // the case is the same question.
+    assert_eq!(type_word("OAf"), "OÀ");
+    assert_eq!(type_word_old_style("OAf"), "ÒA");
+
+    // Held Shift for the letters, released it for the mark.
+    assert_eq!(type_word("HOONGf"), "HỒNG");
+    assert_eq!(type_word("CAs"), "CÁ");
+    assert_eq!(type_word("NGUYEENx"), "NGUYỄN");
+    assert_eq!(type_word("DDUWOWCj"), "ĐƯỢC");
+
+    // Shift held throughout, which already worked.
+    assert_eq!(type_word("HOONGF"), "HỒNG");
+    assert_eq!(type_word("CAS"), "CÁ");
+
+    // And the ordinary patterns, unchanged: a capitalized word is still Title
+    // case, and a lowercase word is still lowercase.
+    assert_eq!(type_word("Hoongf"), "Hồng");
+    assert_eq!(type_word("hoongf"), "hồng");
+    assert_eq!(type_word("Cas"), "Cá");
+}
+
+/// The same bug under **VNI**, where it hit every all-caps word: the marks are
+/// digits, and a digit is never uppercase, so `VIET65` came out `Việt`.
+#[test]
+fn an_all_caps_vni_word_stays_in_caps() {
+    assert_eq!(type_vni("VIET65"), "VIỆT");
+    assert_eq!(type_vni("TOAN2"), "TOÀN");
+    assert_eq!(type_vni("A6"), "Â");
+    // And the ordinary patterns.
+    assert_eq!(type_vni("Viet65"), "Việt");
+    assert_eq!(type_vni("viet65"), "việt");
 }
 
 #[test]
@@ -147,21 +214,6 @@ fn old_style_placement_differs() {
 #[test]
 fn vni_input_method() {
     // VNI: digits carry tone/diacritic. viet65 → việt, a6 → â, o7 → ơ, d9 → đ.
-    use glowkey_engine::InputMethod;
-    fn type_vni(input: &str) -> String {
-        let mut e = Engine::new(PlacementStyle::New);
-        e.set_method(InputMethod::Vni);
-        let mut screen = String::new();
-        for ch in input.chars() {
-            let r = e.process_key(ch);
-            if r.handled {
-                apply(&mut screen, &r.insert, r.backspaces);
-            } else {
-                screen.push(ch);
-            }
-        }
-        screen
-    }
     assert_eq!(type_vni("a6"), "â");
     assert_eq!(type_vni("o7"), "ơ");
     assert_eq!(type_vni("d9"), "đ");

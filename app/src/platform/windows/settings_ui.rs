@@ -274,6 +274,25 @@ fn hotkey_choices(current: HotkeyPreset) -> Vec<HotkeyPreset> {
 /// for every choice: a soft rounded track a shade darker than the window, the
 /// selected segment lifted on it — white in light, a lighter grey in dark — with
 /// a small shadow, no hairlines anywhere, and every label in the normal text
+/// Whether a segmented control should be drawing its focus ring, and why focus
+/// is arriving.
+///
+/// Windows hides focus rectangles until the keyboard is used — "focus cues" —
+/// so a control that draws a ring on mouse-down looks like it has sprouted a
+/// border. Focus itself still moves on a click, because the arrow keys are
+/// expected to work on the tab you just clicked; only the ring waits for the
+/// keyboard. `from_click` carries that across a frame: `request_focus` takes
+/// effect on the next one, which is where the ring would otherwise appear.
+#[derive(Clone, Copy, Default)]
+struct SegmentFocus {
+    /// Draw the ring: focus arrived from the keyboard, or the keyboard has been
+    /// used since a click brought it here.
+    ring: bool,
+    /// A click asked for focus this frame, so the next frame's `gained_focus`
+    /// is not the keyboard's.
+    from_click: bool,
+}
+
 /// colour. Painted directly rather than through egui's selectable labels, whose
 /// selected state draws a stroke and recolours the text, which is what made the
 /// first version look like a row of bordered buttons.
@@ -312,6 +331,19 @@ fn segmented<T: PartialEq + Copy>(
     // enough; the track's interaction is what keeps the id alive.
     let track_response = ui.interact(track, base_id, egui::Sense::focusable_noninteractive());
     let focused = track_response.has_focus();
+    let focus_id = base_id.with("focus");
+    let mut focus = ui
+        .memory(|m| m.data.get_temp::<SegmentFocus>(focus_id))
+        .unwrap_or_default();
+    if track_response.gained_focus() {
+        // Focus has arrived. A click marked itself on the frame it asked, so
+        // anything else is the keyboard (Tab) and earns a ring.
+        focus.ring = !focus.from_click;
+        focus.from_click = false;
+    }
+    if !focused {
+        focus.ring = false;
+    }
     // What Tab lands on, for a screen reader: the control and its current choice.
     {
         let current = options
@@ -356,6 +388,9 @@ fn segmented<T: PartialEq + Copy>(
         });
         if let Some(next) = next {
             *value = options[next].0;
+            // The keyboard is in use, so the ring is wanted even if a click is
+            // what brought focus here.
+            focus.ring = true;
         }
     }
 
@@ -401,10 +436,14 @@ fn segmented<T: PartialEq + Copy>(
         if response.clicked() {
             *value = options[i].0;
             track_response.request_focus();
+            focus.ring = false;
+            focus.from_click = true;
         }
         rects.push((rect, response.hovered()));
         x += width;
     }
+
+    ui.memory_mut(|m| m.data.insert_temp(focus_id, focus));
 
     let painter = ui.painter();
     painter.rect_filled(track, egui::Rounding::same(ROUNDING), track_fill);
@@ -419,8 +458,9 @@ fn segmented<T: PartialEq + Copy>(
             };
             painter.add(raised.as_shape(inner, egui::Rounding::same(ROUNDING - INSET)));
             painter.rect_filled(inner, egui::Rounding::same(ROUNDING - INSET), raised_fill);
-            if focused {
-                // The focus ring, on the raised segment: this is what Tab landed on.
+            if focused && focus.ring {
+                // The focus ring, on the raised segment: this is what Tab landed
+                // on. Withheld after a click — see [`SegmentFocus`].
                 painter.rect_stroke(
                     inner.expand(1.5),
                     egui::Rounding::same(ROUNDING),
@@ -1849,6 +1889,98 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         });
         input
+    }
+
+    /// Whether this frame painted the focus ring: the only 2pt rectangle stroke
+    /// a lone segmented control draws.
+    fn ring_painted(output: &egui::FullOutput) -> bool {
+        fn in_shape(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Rect(r) => r.stroke.width == 2.0 && r.stroke.color.a() > 0,
+                egui::Shape::Vec(shapes) => shapes.iter().any(in_shape),
+                _ => false,
+            }
+        }
+        output.shapes.iter().any(|clipped| in_shape(&clipped.shape))
+    }
+
+    /// Clicking a tab must not leave a border around it.
+    ///
+    /// Reported from live use: the four tab titles grew a ring on mouse-down.
+    /// Windows hides focus rectangles until the keyboard is used, and a control
+    /// that ignores that reads as a button that has changed shape. Focus still
+    /// moves — the test below this one needs it — so it is the ring that waits.
+    #[test]
+    fn a_clicked_segment_draws_no_focus_ring() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let value = std::cell::Cell::new(0u8);
+        let rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+        let mut frame = |ctx: &egui::Context| {
+            egui::Area::new(egui::Id::new("segmented_ring"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let mut v = value.get();
+                    *rects.borrow_mut() = segmented(
+                        ui,
+                        &mut v,
+                        [(0u8, "One".to_string()), (1, "Two".to_string())],
+                    );
+                    value.set(v);
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        let target = rects.borrow()[1].center();
+        let output = click_segment(&ctx, &mut frame, target);
+        assert_eq!(value.get(), 1, "the click still selects");
+        assert!(!ring_painted(&output), "no ring on the click frame");
+
+        // `request_focus` takes effect on the next frame, which is where the
+        // ring used to appear.
+        let output = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        assert!(
+            !ring_painted(&output),
+            "and none on the frame focus arrives"
+        );
+
+        // The keyboard is what earns it: an arrow moves the selection and the
+        // ring comes with it.
+        let output = ctx.run(key_press(egui::Key::ArrowLeft), |ctx| frame(ctx));
+        assert_eq!(value.get(), 0, "ArrowLeft moved the selection");
+        assert!(ring_painted(&output), "the keyboard earns the ring");
+    }
+
+    /// Tabbing to the control shows the ring at once — the case it exists for.
+    ///
+    /// Needs a second focusable widget: egui's tab order only reaches this
+    /// control by moving *from* somewhere, and the ring turns on `gained_focus`,
+    /// which a bare `request_focus` cannot reproduce (`id_previous_frame` is
+    /// stamped at the start of the frame, so focus taken between frames looks
+    /// like focus it already had).
+    #[test]
+    fn tabbing_to_a_segment_draws_the_focus_ring() {
+        let ctx = egui::Context::default();
+        apply_style(&ctx);
+        let frame = |ctx: &egui::Context| {
+            egui::Area::new(egui::Id::new("segmented_tab_ring"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let _ = ui.button("Before");
+                    let mut v = 0u8;
+                    let _ = segmented(
+                        ui,
+                        &mut v,
+                        [(0u8, "One".to_string()), (1, "Two".to_string())],
+                    );
+                });
+        };
+        let _ = ctx.run(egui::RawInput::default(), |ctx| frame(ctx));
+        // Walk the tab order rather than assuming the control's position in it.
+        let ringed = (0..6).any(|_| {
+            let output = ctx.run(key_press(egui::Key::Tab), |ctx| frame(ctx));
+            ring_painted(&output)
+        });
+        assert!(ringed, "Tab is keyboard focus, so the ring shows");
     }
 
     /// After a click the control holds keyboard focus; the arrow keys then move

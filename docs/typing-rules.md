@@ -19,7 +19,7 @@ Defaults are marked **on** or **off**. Everything off is opt-in in Settings.
 | `w` | `ư` | `w` alone is `ư` |
 | `dd` | `đ` | |
 | `cas` | `cá` | The five tone keys: `s` sắc, `f` huyền, `r` hỏi, `x` ngã, `j` nặng |
-| `caz` | `ca` | `z` removes the tone |
+| `casz` | `ca` | `z` removes the tone. With no tone to remove it stays a letter: `caz`→`caz` |
 
 **The tone key goes anywhere in the word.** All of these give `hồng`:
 
@@ -107,7 +107,7 @@ that affects rendering.
 | **Auto-fix** (**on**) | At a boundary, a word that is not valid Vietnamese is handed back as typed: `exit` stays `exit`, not `eĩt` |
 | A word starting with `đ` | Never auto-fixed. `đc`, `đt`, `đk` survive; `address` and `odd` still restore, their `đ` is not leading |
 | Excluded apps | Everything passes through. Terminals ship excluded |
-| Vietnamese off | Plain passthrough (`⌃⇧Space` by default, or `⌃Space`, `⌥Space`, `⌃⇧Z`, or a key combo you record) |
+| Vietnamese off | Plain passthrough. `Ctrl+Shift+Space` by default, or `Ctrl+Space` / `Ctrl+Shift+Z` |
 
 **Why `exit` needs rescuing:** `x` is the ngã key, so left alone Telex reads it
 as Vietnamese. Auto-fix is what makes English typing survive without switching
@@ -187,10 +187,15 @@ composing. The repeat-key gesture of §2 stands aside from the check.
 
 | Key | Does |
 | --- | --- |
-| `⌃⇧E` | Vietnamese on/off for the current app, and remembers it. In a terminal, only until restart |
-| `⌃⇧W` | Swap the last word between English and Vietnamese, and remember it |
+| `Ctrl+Shift+E` | Vietnamese on/off for the current app, and remembers it. In a terminal, only until restart |
+| `Ctrl+Shift+W` | Swap the last word between English and Vietnamese, and remember it |
 
 Both are fixed and cannot be recorded as the VN/EN toggle.
+
+**On macOS these are written `⌃⇧E` and `⌃⇧W`**, and the app spells every hotkey
+the way its platform does — `⌃⇧Space` there, `Ctrl+Shift+Space` here. Two of the
+VN/EN choices are macOS-only: `⌥Space`, which Windows does not offer, and the
+"Custom…" recorder that captures a combination you press.
 
 ---
 

@@ -314,3 +314,37 @@ fn an_invalid_syllable_restores_at_the_boundary_not_before() {
     // The boundary is what triggers the check, and it restores the raw keys.
     assert_eq!(type_then_commit(&mut session, "hoongfu"), "hoongfu");
 }
+
+/// **`wasm` must survive as `wasm`.** Reported 2026-09-06.
+///
+/// In Telex the keys apply faithfully — `w`→ư, `a`, `s`→sắc, `m` — and produce
+/// `ưám`, which Vietnamese cannot spell: `ưa` is the open diphthong and takes no
+/// coda, so the closed form has to be written `ươ` (`ươm`, `mượn`). `vi`'s
+/// validator accepted it, so auto-fix was told the word was fine and left it.
+///
+/// The same shape hit `wast` (`ưát`) and `wasp` (`ưáp`). Both carry sắc, which is
+/// legal on a stop coda, so the older stop-coda tone rule could not catch them
+/// either — it took the nucleus rule to reach these.
+#[test]
+fn restores_words_whose_render_closes_an_open_diphthong() {
+    for word in ["wasm", "wast", "wasp"] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, word), word, "{word} must survive");
+    }
+}
+
+/// And the words the rule must not touch still render as Vietnamese.
+///
+/// `mưa` is the open form, where `ưa` is the only legal spelling; `mượn` is the
+/// same diphthong closed and spelled correctly. A rule that rejected either
+/// would break ordinary typing, which is the real risk in a rule that rejects.
+#[test]
+fn keeps_the_open_diphthong_and_its_closed_spelling() {
+    // All three are Telex key sequences. A literal `ư` would be a *word
+    // boundary* (`is_syllable_char` takes ASCII letters only), so a pair like
+    // ("mưa", "mưa") passes by character echo without ever reaching the rule.
+    for (keys, expected) in [("muwa", "mưa"), ("muaw", "mưa"), ("muwonj", "mượn")] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}

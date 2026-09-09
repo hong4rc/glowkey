@@ -680,9 +680,13 @@ pub(crate) fn apply_case(lower: &str, raw: &[char]) -> String {
 ///
 /// This is the engine's spell check: the mid-word strict check asks it on every
 /// key, and the policy layer asks it at a word boundary to decide whether to
-/// restore the raw keystrokes. Uses `vi`'s syllable validator plus the stop-coda
-/// tone rule it lacks; a plain ASCII word that never transformed is treated as
-/// valid (nothing to fix) since it equals its raw input.
+/// restore the raw keystrokes.
+///
+/// Uses `vi`'s syllable validator plus the three phonotactic rules it lacks —
+/// [`violates_stop_coda_tone`], [`violates_open_diphthong_coda`] and
+/// [`violates_front_vowel_coda`]. A plain ASCII word that never transformed is
+/// treated as valid (nothing to fix) since it equals its raw input, which also
+/// means every rule below it is unreachable for an all-ASCII spelling.
 pub fn is_invalid_vietnamese(word: &str) -> bool {
     if word.is_empty() {
         return false;
@@ -701,7 +705,10 @@ pub fn is_invalid_vietnamese(word: &str) -> bool {
     if word.starts_with('đ') || word.starts_with('Đ') {
         return false;
     }
-    !vi::validation::is_valid_syllable(word) || violates_stop_coda_tone(word)
+    !vi::validation::is_valid_syllable(word)
+        || violates_stop_coda_tone(word)
+        || violates_open_diphthong_coda(word)
+        || violates_front_vowel_coda(word)
 }
 
 /// Whether the syllable breaks Vietnamese's stop-coda tone rule.
@@ -725,6 +732,116 @@ pub(crate) fn violates_stop_coda_tone(word: &str) -> bool {
         || lowered.ends_with('p')
         || lowered.ends_with('t');
     stop_coda && word.chars().any(|ch| FORBIDDEN_TONES.contains(ch))
+}
+
+/// Strips tone marks while keeping the vowel's own modifier — the horn on `ư`
+/// and `ơ`, the breve on `ă`, the circumflex on `â`/`ê`/`ô`.
+///
+/// [`remove_tones`](crate::remove_tones) cannot be used for this. It flattens
+/// all the way to ASCII (`ư`→`u`, `ơ`→`o`), which collapses exactly the
+/// distinctions the phonotactic rules below turn on: `ưa` would become `ua` and
+/// `ơch` would become `och`, so a rule about one would silently judge the other.
+fn strip_tone_marks(lowered: &str) -> String {
+    debug_assert!(
+        !lowered.chars().any(char::is_uppercase),
+        "callers lowercase first; an uppercase toned vowel would pass through unmapped"
+    );
+    /// Toned forms for each base vowel, which keeps its modifier.
+    const TONED: [(&str, char); 12] = [
+        ("àáảãạ", 'a'),
+        ("ằắẳẵặ", 'ă'),
+        ("ầấẩẫậ", 'â'),
+        ("èéẻẽẹ", 'e'),
+        ("ềếểễệ", 'ê'),
+        ("ìíỉĩị", 'i'),
+        ("òóỏõọ", 'o'),
+        ("ồốổỗộ", 'ô'),
+        ("ờớởỡợ", 'ơ'),
+        ("ùúủũụ", 'u'),
+        ("ừứửữự", 'ư'),
+        ("ỳýỷỹỵ", 'y'),
+    ];
+
+    lowered
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii() {
+                return ch;
+            }
+            TONED
+                .iter()
+                .find(|(forms, _)| forms.contains(ch))
+                .map_or(ch, |(_, base)| *base)
+        })
+        .collect()
+}
+
+/// Whether the syllable closes the open diphthong `ưa` with a coda.
+///
+/// `ưa`, `ia` and `ua` are the *open* forms of three diphthongs: they stand at
+/// the end of a syllable and nowhere else. Closed by a coda, each must be
+/// written with its other spelling — `ươ`, `iê`, `uô`: `ươm`, `iêm`, `uôn`,
+/// never `ưam`, `iam`, `uan`.
+///
+/// Reported 2026-09-06: typing `wasm` gave `ưám`. In Telex that is `w`→ư, `a`,
+/// `s`→sắc, `m` — every key applied faithfully, to a syllable Vietnamese cannot
+/// spell. `vi` calls it valid, so auto-fix declined to restore the raw keys, and
+/// the same held for `wast`→`ưát` and `wasp`→`ưáp`. The rule holds regardless of
+/// tone, which is why [`violates_stop_coda_tone`] never caught those two: sắc is
+/// legal on a stop coda.
+///
+/// **Only `ưa` is checked here.** The `ia`/`ua` siblings share the rule and not
+/// its safety: in `quan`, `quát`, `gian` and `giam` the `u`/`i` belongs to the
+/// *initial* (`qu-`, `gi-`), not the nucleus, so a surface match on `ua`/`ia`
+/// rejects real words. `ưa` has no such counterexample — Vietnamese has no `qư-`
+/// or `gư-` initial — so it needs no exclusion list. The siblings were deferred
+/// on 2026-09-06 until there is a way to measure what the added complexity buys.
+pub(crate) fn violates_open_diphthong_coda(word: &str) -> bool {
+    let stripped: Vec<char> = strip_tone_marks(&word.to_lowercase()).chars().collect();
+    stripped
+        .windows(2)
+        .position(|pair| pair == ['ư', 'a'])
+        // The open form is word-final, so anything at all after the `a` is
+        // disqualifying — a coda (`ưam`) or, just as impossible, a glide
+        // (`ưai`). Only the first occurrence needs testing: if a later `ưa`
+        // exists then characters follow this one too, so this is already the
+        // weakest case.
+        .is_some_and(|at| at + 2 < stripped.len())
+}
+
+/// Whether the syllable closes a non-front vowel with `nh` or `ch`.
+///
+/// Both codas take the vowel immediately before them, and that vowel can only be
+/// a front one — a, ă, â, e, ê, i, y. `anh`, `inh`, `ênh`, `ach`, `ich`, `êch`
+/// are ordinary; `onh`, `unh`, `ưnh`, `uch`, `och`, `ơch` are not rimes at all.
+/// `vi` accepts every one of the impossible ones.
+///
+/// It is the vowel next to the coda that counts, not the first vowel in the
+/// syllable, so a glide ahead of the nucleus is harmless: `oanh`, `uynh`,
+/// `hoạch` and `huênh` all pass because `a`, `y`, `a` and `ê` sit against the
+/// coda. UniKey encodes this in `isValidVC` (`ukengine.cpp:396`) as a table; only
+/// the edge is ported here, since `vi` already covers the rest.
+pub(crate) fn violates_front_vowel_coda(word: &str) -> bool {
+    /// The vowels a `nh`/`ch` coda can close. Called `FRONT` for the rule's
+    /// usual name; `a`/`ă`/`â` are central rather than front phonetically, and
+    /// the orthographic set is what matters here.
+    const FRONT: &str = "aăâeêiy";
+    /// Every vowel, so a consonant next to the coda is left for `vi` to judge
+    /// rather than being called a non-front vowel.
+    const VOWELS: &str = "aăâeêioôơuưy";
+
+    let stripped: Vec<char> = strip_tone_marks(&word.to_lowercase()).chars().collect();
+    let Some(coda) = stripped.len().checked_sub(2) else {
+        return false;
+    };
+    if stripped[coda..] != ['n', 'h'] && stripped[coda..] != ['c', 'h'] {
+        return false;
+    }
+    // The vowel the coda closes: the character immediately before it.
+    let Some(nucleus) = coda.checked_sub(1).map(|at| stripped[at]) else {
+        return false;
+    };
+    VOWELS.contains(nucleus) && !FRONT.contains(nucleus)
 }
 
 /// Computes the minimal edit turning `prev` into `next`: keep the common prefix,

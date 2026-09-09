@@ -7,6 +7,9 @@ effort: "2-4 days"
 tags: [glowkey, engine, unikey, phonotactics, auto-fix]
 blockedBy: [260903-1745-glowkey-hardening-and-distribution, 260903-2234-glowkey-personal-word-list]
 created: 2026-09-03
+related:
+  - 260906-2159-unblocked-work-and-plan-reconciliation
+
 ---
 
 # GlowKey — what is left to take from UniKey

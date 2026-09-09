@@ -6,7 +6,7 @@
 //! word the user typed correctly. The corpus below is the guard, and it was run
 //! before the feature was built to prove the rule was viable at all.
 
-use glowkey_engine::{BackspaceOutcome, Engine, PlacementStyle};
+use glowkey_engine::{is_invalid_vietnamese, BackspaceOutcome, Engine, PlacementStyle};
 
 const CORPUS: &[(&str, &str)] = &[
     ("chaof", "chào"),
@@ -60,6 +60,18 @@ const CORPUS: &[(&str, &str)] = &[
     ("truowcs", "trước"),
     ("giuwax", "giữa"),
     ("ngoaif", "ngoài"),
+    // Non-ASCII words ending `-nh` and `-ch`, and the open `ưa`. Added
+    // 2026-09-06: the corpus is named as the guard against a phonotactic rule
+    // over-reaching, and it had no word of either shape — so the `nh`/`ch` rule
+    // and the `ưa` rule could each have been arbitrarily wrong and this test
+    // would still have passed.
+    ("sachs", "sách"),
+    ("anhs", "ánh"),
+    ("tinhs", "tính"),
+    ("hoachj", "hoạch"),
+    ("khueechs", "khuếch"),
+    ("leechj", "lệch"),
+    ("giuwax", "giữa"),
 ];
 
 fn typed(input: &str, strict: bool) -> String {
@@ -409,5 +421,194 @@ fn a_restored_escaped_word_can_still_unescape() {
             assert_eq!(edit.insert, "hồng", "the escape must lift to the render");
         }
         other => panic!("expected the escape to lift, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phonotactic rules the `vi` crate lacks.
+//
+// `vi::validation::is_valid_syllable` is lenient. Each rule below was added only
+// after probing `vi` and watching it accept something Vietnamese cannot spell,
+// and each is paired with real words it must never reject — which is the risk
+// that matters, since every rule here *rejects* syllables. The corpus at the top
+// of this file is the wider guard: these rules feed the same predicate, so a
+// rule that over-reaches breaks it.
+// ---------------------------------------------------------------------------
+
+/// **`ưa` closed by a coda is impossible.** Reported 2026-09-06 as `wasm`
+/// producing `ưám`.
+///
+/// `ưa` is the *open* form of the diphthong; closed by any coda it must be
+/// written `ươ` (`ươm`, `vườn`, `mượn`), never `ưam`. That holds regardless of
+/// tone, which is why `violates_stop_coda_tone` never caught `ưát`/`ưáp` — sắc
+/// is legal on a stop coda.
+///
+/// In Telex `wasm` is `w`→ư, `a`, `s`→sắc, `m`: every key applied faithfully,
+/// producing a syllable that cannot exist. `vi` called it valid, so auto-fix
+/// declined to hand back the raw keys.
+#[test]
+fn an_open_diphthong_cannot_take_a_coda() {
+    for word in [
+        "ưam", "ưám", "ưàm", "ưat", "ưát", "ưáp", "ưac", "ưan", "ưang",
+        // The tone sits anywhere on the nucleus and changes nothing. Every entry
+        // here needs *this* rule: `ừat`/`ửac` were deliberately left out because
+        // the older stop-coda tone rule already rejected them (huyền/hỏi on a
+        // `t`/`c` coda), so they would have passed with this rule deleted.
+        "ứam", "ừam", "ửam", "ữam", "ựat",
+    ] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} has ưa closed by a coda, which Vietnamese cannot spell"
+        );
+    }
+}
+
+/// The open form, and the closed form spelled correctly, must both survive.
+#[test]
+fn the_open_diphthong_itself_is_untouched() {
+    for word in [
+        // `ưa` word-final: the open form, where it is the only legal shape.
+        "ưa",
+        "mưa",
+        "chứa",
+        "giữa",
+        "lửa",
+        "cửa",
+        "vừa",
+        "sữa",
+        // The same diphthong closed, spelled `ươ` as Vietnamese requires.
+        "ươm",
+        "vườn",
+        "mượn",
+        "hương",
+        "thường",
+        "nước",
+        "được",
+    ] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is real Vietnamese and must not be rejected"
+        );
+    }
+}
+
+/// **`nh` and `ch` close only a front vowel.** Probed: `vi` accepts every one of
+/// these.
+///
+/// The coda takes the vowel immediately before it — a, ă, â, e, ê, i or y. A
+/// back or horned vowel there (`o`, `u`, `ư`, `ơ`) is not a Vietnamese rime.
+#[test]
+fn a_back_vowel_cannot_be_closed_by_nh_or_ch() {
+    for word in [
+        "ưnh", "ônh", "ơnh", "ơch", "ôch", "ưch", // Tones change nothing here either.
+        "ónh", "ùnh", "ọch", "ộnh",
+    ] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} closes a back vowel with nh/ch, which is not a Vietnamese rime"
+        );
+    }
+}
+
+/// The all-ASCII spellings of the same impossible rimes are **deliberately**
+/// left alone, and that is not this rule leaking.
+///
+/// `is_invalid_vietnamese` returns early for a pure-ASCII word: it is what the
+/// user typed verbatim, so there is nothing to restore it *to*. `onh` and `uch`
+/// reach the screen only by being typed literally, and handing them back
+/// unchanged is already the right answer. The rules above matter for the
+/// non-ASCII renders Telex actually produces.
+///
+/// Lifting this guard is 1637 phase 2 (ASCII-render restore); until then every
+/// rule in this phase sits behind it, and pinning that here keeps the next
+/// reader from filing the gap as a bug in the rule.
+#[test]
+fn the_ascii_guard_still_short_circuits_every_rule() {
+    for word in ["onh", "unh", "uch", "och", "uam", "uat"] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is pure ASCII — the verbatim guard must answer first"
+        );
+    }
+}
+
+/// Front vowels closed by `nh`/`ch` are ordinary Vietnamese, tones included.
+#[test]
+fn front_vowels_closed_by_nh_or_ch_are_untouched() {
+    for word in [
+        "anh", "inh", "ênh", "ach", "ich", "êch", "mách", "sách", "tinh", "xanh", "bênh", "lệch",
+        // Toned front vowels: matching raw characters instead of tone-stripped
+        // bases would reject all of these.
+        "ánh", "ảnh", "ãnh", "ạnh", "ính", "ểnh",
+        // A glide before the nucleus does not change which vowel the coda takes.
+        "oanh", "uynh", "hoạch", "huênh", "quỳnh",
+    ] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is real Vietnamese and must not be rejected"
+        );
+    }
+}
+
+/// The `qu-`/`gi-` trap, pinned so a future sibling rule cannot break these.
+///
+/// `ia` and `ua` follow the same open-diphthong rule as `ưa`, but they are
+/// **deferred** (2026-09-06): in `quan`, `quát`, `gian`, `giam` the u/i belongs
+/// to the *initial*, not the nucleus, so a surface match rejects real words.
+/// `ưa` has no such counterexample — no `qư-` or `gư-` initial exists — which is
+/// why it ships alone. `uâ` and `oa` are different nuclei and are never in scope.
+#[test]
+fn the_deferred_siblings_counterexamples_stay_valid() {
+    for word in [
+        // qu- and gi- initials, the reason ia/ua are deferred.
+        "quan", "quát", "quăn", "quát", "gian", "giam", "giát",
+        // `uâ` is not `ua`; `oa` is not `ua`.
+        "xuân", "tuân", "thuật", "toàn", "hoàn", // And the plain open forms.
+        "của", "chia", "kia", "khuya",
+    ] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is real Vietnamese and must not be rejected"
+        );
+    }
+}
+
+/// **The escape latches, so a `uâ` word typed horn-first stays raw.** Known and
+/// filed; pinned here so it is a recorded consequence rather than a surprise.
+///
+/// `tuanwa` reaches `tuân` by putting the horn on `u` before the final `a`
+/// arrives. The intermediate render is `tưan` — `ưa` closed by a coda, which the
+/// open-diphthong rule correctly refuses. But the escape is deliberately a latch
+/// (`engine.rs`: "the raw keys come back and stay literal until the next
+/// boundary"), so the `a` that would have repaired the word to `tuân` never
+/// applies.
+///
+/// Two things keep this narrow, and both are asserted below: the check is **off
+/// by default**, and the ordinary spelling — `aa` for `â` — is unaffected. Auto-fix
+/// at the boundary is unaffected too, since the committed render `tuân` is valid.
+///
+/// The latch predates this rule; `vi` called `tưan` valid, so the rule widened
+/// the set of words that reach it. Lifting the escape on forward keys would fix
+/// this and the pre-existing class together, but it reverses a documented
+/// decision and is filed as its own item rather than smuggled in here.
+#[test]
+fn the_escape_latch_still_swallows_a_horn_first_ua_word() {
+    // The affected order: horn before the vowel cluster is complete.
+    assert_eq!(typed("tuanwa", true), "tuanwa", "known latch behaviour");
+    assert_eq!(
+        typed("tuanwa", false),
+        "tuân",
+        "and it is only the strict check"
+    );
+
+    // The ordinary spelling is untouched, which is what bounds the blast radius.
+    for (keys, expected) in [
+        ("tuaan", "tuân"),
+        ("xuaan", "xuân"),
+        ("chuaanr", "chuẩn"),
+        ("luaanj", "luận"),
+        ("thuaanf", "thuần"),
+    ] {
+        assert_eq!(typed(keys, true), expected, "{keys} with the check on");
     }
 }

@@ -103,17 +103,40 @@ fn send(command: UiCommand) {
     }
 }
 
+/// The root shim's viewport: one point square, off-screen, no taskbar entry.
+///
+/// **It carries the application icon even though nothing can see it**, and that
+/// is not decoration. eframe builds an `AppTitleIconSetter` from this builder's
+/// icon and falls back to its own default — a lowercase `e` — when there is
+/// none. That setter then retries every frame until `GetActiveWindow()` returns
+/// something, and stamps the icon onto whatever window that is with
+/// `WM_SETICON` (`eframe/src/native/app_icon.rs`). The shim is invisible and
+/// never active, so the first window that *is* — Settings — was having eframe's
+/// `e` written over the icon winit had just set from
+/// [`settings_ui::viewport_builder`]. It fires once, so the next open showed the
+/// right icon and the bug looked like a first-open flicker. Reported
+/// 2026-09-09.
+///
+/// Naming our icon here fixes it at the source rather than fighting the setter,
+/// and gains the taskbar-sized icon as well: winit's own `set_window_icon` only
+/// sets `ICON_SMALL`, which is why the correct-looking second open had no big
+/// icon at all.
+fn root_viewport_builder() -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title("GlowKey")
+        .with_inner_size([1.0, 1.0])
+        .with_position([-32000.0, -32000.0])
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_taskbar(false)
+        .with_active(false)
+        .with_icon(settings_ui::window_icon())
+}
+
 /// The thread body: one `run_native`, forever.
 fn run(rx: Receiver<UiCommand>) {
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("GlowKey")
-            .with_inner_size([1.0, 1.0])
-            .with_position([-32000.0, -32000.0])
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_taskbar(false)
-            .with_active(false),
+        viewport: root_viewport_builder(),
         event_loop_builder: Some(Box::new(|builder| {
             use winit::platform::windows::EventLoopBuilderExtWindows;
             builder.with_any_thread(true);
@@ -386,6 +409,24 @@ mod tests {
         assert!(!host
             .asked_for
             .contains(&settings_ui::list_viewport_id(ListId::Macros)));
+    }
+
+    /// **The root shim must declare the application icon.** Without it eframe
+    /// substitutes its own default and writes that onto the first window of ours
+    /// that becomes active — see [`root_viewport_builder`]. Cheap to assert, and
+    /// the alternative is noticing by eye that a window came up wearing
+    /// someone else's logo.
+    #[test]
+    fn the_root_shim_declares_the_app_icon() {
+        let icon = root_viewport_builder()
+            .icon
+            .expect("the root shim carries the app icon");
+        assert_eq!((icon.width, icon.height), (32, 32));
+        assert_eq!(icon.rgba.len(), 32 * 32 * 4);
+        assert!(
+            icon.rgba.iter().any(|byte| *byte != 0),
+            "an all-zero icon is the same as none: eframe treats a default              `IconData` as absent and falls back to its own"
+        );
     }
 
     /// The root shim refuses to close: it carries the event loop.

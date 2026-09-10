@@ -573,32 +573,195 @@ fn the_deferred_siblings_counterexamples_stay_valid() {
     }
 }
 
-/// **The escape latches, so a `uâ` word typed horn-first stays raw.** Known and
-/// filed; pinned here so it is a recorded consequence rather than a surprise.
+/// **`ng` and `c` never close `i` or `y`.** Reported 2026-09-10 as `using`
+/// producing `uíng`. Probed: `vi` accepts every one of these.
+///
+/// The other half of the rule above. Those rimes exist, but Vietnamese spells
+/// them with the palatal coda — `inh`/`ich`, `uynh`/`uych` — so `ing`, `ic`,
+/// `yng` and `yc` are not rimes at all. Sắc is legal on both codas, so the
+/// stop-coda tone rule could not reach `uíng`, and the `ui` nucleus itself is
+/// ordinary (`túi`, `múi`): only the coda makes it impossible.
+#[test]
+fn i_and_y_cannot_be_closed_by_ng_or_c() {
+    for word in [
+        "uíng", "íng", "íc", "ýng", "ýc", // Tones change nothing here either.
+        "ìng", "ỉng", "ĩng", "ịc", "uỳng",
+    ] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} closes i/y with ng/c, which is not a Vietnamese rime"
+        );
+    }
+}
+
+/// The vowels `ng`/`c` do close are ordinary Vietnamese, and so is `i`/`y` under
+/// the palatal coda it actually takes.
+#[test]
+fn other_vowels_closed_by_ng_or_c_are_untouched() {
+    for word in [
+        "ứng", "sáng", "xuống", "muốn", "nước", "cúc", "phúc", "vòng", "trắng", "vâng",
+        // The second half of a diphthong is what the coda closes, not the `i`.
+        "tiếng", "việc", "chiếc", "khiếng", // And the palatal spellings of the rejected rimes.
+        "kính", "ích", "uýnh", "quýnh", // A word-final `i`/`y` has no coda at all.
+        "túi", "múi", "mý",
+    ] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is real Vietnamese and must not be rejected"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The rime inventory.
+//
+// The three shape rules above — `ưa` closed by a coda, `nh`/`ch` on a back
+// vowel, `ng`/`c` on `i`/`y` — are no longer written by hand. Each had been
+// added after a user reported the English word it mangled, each was true, and
+// none was the general statement, so the next impossible rime always got
+// through. `engine.rs`'s `RIMES` is the closed set they were approximating; the
+// tests above still pass because the table subsumes them, and the tests below
+// are what a table can be asked that a pile of rules cannot.
+// ---------------------------------------------------------------------------
+
+/// **Every prefix of a real word must survive the mid-word check.** This is the
+/// test the rime table exists to be safe against.
+///
+/// A membership test over finished rimes would be catastrophic here: `biết`
+/// passes through `biế`, and open `iê` is not a legal rime — closed, it needs a
+/// coda. The check would refuse the keystroke, escape the word, and `biết` would
+/// be untypeable. `chuyển`/`uyê` and `mượn`/`ưo` are the same shape, and `ưo`
+/// adds the second half of the problem: Telex delivers the horn on a *later*
+/// keystroke than the vowel, so a half-typed rime differs from the finished one
+/// in the modifier as well as in length.
+///
+/// Asserting on/off equality rather than a fixed string is deliberate — the
+/// claim is "the check changed nothing", which is exactly what a false rejection
+/// would break.
+#[test]
+fn every_prefix_of_a_real_word_survives_the_mid_word_check() {
+    for keys in [
+        // The nuclei that are illegal until their coda arrives.
+        "bieets", "chuyeenr", "tieengs", "vieejt", "muwown", "dduwowcj", "nguowif", "thuowngr",
+        "xuoongs", "khuyeenr", "quyeets", "nghieepj",
+        // Modifier-late orders: the horn or circumflex lands after the vowel.
+        "tuanwa", "muaw", "tuaan", "chuaanr", "hoongf", "nguyeenx",
+        // The rare rimes read out of the wordlist tail.
+        "thuowr", "khuyur", "quyst", "huychj", "gieecs", "khuaang", "ngoamj", "tueenhf",
+    ] {
+        for n in 1..=keys.chars().count() {
+            let prefix: String = keys.chars().take(n).collect();
+            assert_eq!(
+                typed(&prefix, true),
+                typed(&prefix, false),
+                "the check refused a prefix of {keys}: {prefix}"
+            );
+        }
+    }
+}
+
+/// **The rimes `vi` accepts and Vietnamese does not.** Probed: every one of
+/// these passes `vi::validation::is_valid_syllable`.
+///
+/// The first three were reported one at a time and each got its own rule; the
+/// rest were still live after all three shipped, which is what moved the check
+/// to a table. `vi` cannot express any of them: it validates the nucleus and the
+/// coda independently and strips every diacritic before looking, so `i` + `ng`
+/// and `ư` + `a` + `m` are each half-true and jointly impossible.
+#[test]
+fn the_rime_table_rejects_what_vi_accepts() {
+    for word in [
+        // Reported, and previously each its own rule.
+        "ưám", "ưnh", "uíng", // wasm, the nh/ch rule, using
+        // Reported later, and still live once those three had shipped.
+        "pởe", "ưét", "tưo", "lă", "peón", "buín", // power, west, two, law, person, business
+        // The gaps the docs listed as known and unclosed.
+        "ớng", "ớc", "ôo", "ơo",
+    ] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} is not a Vietnamese rime and must be refused"
+        );
+    }
+}
+
+/// The rare rimes read by hand out of the wordlist tail are real, and typable.
+///
+/// The table was derived by frequency, and a frequency cut would have dropped
+/// every one of these — `giếc` is a fish, `hừm` is a grunt. They are the reason
+/// the cut was reviewed rather than trusted, and they are pinned here because
+/// nothing else in the suite would notice them going missing.
+#[test]
+fn the_rare_rimes_kept_from_the_tail_are_typable() {
+    for (keys, expected) in [
+        ("thuowr", "thuở"),
+        ("khuyur", "khuỷu"),
+        ("quyst", "quýt"),
+        ("khuaang", "khuâng"),
+        ("huychj", "huỵch"),
+        ("gieecs", "giếc"),
+        ("ngoamj", "ngoạm"),
+        ("tueenhf", "tuềnh"),
+        ("xoengr", "xoẻng"),
+        ("huwmf", "hừm"),
+    ] {
+        assert_eq!(typed(keys, true), expected, "{keys} with the check on");
+        assert!(
+            !is_invalid_vietnamese(expected),
+            "{expected} must also survive the boundary"
+        );
+    }
+}
+
+/// A finished word is judged strictly, and that is what `law` turns on.
+///
+/// Mid-word the table accepts any prefix, so a bare `ă` passes — `ăng` exists.
+/// At the boundary the word is finished and `ă` has to stand on its own, which
+/// it cannot: `ă` never appears without a coda. Judging both alike would have
+/// left `law` as `lă`, and the two halves of `Word` are what keep them apart.
+#[test]
+fn a_finished_word_is_judged_more_strictly_than_a_half_typed_one() {
+    // Half-typed: the check leaves them alone, because a coda could still come.
+    for keys in ["law", "saw", "raw"] {
+        assert_eq!(typed(keys, true), typed(keys, false), "{keys} mid-word");
+    }
+    // Finished: the same rimes are not words.
+    for word in ["lă", "să", "ră", "iê", "uyê", "ươ"] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} is not a finished syllable"
+        );
+    }
+    // And the finished spellings that *are* words still pass.
+    for word in ["lăng", "sẵn", "riêng", "chuyên", "mượn"] {
+        assert!(!is_invalid_vietnamese(word), "{word} is real Vietnamese");
+    }
+}
+
+/// **A `uâ` word typed horn-first now composes.** This used to be the escape
+/// latch swallowing `tuanwa`, and the rime table fixed it without being aimed at
+/// it.
 ///
 /// `tuanwa` reaches `tuân` by putting the horn on `u` before the final `a`
-/// arrives. The intermediate render is `tưan` — `ưa` closed by a coda, which the
-/// open-diphthong rule correctly refuses. But the escape is deliberately a latch
-/// (`engine.rs`: "the raw keys come back and stay literal until the next
-/// boundary"), so the `a` that would have repaired the word to `tuân` never
-/// applies.
+/// arrives, so the intermediate render is `tưan`. The old open-diphthong rule
+/// refused that — `ưa` closed by a coda — and because the escape is a latch, the
+/// `a` that would have repaired the word never applied: the whole word stayed
+/// raw. The table judges a half-typed word with its vowel modifiers ignored,
+/// because Telex delivers a horn one keystroke late, so `tưan` reads as `uan`
+/// and is never refused in the first place.
 ///
-/// Two things keep this narrow, and both are asserted below: the check is **off
-/// by default**, and the ordinary spelling — `aa` for `â` — is unaffected. Auto-fix
-/// at the boundary is unaffected too, since the committed render `tuân` is valid.
-///
-/// The latch predates this rule; `vi` called `tưan` valid, so the rule widened
-/// the set of words that reach it. Lifting the escape on forward keys would fix
-/// this and the pre-existing class together, but it reverses a documented
-/// decision and is filed as its own item rather than smuggled in here.
+/// The latch itself is untouched — nothing here lifts an escape on a forward
+/// key. What changed is that this word no longer trips it. `docs/typing-rules.md`
+/// and `plans/260906-2159-.../phase-08-lift-the-escape-latch.md` recorded this
+/// as a known consequence; the class it belonged to is narrower now, and the
+/// filed item is about the latch rather than about this word.
 #[test]
-fn the_escape_latch_still_swallows_a_horn_first_ua_word() {
-    // The affected order: horn before the vowel cluster is complete.
-    assert_eq!(typed("tuanwa", true), "tuanwa", "known latch behaviour");
+fn a_horn_first_ua_word_composes_with_the_check_on() {
+    assert_eq!(typed("tuanwa", true), "tuân", "no longer escapes");
     assert_eq!(
         typed("tuanwa", false),
         "tuân",
-        "and it is only the strict check"
+        "and matches the check being off"
     );
 
     // The ordinary spelling is untouched, which is what bounds the blast radius.

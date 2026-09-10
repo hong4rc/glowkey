@@ -185,34 +185,80 @@ mode.
 
 ## 6. Rules the syllable validator lacks
 
-Auto-fix asks "is this valid Vietnamese?". Three answers had to be added by
-hand, because the library says yes to spellings Vietnamese cannot produce.
+Auto-fix asks "is this valid Vietnamese?". The `vi` crate answers yes to
+spellings Vietnamese cannot produce, so two things are checked on top of it.
 
-| Rule | Rejects | Why it matters |
-| --- | --- | --- |
-| A syllable closed by `c`, `ch`, `p`, `t` takes only sắc or nặng | `màc`, `hỏc`, `mãt`, `hòp` | `f`, `r`, `x` are exactly those three tones, so `left` came out `lèt`, `soft` `sòt`, `gift` `gìt` |
-| The open diphthong `ưa` takes no coda — closed it is `ươ` | `ưam`, `ưát`, `ưáp` | `wasm` came out `ưám`, `wast`→`ưát`, `wasp`→`ưáp` |
-| `nh` and `ch` close only a front vowel (a, ă, â, e, ê, i, y) | `ưnh`, `ônh`, `ơch` | Real words are unaffected: `oanh`, `uynh`, `hoạch`, `huênh` |
+### The rime inventory
 
-The `ia`/`ua` siblings of the second rule are **deliberately left out**: in
-`quan`, `quát`, `gian`, `giam` the u/i belongs to the initial, not the vowel, so
-the rule would reject real words. `ưa` needs no exception — there is no `qư-` or
-`gư-` initial.
+`vi` validates a syllable's three parts **independently** — initial consonant,
+vowel cluster, final consonant — and strips every diacritic before looking at the
+vowel. So `i` is a vowel and `ng` is a final, each true on its own, and `uíng`
+comes out valid. The same blindness passes `ưa` closed by a coda, `ơng`, `ơch`
+and `pởe`.
 
-**A fourth gap is known and not closed:** the validator also accepts `ôo` and
-`ơo`, which are not Vietnamese rimes. Nothing produces them today — §2's `oooo`
-rule is what used to — but a spelling that reached one another way would not be
-auto-fixed either.
+The fix is the set `vi` has no way to express: **the 170 rimes Vietnamese
+actually has** (`engine.rs`::`RIMES`). A rime outside it is caught by *absence*,
+so the rule does not have to be written again for each new word that trips it.
+
+| | |
+| --- | --- |
+| **Derived from** | the 74k-word Viet74K list — tones and onsets stripped, what is left counted |
+| **Kept** | 148 rimes above the frequency cut, plus 22 read out of the tail by hand because they are real: `thuở`, `khuỷu`, `quýt`, `bâng khuâng`, `giếc`, `ngoạm`, `huỵch`, `tuềnh`, `xoẻng`, `hừm` |
+| **Left out** | transliterated loanwords — `ing` and `ic` reach the list only through `ping` and `acid`, which is exactly why `using` and `basic` used to survive as Vietnamese |
+| **Rejects** | `uíng`, `ưám`, `ưnh`, `ơch`, `pởe`, `ưét`, `tưo`, `lă`, `peón`, `buín` — `using`, `wasm`, `power`, `west`, `two`, `law`, `person`, `business` |
+
+It replaced three rules that had been written one per bug report — `ưa` closed by
+a coda, `nh`/`ch` on a back vowel, `ng`/`c` on `i`/`y`. Each was true; none was
+the general statement, so the next impossible rime always got through.
+
+**A half-typed word is judged differently, and this is load-bearing.** `biết`
+passes through `biế`, and open `iê` is not a legal rime — closed, it needs a
+coda. Judging it by membership would refuse the keystroke and make `biết`
+untypeable with the mid-word check on. Mid-word the rime may therefore be any
+prefix of a table entry, **with vowel modifiers ignored**, because Telex delivers
+a horn one keystroke after the vowel it lands on: `mượn` is typed `muwown` and
+passes through `mưo`. At the boundary the word is finished and must match
+outright, which is what restores `law` rather than leaving it `lă`.
+
+Fixed in passing: a `uâ` word typed horn-first (`tuanwa`) used to trip the escape
+latch through the old `ưa` rule and stay raw. It composes now.
+
+### The stop-coda tone rule
+
+Not subsumed by the table, which is tone-stripped: `màc` reduces to the perfectly
+ordinary rime `ac`, and only a rule that can see the tone catches it. A syllable
+closed by `c`, `ch`, `p` or `t` takes only sắc or nặng — and `f`, `r`, `x` are
+exactly the three forbidden tones, so `left` came out `lèt`, `soft` `sòt`, `gift`
+`gìt`.
+
+### What is still not fixed
+
+A render that is **pure ASCII** is left alone: it equals the keys the user typed,
+so there is nothing to restore it to. `business` still commits as `buiness` and
+`message` as `mesage`, because `ss` collapses to `s` and the result never stops
+being ASCII. That is the ASCII-render restore, filed separately; every rule in
+this section sits behind that guard. (Typing `busin` alone *does* restore, since
+`uín` is a render the table can judge.)
 
 > Pinned by `crates/glowkey-session/tests/auto_fix.rs`::`restores_english_words_broken_by_the_stop_coda_tone_rule`,
 > `the_stop_coda_rule_leaves_legal_vietnamese_alone`,
 > `restores_words_whose_render_closes_an_open_diphthong`,
-> `keeps_the_open_diphthong_and_its_closed_spelling`; and
-> `crates/glowkey-engine/tests/midword_spell_check.rs`::`an_open_diphthong_cannot_take_a_coda`,
+> `keeps_the_open_diphthong_and_its_closed_spelling`,
+> `restores_english_words_whose_render_is_not_a_vietnamese_rime`,
+> `keeps_the_rimes_a_velar_coda_can_close`; and
+> `crates/glowkey-engine/tests/midword_spell_check.rs`::`the_rime_table_rejects_what_vi_accepts`,
+> `every_prefix_of_a_real_word_survives_the_mid_word_check`,
+> `the_rare_rimes_kept_from_the_tail_are_typable`,
+> `a_finished_word_is_judged_more_strictly_than_a_half_typed_one`,
+> `a_horn_first_ua_word_composes_with_the_check_on`,
+> `an_open_diphthong_cannot_take_a_coda`,
 > `the_open_diphthong_itself_is_untouched`,
 > `a_back_vowel_cannot_be_closed_by_nh_or_ch`,
 > `front_vowels_closed_by_nh_or_ch_are_untouched`,
-> `the_deferred_siblings_counterexamples_stay_valid` (the `quan`/`gian` row),
+> `i_and_y_cannot_be_closed_by_ng_or_c`,
+> `other_vowels_closed_by_ng_or_c_are_untouched`,
+> `the_ascii_guard_still_short_circuits_every_rule`,
+> `the_deferred_siblings_counterexamples_stay_valid`,
 > `no_false_rejection_across_real_vietnamese` (a 51-word corpus, asserted
 > identical with the check on and off).
 

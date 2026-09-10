@@ -469,7 +469,7 @@ impl Engine {
             self.quick_telex,
             self.telex_brackets,
         );
-        !is_invalid_vietnamese(&candidate)
+        !cannot_become_vietnamese(&candidate)
     }
 
     /// Renders a raw key sequence under this engine's settings, honouring an
@@ -759,12 +759,18 @@ pub(crate) fn apply_case(lower: &str, keys: &[char]) -> String {
 /// key, and the policy layer asks it at a word boundary to decide whether to
 /// restore the raw keystrokes.
 ///
-/// Uses `vi`'s syllable validator plus the three phonotactic rules it lacks —
-/// [`violates_stop_coda_tone`], [`violates_open_diphthong_coda`] and
-/// [`violates_front_vowel_coda`]. A plain ASCII word that never transformed is
-/// treated as valid (nothing to fix) since it equals its raw input, which also
-/// means every rule below it is unreachable for an all-ASCII spelling.
+/// Uses `vi`'s syllable validator plus the two things it lacks: the rime
+/// inventory ([`violates_rime_inventory`]) and the stop-coda tone rule
+/// ([`violates_stop_coda_tone`]), which the tone-stripped table cannot see. A
+/// plain ASCII word that never transformed is treated as valid (nothing to fix)
+/// since it equals its raw input, which also means every rule below it is
+/// unreachable for an all-ASCII spelling.
 pub fn is_invalid_vietnamese(word: &str) -> bool {
+    judge(word, Word::Finished)
+}
+
+/// The shared body of [`is_invalid_vietnamese`] and [`cannot_become_vietnamese`].
+fn judge(word: &str, shape: Word) -> bool {
     if word.is_empty() {
         return false;
     }
@@ -784,8 +790,7 @@ pub fn is_invalid_vietnamese(word: &str) -> bool {
     }
     !vi::validation::is_valid_syllable(word)
         || violates_stop_coda_tone(word)
-        || violates_open_diphthong_coda(word)
-        || violates_front_vowel_coda(word)
+        || violates_rime_inventory(word, shape)
 }
 
 /// Whether the syllable breaks Vietnamese's stop-coda tone rule.
@@ -853,72 +858,163 @@ fn strip_tone_marks(lowered: &str) -> String {
         .collect()
 }
 
-/// Whether the syllable closes the open diphthong `ưa` with a coda.
+/// Vietnamese's rime inventory: every legal nucleus-plus-coda, tone stripped.
 ///
-/// `ưa`, `ia` and `ua` are the *open* forms of three diphthongs: they stand at
-/// the end of a syllable and nowhere else. Closed by a coda, each must be
-/// written with its other spelling — `ươ`, `iê`, `uô`: `ươm`, `iêm`, `uôn`,
-/// never `ưam`, `iam`, `uan`.
+/// A syllable is an onset, a rime and a tone. `vi`'s validator checks the onset
+/// and the tone but is lenient about the rime, accepting `uing`, `ưam`, `ơch`
+/// and `pơe` — spellings the language does not have. This table is the closed
+/// set it is missing, so an impossible rime is caught by *absence* rather than
+/// by a rule written after someone reports it.
 ///
-/// Reported 2026-09-06: typing `wasm` gave `ưám`. In Telex that is `w`→ư, `a`,
-/// `s`→sắc, `m` — every key applied faithfully, to a syllable Vietnamese cannot
-/// spell. `vi` calls it valid, so auto-fix declined to restore the raw keys, and
-/// the same held for `wast`→`ưát` and `wasp`→`ưáp`. The rule holds regardless of
-/// tone, which is why [`violates_stop_coda_tone`] never caught those two: sắc is
-/// legal on a stop coda.
+/// **Derived, not remembered.** The entries were extracted from the 74k-word
+/// Viet74K list by stripping tones and onsets and counting what was left; the
+/// 148 rimes above a frequency cut, plus 22 rare ones read by hand out of the
+/// tail because they are real (`thuở`, `khuỷu`, `quýt`, `bâng khuâng`, `giếc`,
+/// `ngoạm`, `huỵch`, `tuềnh`, `xoẻng`, `hừm`). Transliterated loanwords were
+/// left out — `ing` and `ic` reach the list only through `ping` and `acid`,
+/// which is exactly why `using` and `basic` used to survive as Vietnamese.
 ///
-/// **Only `ưa` is checked here.** The `ia`/`ua` siblings share the rule and not
-/// its safety: in `quan`, `quát`, `gian` and `giam` the `u`/`i` belongs to the
-/// *initial* (`qu-`, `gi-`), not the nucleus, so a surface match on `ua`/`ia`
-/// rejects real words. `ưa` has no such counterexample — Vietnamese has no `qư-`
-/// or `gư-` initial — so it needs no exclusion list. The siblings were deferred
-/// on 2026-09-06 until there is a way to measure what the added complexity buys.
-pub(crate) fn violates_open_diphthong_coda(word: &str) -> bool {
-    let stripped: Vec<char> = strip_tone_marks(&word.to_lowercase()).chars().collect();
-    stripped
-        .windows(2)
-        .position(|pair| pair == ['ư', 'a'])
-        // The open form is word-final, so anything at all after the `a` is
-        // disqualifying — a coda (`ưam`) or, just as impossible, a glide
-        // (`ưai`). Only the first occurrence needs testing: if a later `ưa`
-        // exists then characters follow this one too, so this is already the
-        // weakest case.
-        .is_some_and(|at| at + 2 < stripped.len())
+/// Sorted, because [`rime_is_possible`] binary-searches it.
+const RIMES: [&str; 170] = [
+    "a", "ac", "ach", "ai", "am", "an", "ang", "anh", "ao", "ap", "at", "au", "ay", "e", "ec",
+    "em", "en", "eng", "eo", "ep", "et", "i", "ia", "ich", "im", "in", "inh", "ip", "it", "iu",
+    "iêc", "iêm", "iên", "iêng", "iêp", "iêt", "iêu", "o", "oa", "oac", "oach", "oai", "oam",
+    "oan", "oang", "oanh", "oao", "oap", "oat", "oay", "oc", "oe", "oem", "oen", "oeng", "oeo",
+    "oet", "oi", "om", "on", "ong", "ooc", "oong", "op", "ot", "oăc", "oăm", "oăn", "oăng", "oăt",
+    "u", "ua", "uc", "ui", "um", "un", "ung", "up", "ut", "uy", "uya", "uych", "uyn", "uynh",
+    "uyp", "uyt", "uyu", "uyên", "uyêt", "uân", "uâng", "uât", "uây", "uê", "uêch", "uênh", "uêu",
+    "uôc", "uôi", "uôm", "uôn", "uông", "uôt", "uơ", "y", "ych", "ynh", "yp", "yt", "yu", "yêm",
+    "yên", "yêng", "yêt", "yêu", "âc", "âm", "ân", "âng", "âp", "ât", "âu", "ây", "ê", "êc", "êch",
+    "êm", "ên", "êng", "ênh", "êp", "êt", "êu", "ô", "ôc", "ôi", "ôm", "ôn", "ông", "ôp", "ôt",
+    "ăc", "ăm", "ăn", "ăng", "ăp", "ăt", "ơ", "ơi", "ơm", "ơn", "ơp", "ơt", "ư", "ưa", "ưc", "ưi",
+    "ưm", "ưn", "ưng", "ưt", "ưu", "ươc", "ươi", "ươm", "ươn", "ương", "ươp", "ươt", "ươu",
+];
+
+/// Whether the word being judged is finished or still being typed.
+///
+/// The distinction is load-bearing and is why this is not a `bool`. A half-typed
+/// word's rime is a *prefix* of the finished one — `biết` passes through `biế`,
+/// `chuyển` through `chuyể` — and open `iê` and `uyê` are not legal rimes, since
+/// closed they need a coda. Judging a half-typed word by membership alone would
+/// refuse the keystroke and escape the word, making `biết` untypeable with the
+/// mid-word check on.
+///
+/// A half-typed rime can also differ from the finished one in the *modifier*,
+/// not just in length, because Telex delivers the horn, breve and circumflex on
+/// a later keystroke than the vowel they land on: `mượn` is typed `muwown` and
+/// goes through `mưo` before the second `w` turns that `o` into `ơ`. So the
+/// half-typed comparison ignores modifiers, and only the finished word has to
+/// spell its vowels exactly.
+///
+/// The reverse error is milder but real: judging a *finished* word by prefix
+/// would accept a bare `ă` because `ăng` exists, and `law` would stay `lă`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Word {
+    /// A word at its boundary. Its rime must be in the table outright.
+    Finished,
+    /// A word still being typed. Its rime may be any prefix of a table entry.
+    HalfTyped,
 }
 
-/// Whether the syllable closes a non-front vowel with `nh` or `ch`.
+/// The vowel under its modifier: the horn off `ư`/`ơ`, the breve off `ă`, the
+/// circumflex off `â`/`ê`/`ô`. Tone marks are already gone by here.
 ///
-/// Both codas take the vowel immediately before them, and that vowel can only be
-/// a front one — a, ă, â, e, ê, i, y. `anh`, `inh`, `ênh`, `ach`, `ich`, `êch`
-/// are ordinary; `onh`, `unh`, `ưnh`, `uch`, `och`, `ơch` are not rimes at all.
-/// `vi` accepts every one of the impossible ones.
-///
-/// It is the vowel next to the coda that counts, not the first vowel in the
-/// syllable, so a glide ahead of the nucleus is harmless: `oanh`, `uynh`,
-/// `hoạch` and `huênh` all pass because `a`, `y`, `a` and `ê` sit against the
-/// coda. UniKey encodes this in `isValidVC` (`ukengine.cpp:396`) as a table; only
-/// the edge is ported here, since `vi` already covers the rest.
-pub(crate) fn violates_front_vowel_coda(word: &str) -> bool {
-    /// The vowels a `nh`/`ch` coda can close. Called `FRONT` for the rule's
-    /// usual name; `a`/`ă`/`â` are central rather than front phonetically, and
-    /// the orthographic set is what matters here.
-    const FRONT: &str = "aăâeêiy";
-    /// Every vowel, so a consonant next to the coda is left for `vi` to judge
-    /// rather than being called a non-front vowel.
-    const VOWELS: &str = "aăâeêioôơuưy";
-
-    let stripped: Vec<char> = strip_tone_marks(&word.to_lowercase()).chars().collect();
-    let Some(coda) = stripped.len().checked_sub(2) else {
-        return false;
-    };
-    if stripped[coda..] != ['n', 'h'] && stripped[coda..] != ['c', 'h'] {
-        return false;
+/// Not [`remove_tones`](crate::remove_tones), which also flattens `đ`, and not
+/// [`strip_tone_marks`], which deliberately *keeps* the modifier this drops.
+fn base_vowel(ch: char) -> char {
+    match ch {
+        'ă' | 'â' => 'a',
+        'ê' => 'e',
+        'ô' | 'ơ' => 'o',
+        'ư' => 'u',
+        other => other,
     }
-    // The vowel the coda closes: the character immediately before it.
-    let Some(nucleus) = coda.checked_sub(1).map(|at| stripped[at]) else {
-        return false;
-    };
-    VOWELS.contains(nucleus) && !FRONT.contains(nucleus)
+}
+
+/// Whether `rime` is a prefix of `entry` once both have their vowel modifiers
+/// removed — the half-typed comparison, for the reason [`Word`] gives.
+fn could_grow_into(entry: &str, rime: &str) -> bool {
+    let mut entry = entry.chars().map(base_vowel);
+    rime.chars()
+        .map(base_vowel)
+        .all(|want| entry.next() == Some(want))
+}
+
+/// Whether `rime` is in the inventory, or — for a half-typed word — could still
+/// grow into something that is.
+fn rime_is_possible(rime: &str, word: Word) -> bool {
+    match word {
+        // The table is sorted, so an exact match sits at the partition point.
+        Word::Finished => {
+            let at = RIMES.partition_point(|entry| *entry < rime);
+            RIMES.get(at) == Some(&rime)
+        }
+        // Modifier-blind, so the sort order does not apply and every entry is
+        // tried. 170 short strings that almost all fail on the first character;
+        // the engine budget is per keystroke and this does not register in it.
+        Word::HalfTyped => RIMES.iter().any(|entry| could_grow_into(entry, rime)),
+    }
+}
+
+/// Onsets, longest first so `ngh` is found before `ng` and `ng` before `n`.
+///
+/// Order is the whole contract here: matching `n` first would leave `gh` as the
+/// rime of `nghe` and reject an ordinary word.
+const ONSETS: [&str; 27] = [
+    "ngh", "ng", "nh", "ch", "gh", "gi", "kh", "ph", "th", "tr", "qu", "b", "c", "d", "đ", "g",
+    "h", "k", "l", "m", "n", "p", "r", "s", "t", "v", "x",
+];
+
+/// Splits the onset off a tone-stripped, lowercased syllable, leaving the rime.
+///
+/// `gi` and `qu` are onsets only when a vowel follows: in `gì` the `i` *is* the
+/// nucleus, so the word has to fall through to the bare `g`. The same guard
+/// keeps a two-letter word from being consumed whole and leaving no rime at all.
+fn split_rime(syllable: &str) -> &str {
+    /// The letters that can open a rime; `gi`/`qu` need one of these after them.
+    const NUCLEI: &str = "aăâeêioôơuưy";
+
+    for onset in ONSETS {
+        if let Some(rest) = syllable.strip_prefix(onset) {
+            if rest.is_empty() {
+                continue;
+            }
+            if matches!(onset, "gi" | "qu") && !rest.starts_with(|c| NUCLEI.contains(c)) {
+                continue;
+            }
+            return rest;
+        }
+    }
+    syllable
+}
+
+/// Whether the syllable's rime is absent from Vietnamese's inventory.
+///
+/// This one rule replaced three written by hand — `ưa` closed by a coda, `nh`/`ch`
+/// on a back vowel, `ng`/`c` on `i`/`y` — each of which had been added only after
+/// a user reported the English word it mangled (`wasm`→`ưám`, `using`→`uíng`,
+/// `business`→`buín`). Each was true and none was the general statement, so the
+/// next impossible rime always got through: `power`→`pởe`, `west`→`ưét`,
+/// `two`→`tưo`, `law`→`lă`, `person`→`peón` were all still live when this landed.
+///
+/// The stop-coda **tone** rule is not subsumed and still runs alongside this: the
+/// table is tone-stripped, so `màc` reduces to the perfectly ordinary rime `ac`
+/// and only a rule that can see the tone will catch it.
+pub(crate) fn violates_rime_inventory(word: &str, shape: Word) -> bool {
+    let stripped = strip_tone_marks(&word.to_lowercase());
+    let rime = split_rime(&stripped);
+    // A word that is all onset has no rime to judge; leave it to `vi`.
+    !rime.is_empty() && !rime_is_possible(rime, shape)
+}
+
+/// Whether a word still being typed can no longer become Vietnamese.
+///
+/// The mid-word spell check's question. It differs from
+/// [`is_invalid_vietnamese`] only in judging the rime by prefix, for the reason
+/// [`Word::HalfTyped`] gives; every other rule is shared, because an entry rule
+/// and an exit rule that have to agree are best written once.
+pub(crate) fn cannot_become_vietnamese(word: &str) -> bool {
+    judge(word, Word::HalfTyped)
 }
 
 /// Computes the minimal edit turning `prev` into `next`: keep the common prefix,

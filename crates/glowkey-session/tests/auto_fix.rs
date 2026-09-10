@@ -348,3 +348,48 @@ fn keeps_the_open_diphthong_and_its_closed_spelling() {
         assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
     }
 }
+
+/// **English words whose render is not a Vietnamese rime at all.** Reported one
+/// at a time; fixed together by the rime table.
+///
+/// `using`→`uíng` was the last of these to get its own hand-written rule, and
+/// the rest were still live the day after it shipped: the keys apply faithfully
+/// and produce a syllable Vietnamese cannot spell, `vi`'s validator calls it
+/// valid, and auto-fix is told the word is fine. They have nothing else in
+/// common — different nuclei, different codas, sắc and hỏi and no tone at all —
+/// which is why no rule short of the inventory reached them.
+#[test]
+fn restores_english_words_whose_render_is_not_a_vietnamese_rime() {
+    for word in [
+        "using", "rising", "basic", "music", "raising", // -ing and -ic: no such rime
+        "power", "west", "two", "law", "person", // pởe, ưét, tưo, lă, peón
+    ] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, word), word, "{word} must survive");
+    }
+    // Reported mid-word as `buín`: `uin` is not a rime either, and the boundary
+    // restores it. The whole of `business` is a *different* gap — `ss` collapses
+    // to `s` and the render is pure ASCII, which the verbatim guard leaves alone.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "busin"), "busin");
+}
+
+/// And the rimes `ng`/`c` really does close still render as Vietnamese.
+///
+/// `tiếng` and `việc` are the words at risk: they contain an `i`, but the vowel
+/// the coda closes is the `ê` beside it. A rule matching the first vowel of the
+/// syllable rather than the one next to the coda would break both.
+#[test]
+fn keeps_the_rimes_a_velar_coda_can_close() {
+    for (keys, expected) in [
+        ("tieengs", "tiếng"),
+        ("vieecj", "việc"),
+        ("xuoongs", "xuống"),
+        ("nuowcs", "nước"),
+        ("kinhs", "kính"),
+        ("uynhr", "uỷnh"),
+    ] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}

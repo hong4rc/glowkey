@@ -838,7 +838,49 @@ fn judge(word: &str, shape: Word) -> bool {
     }
     !vi::validation::is_valid_syllable(word)
         || violates_stop_coda_tone(word)
+        || violates_glide_onset(word)
         || violates_rime_inventory(word, shape)
+}
+
+/// Whether the syllable puts the `o` glide behind an onset that cannot carry it.
+///
+/// The glide is the `o` of `hoa`, `khoe`, `toe` — a rounded /w/ between the
+/// onset and the nucleus. Two families of onset never take it, and the rime
+/// table cannot see either, because the rimes themselves are perfectly ordinary
+/// and only the *pairing* is impossible. `vi` accepts the pairing too.
+///
+/// - **The labials `b`, `m`, `ph`, `v`.** A rounded glide after a consonant made
+///   with the same lips is what Vietnamese does not do: there is no `moa`,
+///   `moe`, `boe`, `voa`.
+/// - **`c` and `k`.** Orthographic rather than phonotactic: /k/ before the glide
+///   is spelled `qu`, so `qua` and `quê` are how those syllables are written and
+///   `coa`/`coe`/`koa` never occur.
+///
+/// Every other onset does take it — `hoà`, `khoẻ`, `loà`, `ngoè`, `toè`, `xoà`,
+/// `choè`, `doạ`, `goá`, `soạn`, `noãn` — so the list is closed and short.
+///
+/// The English words this rescues are the `-ore`/`-oe` family, where Telex reads
+/// the `r` as hỏi and leaves the vowel behind it: `more`→`moẻ`, `bore`→`boẻ`,
+/// `core`→`coẻ` — none of which auto-fix could see, since a rime of `oe` is real.
+/// Reported 2026-09-11.
+///
+/// Only marked renders reach this: a plain `boa` or `voan` is ASCII, and
+/// [`judge`] has already returned for anything the user typed verbatim. That is
+/// what keeps the handful of French loans spelled this way out of its reach.
+pub(crate) fn violates_glide_onset(word: &str) -> bool {
+    /// Onsets that cannot carry the glide. Longest first, so `ph` is found
+    /// before a bare `p` would be — `p` alone is not one of them.
+    const ONSETS: [&str; 6] = ["ph", "b", "m", "v", "c", "k"];
+    /// The glide spellings, with the vowel's own modifier kept by
+    /// [`strip_tone_marks`] so `oă` is distinguishable from `oa`.
+    const GLIDES: [&str; 3] = ["oa", "oă", "oe"];
+
+    let stripped = strip_tone_marks(&word.to_lowercase());
+    let Some(onset) = ONSETS.iter().find(|onset| stripped.starts_with(**onset)) else {
+        return false;
+    };
+    let rime = &stripped[onset.len()..];
+    GLIDES.iter().any(|glide| rime.starts_with(glide))
 }
 
 /// Whether the syllable breaks Vietnamese's stop-coda tone rule.

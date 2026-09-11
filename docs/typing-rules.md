@@ -246,6 +246,21 @@ closed by `c`, `ch`, `p` or `t` takes only sắc or nặng — and `f`, `r`, `x`
 exactly the three forbidden tones, so `left` came out `lèt`, `soft` `sòt`, `gift`
 `gìt`.
 
+### The onsets that cannot carry the `o` glide
+
+Not a rime rule either, because the rimes are ordinary and only the **pairing**
+is impossible. The glide is the `o` of `hoa`, `khoe`, `toe`, and two families of
+onset never take it: the labials `b`, `m`, `ph`, `v` — a rounded glide after a
+consonant made with the same lips is what Vietnamese does not do — and `c`/`k`,
+where /k/ before the glide is spelled `qu` (`qua`, `quê`). Every other onset does
+take it: `hoà`, `loà`, `ngoè`, `xoà`, `choè`, `doạ`, `goá`, `soạn`, `noãn`.
+
+It is the English `-ore` family that pays for the gap: `r` is hỏi and the `e`
+lands behind it, so `more`→`moẻ`, `bore`→`boẻ`, `core`→`coẻ` — all accepted by
+`vi` and by the rime table. The French loans spelled this way (`boa`, `voan`) are
+out of reach on purpose: typed plainly they are ASCII, and the verbatim guard
+answers first.
+
 ### What is still not fixed
 
 A render that is **pure ASCII** is left alone: it equals the keys the user typed,
@@ -261,7 +276,11 @@ this section sits behind that guard. (Typing `busin` alone *does* restore, since
 > `keeps_the_open_diphthong_and_its_closed_spelling`,
 > `restores_english_words_whose_render_is_not_a_vietnamese_rime`,
 > `keeps_the_rimes_a_velar_coda_can_close`; and
+> `restores_words_whose_render_puts_the_o_glide_behind_a_closed_onset`,
+> `keeps_the_o_glide_after_the_onsets_that_carry_it`;
 > `crates/glowkey-engine/tests/midword_spell_check.rs`::`the_rime_table_rejects_what_vi_accepts`,
+> `the_onsets_that_cannot_carry_the_o_glide`,
+> `the_o_glide_is_untouched_after_every_other_onset`,
 > `every_prefix_of_a_real_word_survives_the_mid_word_check`,
 > `the_rare_rimes_kept_from_the_tail_are_typable`,
 > `a_finished_word_is_judged_more_strictly_than_a_half_typed_one`,

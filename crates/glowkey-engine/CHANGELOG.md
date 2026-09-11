@@ -9,6 +9,9 @@ All notable changes to `glowkey-engine` are recorded here. The format follows
 ### Added
 - `Engine::typed_word`: the keys as typed with the repeat-key rejections removed — what a restore hands back. `raw_string` is unchanged and still the whole key log.
 
+### Fixed
+- `is_invalid_vietnamese` now rejects the `o` glide behind an onset that cannot carry it (`b`, `m`, `ph`, `v`, `c`, `k`), so `more` no longer commits as `moẻ`.
+
 ## [0.1.0] - 2026-09-05
 
 First version carved out of the GlowKey application.

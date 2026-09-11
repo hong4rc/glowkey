@@ -775,3 +775,43 @@ fn a_horn_first_ua_word_composes_with_the_check_on() {
         assert_eq!(typed(keys, true), expected, "{keys} with the check on");
     }
 }
+
+/// Some onsets cannot be followed by the `o` glide, and `vi` accepts them all.
+///
+/// `b`, `m`, `ph` and `v` are made with the lips and Vietnamese does not put the
+/// rounded glide after them; `c` and `k` cannot carry it either, because /k/
+/// before the glide is spelled `qu`. The rime table catches none of this — `oa`
+/// and `oe` are perfectly ordinary rimes — so only the pairing rule reaches
+/// them. It is the `-ore` family of English words that pays for it: `more` →
+/// `moẻ`, where `r` is hỏi. Reported 2026-09-11.
+#[test]
+fn the_onsets_that_cannot_carry_the_o_glide() {
+    for word in [
+        "moẻ", "moé", "boẻ", "voè", "phoà", "moằn", "moá", "coẻ", "koà",
+    ] {
+        assert!(
+            is_invalid_vietnamese(word),
+            "{word} puts the o glide after a labial onset, which Vietnamese does not"
+        );
+    }
+}
+
+/// Every other onset takes the glide, and the listed ones take everything else.
+///
+/// `boong` and `moóc` are the words at risk from a rule matching `o` too
+/// eagerly: their `oo` is a nucleus, not a glide. `muốn` and `vuông` are the
+/// same trap one vowel over — `uô` is a nucleus after a labial, and always was.
+#[test]
+fn the_o_glide_is_untouched_after_every_other_onset() {
+    for word in [
+        "hoà", "khoẻ", "loà", "ngoè", "toè", "xoà", "choè", "doạ", "goá", "hoạch", "quỳnh", "soạn",
+        "noãn", "quà", "quê",
+        // The listed onsets with a nucleus that merely starts with `o` or `u`.
+        "boong", "moóc", "muốn", "vuông", "mượn", "bưởi", "mèo", "vào", "cuốn", "cõi",
+    ] {
+        assert!(
+            !is_invalid_vietnamese(word),
+            "{word} is real Vietnamese and must not be rejected"
+        );
+    }
+}

@@ -422,3 +422,30 @@ fn the_rejection_gesture_still_types_its_vietnamese_words() {
     }
 }
 
+/// English `-ore` words: the `r` is hỏi and the `e` lands behind it, leaving a
+/// syllable with the `o` glide behind an onset that cannot carry it — which
+/// Vietnamese does not have, though both the rime and the tone are ordinary.
+/// Reported 2026-09-11.
+#[test]
+fn restores_words_whose_render_puts_the_o_glide_behind_a_closed_onset() {
+    for word in ["more", "bore", "core", "store", "moved"] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, word), word, "{word} must survive");
+    }
+}
+
+/// And the glide after every other onset still renders as Vietnamese.
+#[test]
+fn keeps_the_o_glide_after_the_onsets_that_carry_it() {
+    for (keys, expected) in [
+        ("khoer", "khoẻ"),
+        ("hoaf", "hoà"),
+        ("xoaf", "xoà"),
+        ("hoachj", "hoạch"),
+        ("muoons", "muốn"),
+        ("vuoong", "vuông"),
+    ] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}

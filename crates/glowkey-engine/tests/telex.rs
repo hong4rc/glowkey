@@ -441,3 +441,51 @@ fn a_digit_ends_the_word_where_a_letter_extends_it() {
     // A digit opening a word is just a digit — there is no syllable to end.
     assert_eq!(type_word("4hoongf"), "4hồng");
 }
+
+/// The word a restore must hand back is the keys **minus the rejection**.
+///
+/// The third press of a doubling key is an instruction — take the diacritic
+/// back — and it puts nothing on screen: `ooo` is two characters. Auto-fix used
+/// to restore the key log verbatim, so `chooose`, which is how `choose` is typed
+/// once the `oo` has to be stopped from becoming `ô`, came back with the
+/// instruction spelled out as a letter. Reported 2026-09-11.
+///
+/// The fourth press onward are letters again (`oooo` → `ooo`), and a tone or
+/// diacritic key is never dropped: the `x` of `exit` is a letter of the English
+/// word and a restore owes it back.
+#[test]
+fn the_typed_word_drops_only_the_rejection_keystroke() {
+    for (keys, typed) in [
+        ("chooose", "choose"),
+        ("ooo", "oo"),
+        ("oooo", "ooo"),
+        ("aaa", "aa"),
+        ("ddd", "dd"),
+        ("exit", "exit"),
+        ("hoongf", "hoongf"),
+        ("mooosc", "moosc"),
+    ] {
+        let mut engine = Engine::new(PlacementStyle::New);
+        for ch in keys.chars() {
+            engine.process_key(ch);
+        }
+        assert_eq!(engine.typed_word(), typed, "{keys}");
+        assert_eq!(
+            engine.raw_string(),
+            keys,
+            "{keys}: the key log itself is intact"
+        );
+    }
+}
+
+/// VNI has no doubling rule, so three `o`s are three letters and nothing is
+/// dropped from the word a restore hands back.
+#[test]
+fn the_typed_word_keeps_every_key_under_vni() {
+    let mut engine = Engine::new(PlacementStyle::New);
+    engine.set_method(glowkey_engine::InputMethod::Vni);
+    for ch in "chooose".chars() {
+        engine.process_key(ch);
+    }
+    assert_eq!(engine.typed_word(), "chooose");
+}

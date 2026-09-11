@@ -730,7 +730,10 @@ impl Session {
         }
         let restore = if self.engine.is_composing() {
             let rendered = self.engine.current_word().to_string();
-            let raw = self.engine.raw_string();
+            // The word as typed, not the key log: a rejected repeat (`chooose`
+            // for `choose`) is an instruction, and handing it back as a letter
+            // undoes the very gesture the user made. See `Engine::typed_word`.
+            let raw = self.engine.typed_word();
             // A decision the user made about this exact word wins over every rule,
             // in both directions, and is the only thing that can force the
             // Vietnamese reading of a word auto-fix would otherwise restore.
@@ -791,7 +794,9 @@ impl Session {
         // rewrote is the one the user most often wants to argue with. The boundary
         // character is filled in by `note_boundary`, which the shell calls next.
         self.correctable = if self.engine.is_composing() {
-            let raw = self.engine.raw_string();
+            // The same reading `restore` used, so the correction hotkey swaps to
+            // exactly what auto-fix would have put there.
+            let raw = self.engine.typed_word();
             let rendered = self.engine.current_word().to_string();
             // Whatever the restore inserted is what the shell will put on screen;
             // with no restore, the rendering is already there.

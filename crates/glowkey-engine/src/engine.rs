@@ -194,11 +194,59 @@ impl Engine {
         &self.rendered
     }
 
-    /// The raw keystrokes of the word being composed, exactly as typed — what
-    /// auto-fix restores when the rendering is not valid Vietnamese.
+    /// The raw keystrokes of the word being composed, exactly as typed —
+    /// every key, including the ones that only carried a gesture.
+    ///
+    /// This is the diagnostic and macro-matching view. What auto-fix puts back on
+    /// screen is [`typed_word`](Self::typed_word), which is the same keys minus
+    /// the presses that were an instruction rather than a letter.
     #[must_use]
     pub fn raw_string(&self) -> String {
         self.raw.iter().collect()
+    }
+
+    /// The word the user typed, as auto-fix must put it back: the raw keys with
+    /// the **repeat-key rejections** removed.
+    ///
+    /// A third press of a doubling key takes the diacritic back and stands for
+    /// nothing itself — `ooo` is two letters on screen, not three. Restoring the
+    /// raw log verbatim spelled that instruction out as a letter: `chooose` is
+    /// how `choose` is typed once the `oo` has to be stopped from becoming `ô`,
+    /// and auto-fix handed back the very `chooose` the user had just worked to
+    /// avoid. Reported 2026-09-11.
+    ///
+    /// Tone and diacritic keys are **not** removed, and that is the distinction
+    /// this draws: `x` in `exit` is a key the user pressed for a letter of an
+    /// English word, so a restore owes it back. The rejected third press is the
+    /// only key that asks the engine to undo something rather than to add
+    /// something, so it is the only one dropped.
+    ///
+    /// An escaped word is its own raw keys already — nothing was cancelled —
+    /// so it answers with them.
+    #[must_use]
+    pub fn typed_word(&self) -> String {
+        if self.escaped {
+            return self.raw_string();
+        }
+        let mut out = String::with_capacity(self.raw.len());
+        let mut run = 0usize;
+        for (i, ch) in self.raw.iter().enumerate() {
+            let lower = ch.to_ascii_lowercase();
+            run = if i > 0 && self.raw[i - 1].to_ascii_lowercase() == lower {
+                run + 1
+            } else {
+                1
+            };
+            // Exactly the third press. The fourth onward are letters again — the
+            // rejection has already happened and `render` puts them on screen
+            // (see [`is_cancelled_repeat`]) — so `oooo` is four keys and four
+            // characters minus the one instruction: `ooo`.
+            if run == 3 && is_cancelled_repeat(lower, self.method) {
+                continue;
+            }
+            out.push(*ch);
+        }
+        out
     }
 
     /// A copy of the raw keystrokes, for remembering a just-committed word so it can

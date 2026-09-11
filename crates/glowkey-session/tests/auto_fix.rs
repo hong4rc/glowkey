@@ -393,3 +393,32 @@ fn keeps_the_rimes_a_velar_coda_can_close() {
         assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
     }
 }
+
+/// A restore hands back the word, not the rejection keystroke.
+///
+/// `choose` is typed `chooose` in Telex: the third `o` stops `oo` becoming `ô`
+/// and puts nothing on screen. The render, `choóe`, is not Vietnamese, so
+/// auto-fix restores — and it used to restore the key log verbatim, handing back
+/// the very `chooose` the user had just worked to avoid. Reported 2026-09-11.
+#[test]
+fn a_restore_does_not_hand_back_the_rejection_keystroke() {
+    for (keys, expected) in [("chooose", "choose"), ("chooosee", "choosee")] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}
+
+/// The rejection gesture itself is untouched: a word the cancel makes *valid*
+/// Vietnamese keeps every key, because nothing restores it.
+#[test]
+fn the_rejection_gesture_still_types_its_vietnamese_words() {
+    for (keys, expected) in [
+        ("xooongf", "xoòng"),
+        ("mooosc", "moóc"),
+        ("booong", "boong"),
+    ] {
+        let mut s = active_session(true);
+        assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
+    }
+}
+

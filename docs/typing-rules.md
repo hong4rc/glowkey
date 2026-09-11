@@ -82,9 +82,24 @@ keystroke that rejected the diacritic, not just a character:
 | `ooo`⌫ | `ô` |
 | `ooo`⌫`f` | `ồ` — still composing, so the tone lands on the vowel |
 
+**A restore hands back the word, not the cancel.** The cancelling press is an
+instruction and puts nothing on screen, so auto-fix (§5) leaves it out of what it
+restores — `choose` is typed `chooose`, and handing back the third `o` would undo
+the gesture the user had just made. Every other key comes back, tone keys
+included: the `x` of `exit` is a letter of the English word.
+
+| You type | You get | |
+| --- | --- | --- |
+| `chooose`␣ | `choose` | the render `choóe` is not Vietnamese, so auto-fix restores |
+| `oooo` | `ooo` | the presses after the cancel are letters and stay |
+
 > Pinned by `crates/glowkey-engine/tests/telex.rs`::`repeating_the_diacritic_key_rejects_it`,
 > `a_cancelled_repeat_stays_cancelled`, `a_tone_after_a_cancelled_repeat_still_lands`,
-> `mid_word_backspace_after_a_rejected_diacritic_restores_the_diacritic`; and
+> `mid_word_backspace_after_a_rejected_diacritic_restores_the_diacritic`,
+> `the_typed_word_drops_only_the_rejection_keystroke`,
+> `the_typed_word_keeps_every_key_under_vni`;
+> `crates/glowkey-session/tests/auto_fix.rs`::`a_restore_does_not_hand_back_the_rejection_keystroke`,
+> `the_rejection_gesture_still_types_its_vietnamese_words`; and
 > `crates/glowkey-input/tests/ladder.rs`::`backspace_after_a_rejected_diacritic_restores_it`.
 > The `moóc` rows have a test of their own because the first attempt at the
 > `oooo` rule broke them.

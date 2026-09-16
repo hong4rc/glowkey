@@ -120,6 +120,13 @@ pub struct Session {
     style: PlacementStyle,
     /// Whether to restore invalid Vietnamese to raw keys at a word boundary.
     auto_fix: bool,
+    /// The user's tick for the mid-word spell check, which is a *narrowing* of
+    /// auto-fix: same repair, made at the offending key instead of at the space.
+    /// Kept here rather than read back off the engine because the engine only
+    /// ever holds the **effective** setting — see [`Self::sync_spell_check`] —
+    /// and a settings round trip has to hand back what the user ticked, not what
+    /// auto-fix currently allows through.
+    strict_spell_check: bool,
     /// The frontmost application, set by the shell on focus change. `None`
     /// before the first application is known.
     current_app: Option<AppId>,
@@ -170,6 +177,7 @@ impl Session {
             exclusions,
             style,
             auto_fix: true,
+            strict_spell_check: false,
             current_app: None,
             committed: VecDeque::new(),
             auto_capitalize: false,
@@ -201,8 +209,13 @@ impl Session {
     }
 
     /// Enables or disables auto-fix.
+    ///
+    /// Turning it off also stops the mid-word spell check, which is auto-fix
+    /// made earlier and cannot outlive it. The user's tick is remembered, so
+    /// turning auto-fix back on restores the choice they made.
     pub fn set_auto_fix(&mut self, on: bool) {
         self.auto_fix = on;
+        self.sync_spell_check();
     }
 
     /// Whether transformation is active *right now* — Vietnamese mode and the
@@ -962,15 +975,37 @@ impl Session {
         self.forget_position();
     }
 
-    /// Whether the mid-word spell check is on.
+    /// Whether the mid-word spell check is ticked.
+    ///
+    /// The user's choice, not whether it is currently doing anything: with
+    /// auto-fix off it is ticked and dormant. The Settings control binds to this,
+    /// and so does the file it is saved to.
     #[must_use]
     pub fn strict_spell_check(&self) -> bool {
-        self.engine.strict_spell_check()
+        self.strict_spell_check
     }
 
-    /// Turns the mid-word spell check on or off.
+    /// Turns the mid-word spell check on or off. Takes effect only while
+    /// auto-fix is on.
     pub fn set_strict_spell_check(&mut self, on: bool) {
-        self.engine.set_strict_spell_check(on);
+        self.strict_spell_check = on;
+        self.sync_spell_check();
+    }
+
+    /// Gives the engine the spell check the two settings add up to.
+    ///
+    /// The mid-word check is the same repair auto-fix performs, moved from the
+    /// space to the offending key, so auto-fix off has to mean it is off too.
+    /// Leaving the engine with the bare tick let a word be rewritten mid-typing
+    /// by a control the Settings window had greyed out and would not let the
+    /// user reach: with auto-fix off, `aal` came back as `aal` — the escape the
+    /// check sets — where it should have rendered `âl`. Reported 2026-09-16.
+    fn sync_spell_check(&mut self) {
+        let effective = self.auto_fix && self.strict_spell_check;
+        if effective == self.engine.strict_spell_check() {
+            return;
+        }
+        self.engine.set_strict_spell_check(effective);
         // The engine reset does not reach the committed history, and a word
         // remembered under the old setting would re-compose under the new one —
         // rewriting text already on screen.

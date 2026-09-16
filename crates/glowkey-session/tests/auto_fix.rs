@@ -449,3 +449,40 @@ fn keeps_the_o_glide_after_the_onsets_that_carry_it() {
         assert_eq!(type_then_commit(&mut s, keys), expected, "{keys}");
     }
 }
+
+/// The mid-word spell check is auto-fix moved from the space to the offending
+/// key, so auto-fix off has to switch it off too.
+///
+/// It used to reach the engine on its own, and the Settings window greys the
+/// control out when auto-fix is off — so a word could be rewritten mid-typing by
+/// a checkbox the user could see was ticked and could not untick. `aal` came
+/// back as `aal`, the escape the check sets, instead of the `âl` Telex renders.
+/// Reported 2026-09-16.
+#[test]
+fn the_mid_word_spell_check_does_nothing_with_auto_fix_off() {
+    let mut s = active_session(false);
+    s.set_strict_spell_check(true);
+    assert_eq!(type_then_commit(&mut s, "aal"), "âl");
+}
+
+/// With auto-fix on it does its job, so the gate is the auto-fix switch and not
+/// the check going missing.
+#[test]
+fn the_mid_word_spell_check_still_works_with_auto_fix_on() {
+    let mut s = active_session(true);
+    s.set_strict_spell_check(true);
+    assert_eq!(type_then_commit(&mut s, "aal"), "aal");
+}
+
+/// The tick survives the trip through an auto-fix switch, because the Settings
+/// control and the file both read it back off the session: a dormant checkbox
+/// that silently cleared itself would lose a choice the user made.
+#[test]
+fn auto_fix_off_remembers_the_spell_check_tick() {
+    let mut s = active_session(true);
+    s.set_strict_spell_check(true);
+    s.set_auto_fix(false);
+    assert!(s.strict_spell_check(), "the tick is the user's, not the gate's");
+    s.set_auto_fix(true);
+    assert_eq!(type_then_commit(&mut s, "aal"), "aal");
+}

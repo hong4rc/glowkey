@@ -71,6 +71,10 @@ pub struct Settings {
     /// Opt-in: UniKey's `spellCheckEnabled` — refuse a diacritic that would make
     /// the word impossible in Vietnamese, at the keystroke rather than at the
     /// word boundary (which is what `auto_fix` does).
+    ///
+    /// Being the same repair made earlier, it does nothing while `auto_fix` is
+    /// off; the session holds that gate. The tick is stored either way, so the
+    /// greyed-out control keeps the user's choice for when auto-fix comes back.
     #[serde(default)]
     pub strict_spell_check: bool,
     /// Opt-in: UniKey's `alwaysMacro` — expand macros even while Vietnamese is

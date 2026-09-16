@@ -356,7 +356,7 @@ they are off by default.
 | --- | --- | --- |
 | **Auto-fix** (**on**) | see §5 | `exit`→`exit` |
 | Restore common English words (off) | a committed word whose keys spell a common English word is handed back even when the Vietnamese is valid | `was`→`was`, not `ứa`. The cost: `cats`→`cats`, not `cát` |
-| **Mid-word spell check** (off) | repairs at the keystroke instead of at the space: the moment a word becomes unspellable it shows your raw keys for the rest of the word | `exit` is fixed at the `x` |
+| **Mid-word spell check** (off) | repairs at the keystroke instead of at the space: the moment a word becomes unspellable it shows your raw keys for the rest of the word. It is auto-fix made earlier, so auto-fix off switches it off too — the tick is remembered, not cleared | `exit` is fixed at the `x`; with auto-fix off, `aal`→`âl` |
 | **Personal words** | one word pinned to English or Vietnamese beats every rule above, in both directions | `was`→`was` and `cats`→`cát` at the same time |
 
 **`Ctrl+Shift+W` swaps the word you just typed** and remembers the choice as a

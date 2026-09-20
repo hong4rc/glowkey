@@ -250,6 +250,16 @@ fn keeps_abbreviations_that_start_with_d_bar() {
 }
 
 #[test]
+fn restores_a_leading_d_bar_word_once_the_rest_carries_a_diacritic() {
+    // `ddeew` is `đ` + `êw`: not an abbreviation candidate (its rest is not
+    // plain ASCII) and not a valid syllable either, since `w` never combines
+    // with `ê`. The leading-đ exemption must not swallow it — reported live as
+    // `ddeew` incorrectly staying `đêw` with auto-fix on.
+    let mut s = active_session(true);
+    assert_eq!(type_then_commit(&mut s, "ddeew"), "ddeew");
+}
+
+#[test]
 fn still_restores_english_words_whose_d_bar_is_not_leading() {
     // The exemption is for a *leading* đ only, so English words that merely
     // contain `dd` keep restoring.

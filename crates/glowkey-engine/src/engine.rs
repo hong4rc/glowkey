@@ -826,15 +826,18 @@ fn judge(word: &str, shape: Word) -> bool {
     if word.is_ascii() {
         return false;
     }
-    // A word starting with đ is deliberate, so keep it even when it is not a
-    // syllable. Reaching a leading đ costs `dd` in Telex or `d9` in VNI, and no
-    // English word begins with either, so there is nothing here to rescue — while
-    // restoring the raw keys wrecks the Vietnamese chat abbreviations built this
-    // way (`đc`, `đt`, `đk`, which would come back as `ddc`, `ddt`, `ddk`). English
-    // words that merely *contain* the pair still restore, since their đ is not
-    // leading: `address`→`ađress`, `odd`→`ođ`, `sudden`→`suđen`.
-    if word.starts_with('đ') || word.starts_with('Đ') {
-        return false;
+    // A leading đ followed by plain ASCII is a deliberate chat abbreviation
+    // (`đc`, `đt`, `đk`), not a syllable, so keep it rather than restoring the
+    // raw keys (`ddc`, `ddt`, `ddk`). English words that merely *contain* the
+    // pair still restore, since their đ is not leading: `address`→`ađress`,
+    // `odd`→`ođ`, `sudden`→`suđen`. Once anything past the đ carries its own
+    // diacritic, it is no longer an abbreviation candidate, so it falls through
+    // to the ordinary syllable and rime checks below — catching, e.g., `đêw`
+    // (from `ddeew`), which is neither an abbreviation nor a valid syllable.
+    if let Some(rest) = word.strip_prefix('đ').or_else(|| word.strip_prefix('Đ')) {
+        if rest.is_ascii() {
+            return false;
+        }
     }
     !vi::validation::is_valid_syllable(word)
         || violates_stop_coda_tone(word)

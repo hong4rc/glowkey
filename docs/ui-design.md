@@ -23,19 +23,23 @@ system. ("No tabs" was a value here too, and the Settings window outgrew it; see
 
 ## 1. Menu bar extra
 
-The status item shows the current state as text so it is legible at a glance and
-needs no bitmap. **Four states**, and the distinction between the middle two is
+The status item shows the current state as a drawn badge: a filled rounded square
+in the menu bar's ink with the letter cut out of it, drawn in code as a template
+image so it follows light and dark menu bars. **Four states**, and the distinction between the middle two is
 the whole point — the app exists for the per-app ignore list, so "off" and "off
 *here*" must not look the same:
 
 | Glyph | Means |
 |---|---|
-| `VI` | Vietnamese, and this app is not excluded |
-| `VI` dimmed (45% alpha) | Vietnamese is on, but the app in front is excluded |
-| `EN` | The user has switched Vietnamese off globally |
+| `V` badge | Vietnamese, and this app is not excluded |
+| `V` badge with a slash | Vietnamese is on, but the app in front is excluded |
+| `E` badge | The user has switched Vietnamese off globally |
 | `⚠` | The Accessibility permission is gone; nothing is reaching the engine |
 
-`VI`, not the `VN` this file first specified — the built app has always said `VI`.
+The badge replaced the plain `VI`/`EN` text on 2026-09-23, and the slash replaced
+the 45% alpha dimming that marked the excluded state. The slash passes behind
+the letter rather than across it: the `V` runs almost parallel to the diagonal,
+and a stroke over it made the letter unreadable at menu bar size.
 
 The dimmed state was specified here from the start and was **not** built until
 2026-09-04: the glyph read `EN` both for global English and for an excluded app,

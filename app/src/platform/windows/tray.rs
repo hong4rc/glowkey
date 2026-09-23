@@ -426,7 +426,7 @@ fn tooltip_units(text: &str, capacity: usize) -> Vec<u16> {
 /// the part that was wrong: the colour used to be a hardcoded near-white with the
 /// comment "for a dark taskbar", which is invisible on a light one. Reported as
 /// "EN is something wrong, cannot see that" — and the reason `VI` seemed fine was
-/// that the excluded state is grey, which happens to show up on both.
+/// that the excluded state was grey then, which happens to show up on both.
 #[must_use]
 fn glyph_colour(state: Indicator, light_taskbar: bool) -> (u8, u8, u8) {
     match state {
@@ -437,20 +437,6 @@ fn glyph_colour(state: Indicator, light_taskbar: bool) -> (u8, u8, u8) {
                 (0xC0, 0x1C, 0x1C)
             } else {
                 (0xFF, 0x5A, 0x5A)
-            }
-        }
-        // Excluded: the same letters as active, with less contrast. "On, but not
-        // here" — so it has to be dimmer than the active glyph *on this
-        // background*, which means a lighter grey on dark and a darker one on
-        // light, not one grey for both.
-        // Asked of the indicator rather than matched on here, so "which state is
-        // the dim one" is stated once. Two places deciding it is how the glyph
-        // and the tooltip come to disagree about the same state.
-        _ if state.dimmed() => {
-            if light_taskbar {
-                (0x8A, 0x8A, 0x8A)
-            } else {
-                (0x80, 0x80, 0x80)
             }
         }
         // Active states: maximum contrast against whatever is behind them.
@@ -464,12 +450,61 @@ fn glyph_colour(state: Indicator, light_taskbar: bool) -> (u8, u8, u8) {
     }
 }
 
+/// How much of the pixel centred on (`x`, `y`) a shape covers, from its signed
+/// distance: one pixel of antialiasing across the edge.
+fn edge_coverage(distance: f32) -> f32 {
+    (0.5 - distance).clamp(0.0, 1.0)
+}
+
+/// Signed distance from a point to the badge square: 1..15 on a 16-pixel icon,
+/// with rounded corners. Negative inside.
+fn badge_distance(x: f32, y: f32) -> f32 {
+    const CENTRE: f32 = 8.0;
+    const HALF: f32 = 7.0;
+    const RADIUS: f32 = 3.0;
+    let qx = (x - CENTRE).abs() - (HALF - RADIUS);
+    let qy = (y - CENTRE).abs() - (HALF - RADIUS);
+    let outside = qx.max(0.0).hypot(qy.max(0.0));
+    outside + qx.max(qy).min(0.0) - RADIUS
+}
+
+/// Distance from a point to the slash, which runs top-left to bottom-right like
+/// the system's own "off" symbols.
+fn slash_distance(x: f32, y: f32) -> f32 {
+    // The segment (1,1)-(15,15): project onto it, clamp to the ends.
+    let t = (((x - 1.0) + (y - 1.0)) / 28.0).clamp(0.0, 1.0);
+    let (px, py) = (1.0 + 14.0 * t, 1.0 + 14.0 * t);
+    (x - px).hypot(y - py)
+}
+
+/// The opacity of one badge pixel, from 0 to 255.
+///
+/// The badge is a filled square with the letter knocked out of it, so the
+/// taskbar shows through the letter: `letter` is how much of this pixel the
+/// letter covers, 0 to 255. A struck badge has a gap cut along the slash and a
+/// thin stroke drawn inside it, so the slash stays visible where it crosses the
+/// ink. The letter is cut last, so the slash passes behind it: the `V` runs
+/// almost parallel to the diagonal, and a stroke across it made the letter
+/// unreadable at tray size.
+fn badge_alpha(x: usize, y: usize, letter: u32, struck: bool) -> u32 {
+    let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+    let mut alpha = edge_coverage(badge_distance(cx, cy));
+    if struck {
+        let distance = slash_distance(cx, cy);
+        alpha *= 1.0 - edge_coverage(distance - 1.75);
+        alpha = alpha.max(edge_coverage(distance - 0.75));
+    }
+    alpha *= 1.0 - letter as f32 / 255.0;
+    (alpha * 255.0).round() as u32
+}
+
 /// Draws the state's glyph into an icon.
 ///
-/// Two colours only: full ink for an active state, grey for the dimmed
-/// excluded-app one, and red for a breakage. The dimming is the entire visual
-/// difference between `VI` and excluded-`VI`, which is right — they are the same
-/// mode, and one of them is simply not in effect here.
+/// A mode is a filled badge in the taskbar's ink with its letter cut out — `V`
+/// or `E` — and the excluded app is the `V` badge struck through. The slash is
+/// the entire visual difference between `V` and excluded-`V`, which is right:
+/// they are the same mode, and one of them is simply not in effect here. A
+/// breakage is a bare red `!`.
 fn draw_glyph(state: Indicator) -> HICON {
     const SIZE: i32 = 16;
     let text = wide(state.glyph());
@@ -571,7 +606,12 @@ fn draw_glyph(state: Indicator) -> HICON {
         let pixels = bits.cast::<u32>();
         for i in 0..(SIZE * SIZE) as usize {
             // Any channel carries the coverage — the text was white on black.
-            let coverage = *pixels.add(i) & 0xFF;
+            let letter = *pixels.add(i) & 0xFF;
+            let coverage = if state.badged() {
+                badge_alpha(i % SIZE as usize, i / SIZE as usize, letter, state.struck())
+            } else {
+                letter
+            };
             // Premultiplied, which is what a 32-bit alpha icon must be.
             let pr = (u32::from(r) * coverage) / 255;
             let pg = (u32::from(g) * coverage) / 255;
@@ -967,26 +1007,32 @@ mod tests {
         }
     }
 
-    /// Excluded reads as dimmer than active on the *same* background.
-    ///
-    /// That difference is the entire visual distinction between "on" and "on, but
-    /// not here", so one grey shared across both themes will not do: dimmer means
-    /// lighter on a light taskbar and darker on a dark one.
+    /// The badge is ink with the letter cut out: its corner is transparent, its
+    /// edge beside the letter is solid, and where the letter covers a pixel the
+    /// taskbar shows through.
     #[test]
-    fn excluded_is_dimmer_than_active_on_both_themes() {
-        for light in [true, false] {
-            let active = luma(glyph_colour(Indicator::Vietnamese, light));
-            let excluded = luma(glyph_colour(Indicator::ExcludedApp, light));
-            assert!(
-                (active - excluded).abs() > 20,
-                "light={light}: excluded must be visibly dimmer than active"
-            );
-            if light {
-                assert!(excluded > active, "on a light taskbar, dimmer is lighter");
-            } else {
-                assert!(excluded < active, "on a dark taskbar, dimmer is darker");
-            }
-        }
+    fn the_badge_knocks_the_letter_out() {
+        assert_eq!(
+            badge_alpha(0, 0, 0, false),
+            0,
+            "the corner is outside the badge"
+        );
+        assert_eq!(badge_alpha(2, 8, 0, false), 255, "the badge is solid ink");
+        assert_eq!(badge_alpha(2, 8, 255, false), 0, "the letter is cut out");
+    }
+
+    /// The slash is the only difference between `V` and excluded-`V`, so it has
+    /// to show on the ink: a gap either side of a stroke along the diagonal.
+    #[test]
+    fn the_struck_badge_shows_a_slash_across_the_ink() {
+        // On the diagonal: the stroke itself.
+        assert_eq!(badge_alpha(4, 4, 0, true), 255);
+        // Just off it: the gap that separates the stroke from the ink.
+        assert!(badge_alpha(6, 4, 0, true) < 64);
+        // Far from it: the badge, unchanged.
+        assert_eq!(badge_alpha(12, 3, 0, true), badge_alpha(12, 3, 0, false));
+        // The letter wins over the stroke, so the slash never breaks it up.
+        assert_eq!(badge_alpha(4, 4, 255, true), 0);
     }
 
     /// Every command id is distinct. They cross a C boundary as plain integers,

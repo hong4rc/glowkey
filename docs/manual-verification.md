@@ -94,7 +94,7 @@ Accessibility grant.
 
 ## 4. The per-app ignore list — the feature the app exists for
 
-- [ ] In Ghostty/Terminal/iTerm, the glyph reads **EN** and typing is untouched.
+- [ ] In Ghostty/Terminal/iTerm, the glyph shows the **V badge with a slash** and typing is untouched.
 - [ ] ⌃⇧E in a terminal enables Vietnamese and the HUD shows **VI ⚠** (the
       warning variant: a PTY ignores synthetic backspaces).
 - [ ] Restart: that terminal is excluded again. Session-only by design.
@@ -262,8 +262,9 @@ section is where a regression would show up first.
       them ("Visual Studio Code", not "VSCode"), sorted by name. Exclude an app,
       delete it from /Applications, reopen: it stays, greyed, marked "(not
       installed)".
-- [ ] **The glyph has three states.** `VI` in TextEdit; **dimmed** `VI` in a
-      terminal (excluded); `EN` after ⌃⇧Space. Confirm the excluded and English
+- [ ] **The glyph has three states.** A `V` badge in TextEdit; the `V` badge
+      **with a slash** in a terminal (excluded); an `E` badge after ⌃⇧Space.
+      Check both a light and a dark menu bar. Confirm the excluded and English
       states are visibly different — they were identical before.
 - [ ] **The shortcut shown is the one that works.** Settings → General, change the
       toggle hotkey; the menu-bar menu's "Vietnamese input (…)" row and the menu's

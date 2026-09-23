@@ -10,12 +10,17 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
-use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSMenu, NSMenuDelegate, NSMenuItem, NSPasteboard, NSPasteboardTypeString,
-    NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
+    NSApplication, NSBezierPath, NSColor, NSCompositingOperation, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSGraphicsContext, NSImage, NSLineCapStyle, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSPasteboard, NSPasteboardTypeString, NSStatusBar, NSStatusItem,
+    NSStringDrawing, NSVariableStatusItemLength, NSWorkspace,
 };
-use objc2_foundation::{MainThreadMarker, NSArray, NSString, NSURL};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSAttributedStringKey, NSDictionary, NSPoint, NSRect, NSSize,
+    NSString, NSURL,
+};
 
 use std::cell::RefCell;
 
@@ -192,7 +197,8 @@ impl MenuController {
     }
 
     /// Refreshes the menu bar glyph to reflect whether Vietnamese is active for the
-    /// frontmost app: `VI` when on, `EN` when off (English mode or excluded app).
+    /// frontmost app: a `V` badge when on, an `E` badge when off, and the `V` badge
+    /// struck through when the frontmost app is on the ignore list.
     fn update_glyph(&self) {
         // A dead tap outranks the mode. GlowKey used to keep showing VI after the
         // Accessibility permission was revoked, which made the one indicator the
@@ -202,26 +208,21 @@ impl MenuController {
         // Three states, not two. `EN` used to mean both "you turned Vietnamese
         // off" and "this app is on the ignore list", which collapses the one
         // question the indicator exists to answer — and the ignore list is the
-        // feature the app is for. `ui-design.md` specified a dimmed glyph for the
-        // excluded case from the start; it was never built.
+        // feature the app is for.
         let dead = crate::platform::macos::tap_is_dead();
         let vietnamese = self.state().mode_is_vietnamese();
         let suspended = vietnamese && !self.state().is_active();
-        let title = if dead {
-            "⚠"
-        } else if vietnamese {
-            "VI"
-        } else {
-            "EN"
-        };
         let mtm = MainThreadMarker::from(self);
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             if let Some(button) = item.button(mtm) {
-                button.setTitle(&NSString::from_str(title));
-                // Dimmed means "Vietnamese is your mode, but not in this app".
-                // Alpha rather than a colour so it stays legible against whatever
-                // the menu bar is sitting on, light, dark or a wallpaper.
-                button.setAlphaValue(if suspended { 0.45 } else { 1.0 });
+                if dead {
+                    button.setImage(None);
+                    button.setTitle(&NSString::from_str("⚠"));
+                } else {
+                    let letter = if vietnamese { "V" } else { "E" };
+                    button.setTitle(&NSString::from_str(""));
+                    button.setImage(Some(&badge(letter, suspended)));
+                }
             }
         }
     }
@@ -438,6 +439,84 @@ impl MenuController {
     }
 }
 
+/// Draws the menu bar badge: a filled rounded square with `letter` cut out of it,
+/// and, when `struck`, a slash across it for "Vietnamese is on, but not in this
+/// app".
+///
+/// A template image, so AppKit paints it in the menu bar's own ink — black on a
+/// light bar, white on a dark one — and the cut-out letter shows the bar through
+/// it. The letter is knocked out rather than drawn, which is why it reads as the
+/// inverse of the plain `VI`/`EN` text the glyph used to be.
+#[allow(deprecated)] // lockFocus: the image is small, fixed and redrawn on change.
+fn badge(letter: &str, struck: bool) -> Retained<NSImage> {
+    const SIZE: f64 = 18.0;
+    let size = NSSize::new(SIZE, SIZE);
+    let full = NSRect::new(NSPoint::new(0.0, 0.0), size);
+    let ink = NSColor::blackColor();
+
+    // The letter on its own, so it can be composited out of the square with
+    // `DestinationOut`. Drawing the text directly in that mode depends on the text
+    // system honouring the context's compositing operation; an image does not.
+    let font = NSFont::boldSystemFontOfSize(12.5);
+    let text = NSString::from_str(letter);
+    let attrs = unsafe {
+        NSDictionary::<NSAttributedStringKey, AnyObject>::from_slices(
+            &[NSFontAttributeName, NSForegroundColorAttributeName],
+            &[font.as_ref() as &AnyObject, ink.as_ref() as &AnyObject],
+        )
+    };
+    let text_size = unsafe { text.sizeWithAttributes(Some(&attrs)) };
+    // Centred on the capital's own height, not the line box: the box carries the
+    // descender and leading, which sat the letter half a point high. The drawing
+    // origin is the bottom of the line box, whose top is one ascender above the
+    // baseline. Rounded to half points, the pixel grid of a Retina menu bar.
+    let half_points = |value: f64| (value * 2.0).round() / 2.0;
+    let baseline = (SIZE - font.capHeight()) / 2.0;
+    let origin = NSPoint::new(
+        half_points((SIZE - text_size.width) / 2.0),
+        half_points(baseline + font.ascender() - text_size.height),
+    );
+    let letter_image = NSImage::initWithSize(NSImage::alloc(), size);
+    letter_image.lockFocus();
+    unsafe { text.drawAtPoint_withAttributes(origin, Some(&attrs)) };
+    letter_image.unlockFocus();
+
+    let image = NSImage::initWithSize(NSImage::alloc(), size);
+    image.lockFocus();
+    ink.set();
+    let square = NSRect::new(NSPoint::new(1.5, 1.5), NSSize::new(SIZE - 3.0, SIZE - 3.0));
+    NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(square, 3.5, 3.5).fill();
+    if struck {
+        // Top-left to bottom-right, like the system's own "off" symbols. A gap is
+        // cut first so the stroke stays visible where it crosses the ink.
+        let slash = |width: f64, operation: NSCompositingOperation| {
+            let path = NSBezierPath::new();
+            path.moveToPoint(NSPoint::new(1.0, SIZE - 1.0));
+            path.lineToPoint(NSPoint::new(SIZE - 1.0, 1.0));
+            path.setLineWidth(width);
+            path.setLineCapStyle(NSLineCapStyle::Round);
+            if let Some(context) = NSGraphicsContext::currentContext() {
+                context.setCompositingOperation(operation);
+            }
+            path.stroke();
+        };
+        slash(3.0, NSCompositingOperation::DestinationOut);
+        slash(1.25, NSCompositingOperation::SourceOver);
+    }
+    // The letter last, so the slash passes behind it and never breaks it up: the
+    // `V` runs almost parallel to the diagonal, and a stroke across it made the
+    // letter unreadable at menu bar size.
+    letter_image.drawInRect_fromRect_operation_fraction(
+        full,
+        NSRect::ZERO,
+        NSCompositingOperation::DestinationOut,
+        1.0,
+    );
+    image.unlockFocus();
+    image.setTemplate(true);
+    image
+}
+
 /// Builds the status item and its menu, wiring the controller. Returns the retained
 /// status item and controller, which the caller must keep alive for the process
 /// lifetime (releasing the status item removes the menu bar icon).
@@ -489,7 +568,7 @@ thread_local! {
     static CONTROLLER: RefCell<Option<Retained<MenuController>>> = const { RefCell::new(None) };
 }
 
-/// Refreshes the menu-bar `VN`/`EN` glyph to the live state. Called by the tap after
+/// Refreshes the menu-bar `V`/`E` badge to the live state. Called by the tap after
 /// a hotkey toggle so the persistent indicator matches the current mode/app, not
 /// only after an app switch or menu click. A no-op before the menu is installed
 /// (including under tests).

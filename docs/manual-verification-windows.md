@@ -185,7 +185,7 @@ Run 2026-09-05 against `main` at `c348714` (the engine-split commit); full
 results in `plans/reports/windows-verification-260905.md`.
 
 - [ ] Tray icon appears; all four states are reachable and visually distinct
-      (`VI`, dimmed `VI`, `EN`, `!`) — needs a real click on the icon; not run.
+      (`V` badge, struck `V` badge, `E` badge, `!`) — needs a real click on the icon; not run.
 - [ ] The two `!` causes read differently in the tooltip and menu — same reason.
 - [x] Settings persist to `%APPDATA%\GlowKey\settings.json` and reload
 - [x] A settings file copied from a Mac still loads

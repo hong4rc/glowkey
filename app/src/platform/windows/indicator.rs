@@ -27,17 +27,17 @@ use super::elevation::Reach;
 /// What the tray shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Indicator {
-    /// Vietnamese, working. `VI`.
+    /// Vietnamese, working. A `V` badge.
     Vietnamese,
     /// Vietnamese is on as a mode, but the application in front is on the ignore
-    /// list. Dimmed `VI`.
+    /// list. The `V` badge with a slash through it.
     ///
     /// A separate state from [`Indicator::English`] deliberately. Both mean "your
     /// keys are not being transformed", and collapsing them is what made the
     /// macOS glyph say `EN` when the user had done nothing of the sort — the
     /// ignore list being the feature this application exists for.
     ExcludedApp,
-    /// Vietnamese is switched off. `EN`.
+    /// Vietnamese is switched off. An `E` badge.
     English,
     /// GlowKey is not working, and the user cannot tell by looking at their
     /// document. `⚠`.
@@ -95,18 +95,26 @@ impl Indicator {
     #[must_use]
     pub fn glyph(self) -> &'static str {
         match self {
-            Indicator::Vietnamese | Indicator::ExcludedApp => "VI",
-            Indicator::English => "EN",
+            Indicator::Vietnamese | Indicator::ExcludedApp => "V",
+            Indicator::English => "E",
             Indicator::Broken(_) => "!",
         }
     }
 
-    /// Whether the glyph is drawn dimmed.
-    ///
-    /// The only difference between `VI` and excluded-`VI`: same letters, less
-    /// ink. It reads as "on, but not here", which is what it means.
+    /// Whether the glyph is cut out of a filled badge rather than drawn as plain
+    /// text. Every state but a breakage: the red `!` stays bare so it cannot be
+    /// mistaken for a mode.
     #[must_use]
-    pub fn dimmed(self) -> bool {
+    pub fn badged(self) -> bool {
+        !matches!(self, Indicator::Broken(_))
+    }
+
+    /// Whether the badge carries a slash.
+    ///
+    /// The only difference between `V` and excluded-`V`: same letter, struck
+    /// through. It reads as "on, but not here", which is what it means.
+    #[must_use]
+    pub fn struck(self) -> bool {
         self == Indicator::ExcludedApp
     }
 
@@ -243,10 +251,11 @@ mod tests {
         assert_eq!(excluded, Indicator::ExcludedApp);
         assert_eq!(english, Indicator::English);
         assert_ne!(excluded, english);
-        // Same letters, less ink — that is the whole visual difference.
-        assert_eq!(excluded.glyph(), "VI");
-        assert!(excluded.dimmed());
-        assert!(!state(true, Reach::Ok, InputMode::Vietnamese, false).dimmed());
+        // Same letter, struck through — that is the whole visual difference.
+        assert_eq!(excluded.glyph(), "V");
+        assert!(excluded.struck());
+        assert!(!state(true, Reach::Ok, InputMode::Vietnamese, false).struck());
+        assert!(!english.struck());
     }
 
     /// The two breakages must not produce the same sentence: their remedies are

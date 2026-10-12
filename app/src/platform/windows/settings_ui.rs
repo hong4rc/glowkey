@@ -676,10 +676,30 @@ fn label_column_width(ui: &egui::Ui) -> f32 {
 /// A list row: its text on the left, its buttons flush to the right edge, on the
 /// same row height as everything else.
 fn list_row(ui: &mut egui::Ui, text: &str, buttons: impl FnOnce(&mut egui::Ui)) {
+    list_row_titled(ui, text, text, buttons);
+}
+
+/// [`list_row`] with a short text on the row and the full one on hover.
+///
+/// The buttons are laid out first, from the right, and the text takes whatever
+/// is left and is cut with an ellipsis. Laid out the other way round, one long
+/// entry pushed its own buttons — and every row's, since they share the width —
+/// past the edge of the window.
+fn list_row_titled(
+    ui: &mut egui::Ui,
+    shown: &str,
+    full: &str,
+    buttons: impl FnOnce(&mut egui::Ui),
+) {
     ui.horizontal(|ui| {
         ui.set_min_height(ROW_HEIGHT);
-        ui.label(text);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), buttons);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            buttons(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(shown).truncate())
+                    .on_hover_text(full);
+            });
+        });
     });
 }
 
@@ -739,6 +759,8 @@ pub(super) struct SettingsApp {
     initial: Settings,
     /// The value being edited. Every control writes here directly.
     pub(super) draft: Settings,
+    /// Whether the window has been asked to come to the front yet. See `draw`.
+    brought_forward: bool,
     tab: Tab,
     /// The label column for this frame, measured once per tab in `render_tab`.
     column: f32,
@@ -783,6 +805,7 @@ impl SettingsApp {
         Self {
             draft: initial.clone(),
             initial,
+            brought_forward: false,
             tab: Tab::General,
             column: LABEL_COLUMN,
             result: None,
@@ -1089,7 +1112,7 @@ impl SettingsApp {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     for id in &ids {
-                        list_row(ui, id, |ui| {
+                        list_row_titled(ui, &super::window_app_id::display_name(id), id, |ui| {
                             if ui.button(t("Remove", "Xóa")).clicked() {
                                 to_remove = Some(id.clone());
                             }
@@ -1433,6 +1456,25 @@ impl SettingsApp {
         // Before anything is laid out, so a theme the user switched while the
         // window was open takes effect on this frame rather than the next one.
         apply_theme(ctx);
+
+        // A window opened from the tray was created without the foreground:
+        // Windows lets the process that owns the clicked menu take it, not the
+        // thread eframe makes the window on, so the first open could sit behind
+        // whatever was in front with nothing on screen to say it was there. Asked
+        // for once, on the first frame the window exists to receive it.
+        if !self.brought_forward {
+            self.brought_forward = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            // Focus alone can be refused for the same reason, leaving the window
+            // behind. Raising it through the top-most level and back needs no
+            // foreground right.
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::WindowLevel::AlwaysOnTop,
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                egui::WindowLevel::Normal,
+            ));
+        }
 
         // The OS/window-manager close (title-bar X, Alt+F4, …) also has to
         // decide what to hand back; there is no Done button, this is the only

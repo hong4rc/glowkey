@@ -66,6 +66,11 @@ impl ExclusionDefaults {
     }
 }
 
+/// The application a `parent#rest` identity runs inside, if it has one.
+fn parent_of(app_id: &str) -> Option<&str> {
+    app_id.split_once('#').map(|(parent, _)| parent)
+}
+
 /// The set of application identities where Vietnamese input is suppressed.
 ///
 /// Ordered for stable, deterministic serialization when the shell persists it.
@@ -75,6 +80,11 @@ impl ExclusionDefaults {
 ///   load, the effective list is `saved ∪ (defaults − removed_defaults)`, so a
 ///   default added in a new release reaches existing settings files without
 ///   resurrecting ones the user removed on purpose.
+/// - An identity of the form `parent#rest` (an app that runs inside another
+///   application's process, such as a site installed from a browser) inherits
+///   `parent`'s exclusion until the user decides for it: an explicit entry in
+///   `app_ids` excludes it, a `removed_defaults` tombstone enables it. Nothing
+///   else is stored for an app that simply follows its parent.
 /// - `session_removed` (never persisted): exclusions suspended until restart,
 ///   used when a known terminal is un-excluded by hotkey, so an accidental ⌃⇧E in
 ///   a terminal cannot permanently disable its protection.
@@ -164,7 +174,16 @@ impl ExclusionList {
     /// engine. It must be the first decision, ahead of mode and of memory.
     #[must_use]
     pub fn is_excluded(&self, app_id: &str) -> bool {
-        self.app_ids.contains(app_id) && !self.session_removed.contains(app_id)
+        if self.session_removed.contains(app_id) {
+            return false;
+        }
+        if self.app_ids.contains(app_id) {
+            return true;
+        }
+        // No decision of its own: follow the hosting application, unless the
+        // user deliberately enabled this one.
+        !self.removed_defaults.contains(app_id)
+            && parent_of(app_id).is_some_and(|parent| self.is_excluded(parent))
     }
 
     /// Adds an identity. Returns true if it was newly added. Clears any session
@@ -182,10 +201,13 @@ impl ExclusionList {
     /// A removed shipped default is tombstoned so a later load does not re-add it.
     pub fn remove(&mut self, app_id: &str) -> bool {
         self.session_removed.remove(app_id);
-        if self.defaults.is_default(app_id) {
+        let was_present = self.app_ids.remove(app_id);
+        // Tombstoned when something other than the saved list was excluding it:
+        // a shipped default, or the hosting application it would follow.
+        if self.defaults.is_default(app_id) || self.is_excluded(app_id) {
             self.removed_defaults.insert(app_id.to_string());
         }
-        self.app_ids.remove(app_id)
+        was_present
     }
 
     /// Suspends an exclusion until restart: the app stops being excluded now, but
@@ -245,6 +267,33 @@ mod tests {
 
     fn shipped() -> ExclusionDefaults {
         ExclusionDefaults::new([TERMINAL, EDITOR, ANOTHER_EDITOR], [TERMINAL])
+    }
+
+    #[test]
+    fn an_app_inside_another_follows_it_until_decided() {
+        let mut list = ExclusionList::from_ids(["host.exe"]);
+        assert!(list.is_excluded("host.exe#site"));
+        assert!(!list.is_excluded("other.exe#site"));
+
+        // Enabling the child leaves the host alone and survives the host changing.
+        assert!(!list.remove("host.exe#site"));
+        assert!(!list.is_excluded("host.exe#site"));
+        assert!(list.is_excluded("host.exe"));
+        assert!(list.removed_default_ids().any(|id| id == "host.exe#site"));
+
+        // Excluding it explicitly wins over the tombstone.
+        list.add("host.exe#site");
+        assert!(list.is_excluded("host.exe#site"));
+    }
+
+    #[test]
+    fn an_app_inside_another_follows_the_host_when_enabled() {
+        let mut list = ExclusionList::new();
+        assert!(!list.is_excluded("host.exe#site"));
+        list.add("host.exe");
+        assert!(list.is_excluded("host.exe#site"));
+        list.remove("host.exe");
+        assert!(!list.is_excluded("host.exe#site"));
     }
 
     #[test]

@@ -58,6 +58,7 @@ pub mod startup;
 pub mod theme;
 pub mod tray;
 pub mod ui_thread;
+mod window_app_id;
 
 /// Starts the hook and runs until the process exits.
 pub fn run() {

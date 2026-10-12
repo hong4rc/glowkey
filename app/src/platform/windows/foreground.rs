@@ -304,8 +304,19 @@ unsafe extern "system" fn debounce_timer_proc(hwnd: HWND, _msg: u32, id: usize, 
 /// expensive call is above the lock and every log write is below it, so the
 /// critical section contains nothing that can wait. See the module note.
 fn update(hwnd: HWND) {
-    let Some(app) = executable_name(hwnd) else {
+    let Some(exe) = executable_name(hwnd) else {
         return;
+    };
+    // An installed web app shares its browser's executable, so for a Chromium
+    // browser the window's own app id decides which one this is. Resolved here,
+    // on the notification path, never in the hook callback.
+    let app = if crate::default_exclusions::is_chromium_app(&exe) {
+        super::window_app_id::refine(
+            &exe,
+            super::window_app_id::app_user_model_id(hwnd).as_deref(),
+        )
+    } else {
+        exe
     };
     let mut thread = 0u32;
     // SAFETY: a valid out-pointer; the return is the thread id.

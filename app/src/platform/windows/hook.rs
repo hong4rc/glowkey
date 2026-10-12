@@ -280,7 +280,9 @@ pub fn flush_session_because(cause: glowkey_input::FlushCause) {
         // pumps messages, so a click cannot nest inside a keystroke), and said
         // out loud anyway: the consequence is the worst one here and it would
         // otherwise be perfectly silent.
-        hook_log::log(format!("FLUSH {cause} SKIPPED — session busy, baseline now stale"));
+        hook_log::log(format!(
+            "FLUSH {cause} SKIPPED — session busy, baseline now stale"
+        ));
     } else if discarded {
         hook_log::log(format!("FLUSH {cause} — composing word discarded"));
     }

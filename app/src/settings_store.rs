@@ -163,9 +163,17 @@ mod tests {
         let preserved: Vec<_> = fs::read_dir(&dir)
             .expect("read dir")
             .filter_map(Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().starts_with("settings.corrupt-"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.corrupt-")
+            })
             .collect();
-        assert_eq!(preserved.len(), 1, "the original is kept under its own name");
+        assert_eq!(
+            preserved.len(),
+            1,
+            "the original is kept under its own name"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

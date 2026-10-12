@@ -53,8 +53,8 @@ use windows_sys::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED, SAFE
 use windows_sys::Win32::System::Ole::{SafeArrayDestroy, SafeArrayGetElement};
 use windows_sys::Win32::System::Variant::{VariantClear, VARIANT, VT_BSTR};
 use windows_sys::Win32::UI::Accessibility::{
-    UiaNodeFromFocus, AutomationElementMode_Full, ConditionType_True, TreeScope_Element,
-    UiaCacheRequest, UiaCondition, UIA_ClassNamePropertyId,
+    AutomationElementMode_Full, ConditionType_True, TreeScope_Element, UIA_ClassNamePropertyId,
+    UiaCacheRequest, UiaCondition, UiaNodeFromFocus,
 };
 
 /// Chromium's own C++ class for the omnibox text field.

@@ -248,7 +248,9 @@ fn unicode_input(unit: u16, up: bool) -> INPUT {
 /// without a browser, a focus change or a UI Automation call.
 #[must_use]
 pub fn needs_omnibox_guard(backspaces: usize, app: Option<&str>, focus_is_omnibox: bool) -> bool {
-    focus_is_omnibox && backspaces > 0 && app.is_some_and(crate::default_exclusions::is_chromium_app)
+    focus_is_omnibox
+        && backspaces > 0
+        && app.is_some_and(crate::default_exclusions::is_chromium_app)
 }
 
 #[cfg(test)]

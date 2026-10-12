@@ -492,7 +492,10 @@ fn auto_fix_off_remembers_the_spell_check_tick() {
     let mut s = active_session(true);
     s.set_strict_spell_check(true);
     s.set_auto_fix(false);
-    assert!(s.strict_spell_check(), "the tick is the user's, not the gate's");
+    assert!(
+        s.strict_spell_check(),
+        "the tick is the user's, not the gate's"
+    );
     s.set_auto_fix(true);
     assert_eq!(type_then_commit(&mut s, "aal"), "aal");
 }

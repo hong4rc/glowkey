@@ -6,8 +6,8 @@
 //! own answer to the same question and is right in all of those cases.
 
 use windows_sys::Win32::Foundation::{MAX_PATH, S_OK};
-use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 use windows_sys::Win32::System::Com::CoTaskMemFree;
+use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 use windows_sys::Win32::UI::Shell::{
     FOLDERID_LocalAppData, FOLDERID_RoamingAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
 };

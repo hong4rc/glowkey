@@ -327,19 +327,17 @@ const GENERAL: &[Section] = &[
     },
     Section {
         title: Text::new("Diagnostics", "Chẩn đoán"),
-        rows: &[
-            Row::new(Control::Checkbox(Toggle::VerboseLog))
-                .label(
-                    "Record typed text in the log",
-                    "Ghi nội dung đã gõ vào nhật ký",
-                )
-                .caption(
-                    "Turn on only to reproduce a bug, then off again. The log \
+        rows: &[Row::new(Control::Checkbox(Toggle::VerboseLog))
+            .label(
+                "Record typed text in the log",
+                "Ghi nội dung đã gõ vào nhật ký",
+            )
+            .caption(
+                "Turn on only to reproduce a bug, then off again. The log \
                      always keeps the key and the decision; this adds the text.",
-                    "Chỉ bật khi cần tái hiện lỗi, rồi tắt đi. Nhật ký luôn ghi \
+                "Chỉ bật khi cần tái hiện lỗi, rồi tắt đi. Nhật ký luôn ghi \
                      phím và quyết định; mục này thêm cả nội dung.",
-                ),
-        ],
+            )],
     },
     Section {
         title: Text::new("Keyboard", "Bàn phím"),

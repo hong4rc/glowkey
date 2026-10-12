@@ -6,7 +6,8 @@ use glowkey_input::{
     handle, hotkey, Ctx, Decision, HotkeyPreset, KeyEvent, Modifiers, Notice, Platform,
 };
 use glowkey_session::{
-    AppId, KeyResponse, ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, PlacementStyle, Session,
+    AppId, ExclusionDefaults, ExclusionList, ExclusionToggle, InputMode, KeyResponse,
+    PlacementStyle, Session,
 };
 
 const TERMINAL: &str = "example.terminal";
@@ -295,7 +296,11 @@ fn a_redacted_decision_carries_no_typed_text() {
     }
 
     // A decision with no text renders the same either way.
-    for decision in [Decision::Passthrough, Decision::Consume, Decision::ToggleApp] {
+    for decision in [
+        Decision::Passthrough,
+        Decision::Consume,
+        Decision::ToggleApp,
+    ] {
         assert_eq!(decision.redacted().to_string(), decision.to_string());
     }
 }

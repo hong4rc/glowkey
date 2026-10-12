@@ -34,8 +34,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, HKL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, EVENT_OBJECT_FOCUS, EVENT_SYSTEM_FOREGROUND,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    GetForegroundWindow, GetWindowThreadProcessId, KillTimer, SetTimer, EVENT_OBJECT_FOCUS,
+    EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 use super::elevation::Reach;
@@ -69,6 +69,24 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 
 /// Whether the one-time startup resolution has happened.
 static BOOTSTRAPPED: AtomicBool = AtomicBool::new(false);
+
+/// Identifies the foreground debounce timer. Fixed rather than generated: a
+/// second `SetTimer` call with the same id restarts the same timer instead of
+/// stacking another one, which is what turns a burst of notifications into
+/// "wait until they stop" rather than "act on the first".
+const DEBOUNCE_TIMER_ID: usize = 1;
+
+/// How long to let a foreground notification sit before trusting it.
+///
+/// The Windows 11 Alt+Tab switcher is a window owned by `explorer.exe`, and it
+/// briefly takes the foreground while a switch is in progress — well under
+/// this long in practice. Acting on that notification immediately records
+/// "the foreground app is Explorer" for the gap until the real target's own
+/// notification arrives, and anything that happens in that gap (a keystroke,
+/// a tray click meant for the app being switched to) lands on the wrong
+/// application. 150ms comfortably outlasts the switcher without making a
+/// deliberate switch feel delayed.
+const DEBOUNCE_MS: u32 = 150;
 
 /// Reads the shared state, recovering from a poisoned lock rather than dying.
 ///
@@ -238,7 +256,46 @@ unsafe extern "system" fn win_event_callback(
     if event != EVENT_SYSTEM_FOREGROUND || id_object != 0 || hwnd.is_null() {
         return;
     }
-    update(hwnd);
+    schedule_update();
+}
+
+/// Debounces a foreground notification instead of acting on it immediately.
+///
+/// Restarts the same timer on every call (see [`DEBOUNCE_TIMER_ID`]), so a
+/// burst of notifications — the Alt+Tab switcher's own transient foreground
+/// event followed within milliseconds by the real target's — collapses into
+/// one timer firing once the burst goes quiet.
+fn schedule_update() {
+    // SAFETY: a plain per-thread timer; a null hwnd means it is not tied to
+    // any window and delivers through the callback rather than a message a
+    // window procedure would need to handle.
+    unsafe {
+        SetTimer(
+            std::ptr::null_mut(),
+            DEBOUNCE_TIMER_ID,
+            DEBOUNCE_MS,
+            Some(debounce_timer_proc),
+        );
+    }
+}
+
+/// Fires once the foreground has been quiet for [`DEBOUNCE_MS`]. Re-reads
+/// `GetForegroundWindow` rather than trusting any single notification's hwnd —
+/// the point of waiting was to let a transient window (the Alt+Tab switcher)
+/// come and go before anything commits, so what matters is whatever is in
+/// front *now*, not what was in front when this notification fired.
+unsafe extern "system" fn debounce_timer_proc(hwnd: HWND, _msg: u32, id: usize, _time: u32) {
+    // SAFETY: stopping the one-shot firing of the timer this callback belongs
+    // to; called with the same (null hwnd, id) pair `schedule_update` set it
+    // up with.
+    unsafe { KillTimer(hwnd, id) };
+    // SAFETY: a plain query, safe here for the same reason it is safe in
+    // `bootstrap` — this runs on the message-loop thread, never the hook
+    // callback.
+    let front = unsafe { GetForegroundWindow() };
+    if !front.is_null() {
+        update(front);
+    }
 }
 
 /// Resolves a window and records what the keystroke path needs.

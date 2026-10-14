@@ -351,6 +351,27 @@ impl TapState {
         ok
     }
 
+    /// Rewrites the macro whose shortcut is `old_shortcut` and saves. Returns
+    /// whether it was accepted — false when the row is gone or the new pair is
+    /// refused, in which case the caller has written nothing and can fall back to
+    /// adding. The rule itself lives in [`Session::replace_macro`].
+    pub fn replace_macro_and_save(
+        &self,
+        old_shortcut: &str,
+        shortcut: &str,
+        expansion: &str,
+    ) -> bool {
+        let ok = self
+            .session
+            .try_borrow_mut()
+            .map(|mut s| s.replace_macro(old_shortcut, shortcut, expansion))
+            .unwrap_or(false);
+        if ok {
+            self.save_settings();
+        }
+        ok
+    }
+
     /// Removes the macro at `index` and saves.
     pub fn remove_macro_and_save(&self, index: usize) {
         if let Ok(mut session) = self.session.try_borrow_mut() {

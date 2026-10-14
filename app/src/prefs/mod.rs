@@ -49,6 +49,15 @@ pub struct PrefsIvars {
     macro_expansion: RefCell<Option<Retained<NSTextField>>>,
     macros_list: RefCell<Option<Retained<NSStackView>>>,
     macro_count: RefCell<usize>,
+    /// The shortcut of the row the input fields are editing, `None` when they
+    /// mean Add. The shortcut rather than the row's index, because the list is
+    /// rebuilt after every change and an index captured before one points at
+    /// whatever moved into that slot.
+    macro_editing: RefCell<Option<String>>,
+    /// The Add/Save button and the Cancel beside it, kept so the pair can say
+    /// which of the two the fields currently mean.
+    macro_add_button: RefCell<Option<Retained<NSButton>>>,
+    macro_cancel_button: RefCell<Option<Retained<NSButton>>>,
     /// Separate window for per-word decisions about the English/Telex ambiguity,
     /// with its input field, list stack, and the ordered keys (for tag lookup).
     words_window: RefCell<Option<Retained<NSWindow>>>,
@@ -376,52 +385,67 @@ define_class!(
             NSApplication::sharedApplication(mtm).activate();
         }
 
-        /// "Add" — read the two macro fields, store the macro, clear the fields.
+        /// "Add"/"Save" — read the two macro fields and store them, as a new
+        /// macro or as the edit of the row the fields were loaded from.
         #[unsafe(method(addMacro:))]
         fn add_macro(&self, _sender: Option<&AnyObject>) {
-            let shortcut = self
+            let (shortcut, expansion) = self.macro_fields();
+            // The row being edited, if it is still in the list: an import can
+            // replace the whole table while the fields sit open, and rewriting a
+            // shortcut that is no longer there would write nothing at all. Then
+            // this is an ordinary Add.
+            let editing = self
                 .ivars()
-                .macro_shortcut
+                .macro_editing
                 .borrow()
-                .as_ref()
-                .map(|f| f.stringValue().to_string())
-                .unwrap_or_default();
-            let expansion = self
-                .ivars()
-                .macro_expansion
-                .borrow()
-                .as_ref()
-                .map(|f| f.stringValue().to_string())
-                .unwrap_or_default();
-            // Ask before overwriting. `add_macro` replaces silently, and the
-            // Import in this same window refused to overwrite and reported what it
-            // skipped — one window, two opposite rules, and the destructive one
-            // was the silent one.
-            if self.state().has_macro(&shortcut) {
-                let mtm = MainThreadMarker::from(self);
-                let replace = self.ask(
-                    &t("Replace “{}”?", "Thay thế “{}”?").replace("{}", shortcut.trim()),
-                    t(
-                        "That shortcut already has an expansion.",
-                        "Chữ viết tắt đó đã có nội dung thay thế.",
-                    ),
-                    &[t("Replace", "Thay thế"), t("Cancel", "Huỷ")],
-                    mtm,
-                );
-                if replace != 0 {
-                    return;
+                .clone()
+                .filter(|old| self.state().has_macro(old));
+            // Ask before overwriting something the user did not name. Both paths
+            // need it: `add_macro` replaces silently, an edit renamed onto another
+            // row collapses the two, and the Import in this same window refused to
+            // overwrite and reported what it skipped — one window, three rules,
+            // and the destructive ones were the silent ones.
+            let collides = match &editing {
+                // An unchanged shortcut is not a collision with itself.
+                Some(old) => {
+                    !old.eq_ignore_ascii_case(shortcut.trim()) && self.state().has_macro(&shortcut)
                 }
+                None => self.state().has_macro(&shortcut),
+            };
+            if collides && !self.confirm_macro_overwrite(&shortcut) {
+                return;
             }
-            if self.state().add_macro_and_save(&shortcut, &expansion) {
-                let empty = NSString::from_str("");
-                if let Some(f) = self.ivars().macro_shortcut.borrow().as_ref() {
-                    f.setStringValue(&empty);
-                }
-                if let Some(f) = self.ivars().macro_expansion.borrow().as_ref() {
-                    f.setStringValue(&empty);
-                }
+            let stored = match &editing {
+                Some(old) => self
+                    .state()
+                    .replace_macro_and_save(old, &shortcut, &expansion),
+                None => self.state().add_macro_and_save(&shortcut, &expansion),
+            };
+            if stored {
+                self.clear_macro_fields();
                 self.refresh_macros();
             }
+        }
+
+        /// Edit-macro button clicked; its tag is the macro's index. Loads the row
+        /// into the fields, which then mean Save rather than Add.
+        #[unsafe(method(editMacro:))]
+        fn edit_macro(&self, sender: Option<&AnyObject>) {
+            let Some(sender) = sender else { return };
+            let tag: isize = unsafe { msg_send![sender, tag] };
+            let Some(entry) = usize::try_from(tag)
+                .ok()
+                .and_then(|index| self.state().macros().get(index).cloned())
+            else {
+                return;
+            };
+            self.load_macro_for_editing(&entry);
+        }
+
+        /// "Cancel" — abandon the edit and empty the fields.
+        #[unsafe(method(cancelMacroEdit:))]
+        fn cancel_macro_edit(&self, _sender: Option<&AnyObject>) {
+            self.clear_macro_fields();
         }
 
         /// Remove-macro button clicked; its tag is the macro's index.
@@ -429,7 +453,20 @@ define_class!(
         fn remove_macro(&self, sender: Option<&AnyObject>) {
             let Some(sender) = sender else { return };
             let tag: isize = unsafe { msg_send![sender, tag] };
-            self.state().remove_macro_and_save(tag as usize);
+            let index = tag as usize;
+            // Removing the row the fields are editing empties them: a Save
+            // afterwards would otherwise put back what was just deleted.
+            // Bound, not chained: `macros()` hands back a clone, and a row
+            // borrowed straight out of the temporary would not outlive the line.
+            let macros = self.state().macros();
+            let editing_this = macros
+                .get(index)
+                .zip(self.ivars().macro_editing.borrow().as_ref())
+                .is_some_and(|(row, old)| row.shortcut.eq_ignore_ascii_case(old));
+            self.state().remove_macro_and_save(index);
+            if editing_this {
+                self.clear_macro_fields();
+            }
             self.refresh_macros();
         }
     }
@@ -455,6 +492,9 @@ impl PrefsController {
             macro_expansion: RefCell::new(None),
             macros_list: RefCell::new(None),
             macro_count: RefCell::new(0),
+            macro_editing: RefCell::new(None),
+            macro_add_button: RefCell::new(None),
+            macro_cancel_button: RefCell::new(None),
             words_window: RefCell::new(None),
             word_keys: RefCell::new(None),
             words_list: RefCell::new(None),
@@ -552,6 +592,12 @@ impl PrefsController {
         self.ivars().macros_list.replace(None);
         self.ivars().macro_shortcut.replace(None);
         self.ivars().macro_expansion.replace(None);
+        self.ivars().macro_add_button.replace(None);
+        self.ivars().macro_cancel_button.replace(None);
+        // A language change rebuilds the fields, so whatever they were editing
+        // is not on screen any more; leaving the mark set would make the next
+        // Save rewrite a row the user can no longer see they had picked.
+        self.ivars().macro_editing.replace(None);
         self.ivars().hotkey_seg.replace(None);
         self.ivars().hotkey_label.replace(None);
 

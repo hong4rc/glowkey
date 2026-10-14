@@ -6,6 +6,8 @@
 //! recognised — a version other than 1 means a VIQR body, which is refused with
 //! an explanation rather than stored as literal `Vie^.t Nam`.
 
+use std::cell::RefCell;
+
 use objc2::rc::Retained;
 use objc2::{msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
@@ -58,18 +60,26 @@ impl PrefsController {
 
         root.addArrangedSubview(&self.caption(
             t(
-                "Type the shortcut then a space to expand it — e.g. “vn” → “Việt Nam”.",
-                "Gõ chữ viết tắt rồi dấu cách để bung ra — ví dụ “vn” → “Việt Nam”.",
+                "Type the shortcut then a space or Tab to expand it — e.g. “vn” → “Việt Nam”.",
+                "Gõ chữ viết tắt rồi dấu cách hoặc Tab để bung ra — ví dụ “vn” → “Việt Nam”.",
             ),
             mtm,
         ));
 
-        // Input row: [shortcut] [expansion] [Add]
+        // Input row: [shortcut] [expansion] [Add/Save] [Cancel]
+        //
+        // One row for both jobs rather than a second window or an editor inside
+        // the list: Edit on a row loads it here, the button then says Save, and
+        // Cancel puts it back. The expansion field is narrower than it was to
+        // make room for the Cancel, which stays hidden until there is an edit to
+        // cancel.
         let row = NSStackView::new(mtm);
         row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         row.setSpacing(8.0);
         let shortcut = self.input_field(t("shortcut", "viết tắt"), 90.0, mtm);
-        let expansion = self.input_field(t("expansion", "nội dung"), 210.0, mtm);
+        let expansion = self.input_field(t("expansion", "nội dung"), 170.0, mtm);
+        row.addArrangedSubview(&shortcut);
+        row.addArrangedSubview(&expansion);
         let add: Retained<NSButton> = unsafe {
             NSButton::buttonWithTitle_target_action(
                 &NSString::from_str(t("Add", "Thêm")),
@@ -78,12 +88,22 @@ impl PrefsController {
                 mtm,
             )
         };
-        row.addArrangedSubview(&shortcut);
-        row.addArrangedSubview(&expansion);
+        let cancel: Retained<NSButton> = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str(t("Cancel", "Huỷ")),
+                Some(self.as_ref()),
+                Some(sel!(cancelMacroEdit:)),
+                mtm,
+            )
+        };
+        cancel.setHidden(true);
         row.addArrangedSubview(&add);
+        row.addArrangedSubview(&cancel);
         root.addArrangedSubview(&row);
         *self.ivars().macro_shortcut.borrow_mut() = Some(shortcut);
         *self.ivars().macro_expansion.borrow_mut() = Some(expansion);
+        *self.ivars().macro_add_button.borrow_mut() = Some(add);
+        *self.ivars().macro_cancel_button.borrow_mut() = Some(cancel);
 
         // Import/export — the migration path for someone arriving from Unikey or
         // EVKey with a table they have curated for years.
@@ -150,24 +170,117 @@ impl PrefsController {
             row.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
             row.setSpacing(8.0);
             let label = self.make_label(&format!("{}  →  {}", m.shortcut, m.expansion), mtm);
-            let width = label.widthAnchor().constraintEqualToConstant(320.0);
+            // Narrower than it was, for the reason the Personal Words rows are
+            // this width: two buttons on the row now, not one.
+            let width = label.widthAnchor().constraintEqualToConstant(250.0);
             width.setActive(true);
-            let remove: Retained<NSButton> = unsafe {
-                NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str(t("Remove", "Xóa")),
-                    Some(self.as_ref()),
-                    Some(sel!(removeMacro:)),
-                    mtm,
-                )
-            };
-            unsafe {
-                let _: () = msg_send![&remove, setTag: index as isize];
-                let _: () = msg_send![&remove, setControlSize: 1usize];
-            }
             row.addArrangedSubview(&label);
-            row.addArrangedSubview(&remove);
+            // Edit, because changing an expansion is the ordinary case and
+            // remove-then-add was the only way to do it — which meant retyping a
+            // long expansion from memory to fix a typo in it.
+            for (title, action) in [
+                (t("Edit", "Sửa"), sel!(editMacro:)),
+                (t("Remove", "Xóa"), sel!(removeMacro:)),
+            ] {
+                let button: Retained<NSButton> = unsafe {
+                    NSButton::buttonWithTitle_target_action(
+                        &NSString::from_str(title),
+                        Some(self.as_ref()),
+                        Some(action),
+                        mtm,
+                    )
+                };
+                unsafe {
+                    let _: () = msg_send![&button, setTag: index as isize];
+                    let _: () = msg_send![&button, setControlSize: 1usize];
+                }
+                row.addArrangedSubview(&button);
+            }
             list.addArrangedSubview(&row);
         }
+    }
+
+    /// What the two input fields currently hold.
+    pub(super) fn macro_fields(&self) -> (String, String) {
+        let read = |field: &RefCell<Option<Retained<NSTextField>>>| {
+            field
+                .borrow()
+                .as_ref()
+                .map(|f| f.stringValue().to_string())
+                .unwrap_or_default()
+        };
+        (
+            read(&self.ivars().macro_shortcut),
+            read(&self.ivars().macro_expansion),
+        )
+    }
+
+    /// Loads a macro into the input fields and marks it as the row being edited,
+    /// so the next Save rewrites that row rather than adding a second one.
+    pub(super) fn load_macro_for_editing(&self, entry: &glowkey_session::Macro) {
+        self.write_macro_fields(&entry.shortcut, &entry.expansion);
+        *self.ivars().macro_editing.borrow_mut() = Some(entry.shortcut.clone());
+        self.refresh_macro_buttons();
+        // Put the caret in the expansion: a typo in the expansion is what an edit
+        // is nearly always for, and the shortcut is already the one the user
+        // pointed at.
+        let field = self.ivars().macro_expansion.borrow().clone();
+        if let (Some(window), Some(field)) =
+            (self.ivars().macros_window.borrow().as_ref(), field.as_ref())
+        {
+            window.makeFirstResponder(Some(field));
+        }
+    }
+
+    /// Empties the input fields and forgets any edit in progress.
+    pub(super) fn clear_macro_fields(&self) {
+        self.write_macro_fields("", "");
+        *self.ivars().macro_editing.borrow_mut() = None;
+        self.refresh_macro_buttons();
+    }
+
+    /// Puts text in both input fields.
+    fn write_macro_fields(&self, shortcut: &str, expansion: &str) {
+        for (field, text) in [
+            (&self.ivars().macro_shortcut, shortcut),
+            (&self.ivars().macro_expansion, expansion),
+        ] {
+            if let Some(f) = field.borrow().as_ref() {
+                f.setStringValue(&NSString::from_str(text));
+            }
+        }
+    }
+
+    /// Makes the input row say which of its two jobs it is doing: Add with the
+    /// fields empty, Save with a row loaded, and Cancel only in the second case.
+    fn refresh_macro_buttons(&self) {
+        let editing = self.ivars().macro_editing.borrow().is_some();
+        if let Some(button) = self.ivars().macro_add_button.borrow().as_ref() {
+            button.setTitle(&NSString::from_str(if editing {
+                t("Save", "Lưu")
+            } else {
+                t("Add", "Thêm")
+            }));
+        }
+        if let Some(button) = self.ivars().macro_cancel_button.borrow().as_ref() {
+            button.setHidden(!editing);
+        }
+    }
+
+    /// Asks before an expansion the user did not name is overwritten — a plain
+    /// Add onto an existing shortcut, or an edit renamed onto another row.
+    /// Answers whether to go ahead.
+    pub(super) fn confirm_macro_overwrite(&self, shortcut: &str) -> bool {
+        let mtm = MainThreadMarker::from(self);
+        self.ask(
+            &t("Replace “{}”?", "Thay thế “{}”?").replace("{}", shortcut.trim()),
+            t(
+                "That shortcut already has an expansion.",
+                "Chữ viết tắt đó đã có nội dung thay thế.",
+            ),
+            &[t("Replace", "Thay thế"), t("Cancel", "Huỷ")],
+            mtm,
+        ) == 0
     }
 
     /// An editable single-line text field with a placeholder and fixed width.

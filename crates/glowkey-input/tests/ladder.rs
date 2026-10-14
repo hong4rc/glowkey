@@ -736,6 +736,77 @@ fn always_macro_keeps_feeding_the_engine_with_vietnamese_off() {
     assert_eq!(type_through(&mut tap, "vn "), "Việt Nam ");
 }
 
+// ── Tab as a macro trigger ──────────────────────────────────────────────────
+
+/// The Tab key as the platform reports it: a character *and* an identity, which
+/// [`KeyEvent::character`] cannot express (it calls anything unlettered
+/// `Key::Other`). Both matter here — the character is what makes Tab a word
+/// boundary, the identity is what makes it a trigger rather than text.
+fn tab() -> KeyEvent {
+    KeyEvent {
+        ch: Some('\t'),
+        key: Key::Tab,
+        mods: Modifiers::none(),
+        raw_code: 48,
+    }
+}
+
+/// A macro fired by Tab consumes the Tab: `abc`⇥ leaves the expansion and
+/// nothing else. Replaying it moved the focus or fired a completion the instant
+/// the expansion landed, which for a shortcut bound to a URL is the whole point
+/// of pressing it undone.
+#[test]
+fn a_macro_fired_by_tab_swallows_the_tab() {
+    let mut tap = Tap::active();
+    tap.session
+        .add_macro("abc", "https://everfit.atlassian.net/browse/UP");
+    let mut screen = String::new();
+    for ch in "abc".chars() {
+        match tap.decide(&KeyEvent::character(ch)) {
+            Decision::Emit(r) => apply(&mut screen, &r),
+            other => panic!("a letter must be emitted, not {other:?}"),
+        }
+    }
+    match tap.decide(&tab()) {
+        Decision::Emit(r) => apply(&mut screen, &r),
+        other => panic!("the expansion must consume the Tab, not {other:?}"),
+    }
+    assert_eq!(screen, "https://everfit.atlassian.net/browse/UP");
+}
+
+/// The space is not the Tab: it is text, and gõ tắt has always left it after the
+/// expansion (`vn␣` → `Việt Nam `). Consuming the trigger is a Tab rule only.
+#[test]
+fn a_macro_fired_by_space_still_types_the_space() {
+    let mut tap = Tap::active();
+    tap.session.add_macro("vn", "Việt Nam");
+    assert_eq!(type_through(&mut tap, "vn "), "Việt Nam ");
+}
+
+/// Tab after a word no macro matched is untouched: auto-fix may still rewrite the
+/// word, but the key was pressed to move the caret and the restore did not ask
+/// for it. `eĩt` → `exit`, then the Tab.
+#[test]
+fn tab_after_an_auto_fix_restore_is_still_replayed() {
+    let mut tap = Tap::active();
+    tap.session.add_macro("abc", "expanded");
+    let mut screen = String::new();
+    for ch in "exit".chars() {
+        match tap.decide(&KeyEvent::character(ch)) {
+            Decision::Emit(r) => apply(&mut screen, &r),
+            other => panic!("a letter must be emitted, not {other:?}"),
+        }
+    }
+    match tap.decide(&tab()) {
+        Decision::EmitThenReplayKey(r) => {
+            apply(&mut screen, &r);
+            screen.push('\t');
+        }
+        other => panic!("a restore must replay the Tab, not {other:?}"),
+    }
+    assert_eq!(screen, "exit\t");
+}
+
 // ── A session-only terminal toggle ──────────────────────────────────────────
 
 #[test]

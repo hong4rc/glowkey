@@ -333,11 +333,19 @@ this section sits behind that guard. (Typing `busin` alone *does* restore, since
 | **Quick Telex** (off) | a doubled consonant at the **start** of a syllable is its digraph | `ccao`→`chao`, `nnuowif`→`người`, `uu`→`ư` |
 | **Telex brackets** (off) | `[`→ơ, `]`→ư, `{`→Ơ, `}`→Ư, and a tone after still lands | `[f`→`ờ`. Known limit: after a vowel the substitution leaks — `an[`→`anow` |
 | **Macros** (off until you add one) | a shortcut expands at the boundary | `vn␣`→`Việt Nam␣` |
+| Macros on Tab | the same expansion, and the Tab is **swallowed** — it was the trigger, not text | `abc⇥`→ the expansion alone, with no focus move or completion |
 | Macros with Vietnamese off (off) | keys still accumulate so a macro can match, but nothing transforms. Never in an excluded app | |
 
 Quick Telex applies to both Telex variants; the brackets are Telex-only.
 Turning the brackets on stops `[` and `]` reaching the app at all, which is why
 they are off by default.
+
+The Tab row is the one place a boundary key does not survive the commit. A space
+belongs after the expansion and is typed; a Tab would move the focus or accept a
+completion the instant the expansion landed, which for a shortcut bound to a URL
+undoes the whole of what was pressed. Only a **macro** consumes it — a Tab after
+a word auto-fix restored is still replayed, because the restore did not ask for
+that key.
 
 > Pinned by `crates/glowkey-engine/tests/quick_telex.rs` (all seven, including
 > `off_by_default_and_byte_identical_when_off` and
@@ -348,7 +356,12 @@ they are off by default.
 > `brackets_stay_telex_only`;
 > `crates/glowkey-session/tests/auto_fix.rs`::`macro_expansion`;
 > `crates/glowkey-session/tests/macro_table.rs` (the import/export format); and
-> `crates/glowkey-input/tests/ladder.rs`::`always_macro_keeps_feeding_the_engine_with_vietnamese_off`.
+> `crates/glowkey-input/tests/ladder.rs`::`always_macro_keeps_feeding_the_engine_with_vietnamese_off`,
+> `a_macro_fired_by_tab_swallows_the_tab`, `a_macro_fired_by_space_still_types_the_space`,
+> `tab_after_an_auto_fix_restore_is_still_replayed`. The Tab case also runs
+> through a real CoreGraphics event in the macOS tap's own tests, which is where
+> the adapter's half of it — a Tab arriving with both a character and an identity
+> — is checked.
 
 ### Corrections
 

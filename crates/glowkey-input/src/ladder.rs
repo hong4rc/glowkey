@@ -12,7 +12,8 @@
 //! 4. caret moves flush;
 //! 5. word character versus boundary, with **every** letter suppressed and
 //!    re-emitted;
-//! 6. the boundary key replayed after a restore, never passed through natively.
+//! 6. the boundary key replayed after a restore, never passed through natively
+//!    — except a Tab that fired a macro, which the expansion consumes.
 //!
 //! Moving any of them is a behaviour change even when the diff looks like tidying.
 //!
@@ -256,10 +257,23 @@ pub fn decide(
         // replay the boundary key after it; otherwise the word is already on
         // screen and the boundary key just passes through.
         Some(ch) => {
+            // Asked before the commit, which clears the engine: a macro expansion
+            // and an auto-fix restore both come back as one edit, and the key that
+            // ended the word is kept in one case and swallowed in the other.
+            let expanded = session.pending_macro().is_some();
             let restore = session.commit();
             // Sentence-ending punctuation primes the next word for capitalization.
             session.note_boundary(ch);
             match restore {
+                // Tab is a trigger, not text. `abc`⇥ with `abc` bound to a URL
+                // should leave the URL and nothing else; replaying the Tab moved
+                // the focus or completed something the moment the expansion
+                // landed, which is the whole of what the user pressed it for
+                // being undone. A space is the opposite — it belongs after the
+                // expansion — so only Tab is consumed, and only when a macro is
+                // what fired: an auto-fix restore did not ask for the key and
+                // must not eat it.
+                Some(edit) if expanded && event.key == Key::Tab => Decision::Emit(edit),
                 Some(restore) => Decision::EmitThenReplayKey(restore),
                 None => Decision::Passthrough,
             }

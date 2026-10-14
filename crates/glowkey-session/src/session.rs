@@ -561,6 +561,67 @@ impl Session {
         }
     }
 
+    /// Rewrites the macro whose shortcut is `old_shortcut`, keeping its place in
+    /// the list. Returns false if there is no such macro, or if the new pair is
+    /// one [`is_storable`](crate::macros::is_storable) refuses.
+    ///
+    /// Not expressible with [`add_macro`](Self::add_macro): that one is keyed on
+    /// the *new* shortcut, so an edit that renames `abc` to `abd` would store the
+    /// second and leave the first behind as a row the user thought they had just
+    /// changed. Editing in place also keeps the row where it was on screen, which
+    /// remove-then-add does not.
+    ///
+    /// Any **other** entry already carrying the new shortcut is dropped, because
+    /// two rows with one shortcut is a list the typing path would have to choose
+    /// between — the same invariant `add_macro` keeps when it replaces.
+    pub fn replace_macro(&mut self, old_shortcut: &str, shortcut: &str, expansion: &str) -> bool {
+        let shortcut = shortcut.trim();
+        if !crate::macros::is_storable(shortcut, expansion) {
+            return false;
+        }
+        let old = old_shortcut.trim();
+        let Some(index) = self
+            .macros
+            .iter()
+            .position(|m| m.shortcut.eq_ignore_ascii_case(old))
+        else {
+            return false;
+        };
+        let duplicate = self
+            .macros
+            .iter()
+            .position(|m| m.shortcut.eq_ignore_ascii_case(shortcut))
+            .filter(|other| *other != index);
+        self.macros[index] = Macro {
+            shortcut: shortcut.to_string(),
+            expansion: expansion.to_string(),
+        };
+        if let Some(other) = duplicate {
+            self.macros.remove(other);
+        }
+        true
+    }
+
+    /// The macro the keys typed so far would expand into at the next boundary,
+    /// if any.
+    ///
+    /// One lookup, read by two callers: [`commit`](Self::commit) performs the
+    /// expansion with it, and the decision ladder asks **before** committing
+    /// whether the edit it is about to get is an expansion rather than an
+    /// auto-fix restore — the two want opposite things done with the key that
+    /// ended the word, and after `commit` the engine has been cleared and the
+    /// question can no longer be answered.
+    #[must_use]
+    pub fn pending_macro(&self) -> Option<&Macro> {
+        if !self.engine.is_composing() || self.macros.is_empty() {
+            return None;
+        }
+        let typed = self.engine.raw_string();
+        self.macros
+            .iter()
+            .find(|m| m.shortcut.eq_ignore_ascii_case(&typed))
+    }
+
     /// Whether the opt-in English word restore is on.
     #[must_use]
     pub fn restore_english_words(&self) -> bool {
@@ -723,23 +784,15 @@ impl Session {
     pub fn commit(&mut self) -> Option<KeyResponse> {
         // Macro expansion (gõ tắt) takes precedence over auto-fix: if the typed keys
         // match a shortcut, replace the on-screen word with the expansion.
-        if self.engine.is_composing() && !self.macros.is_empty() {
-            let typed = self.engine.raw_string();
-            if let Some(expansion) = self
-                .macros
-                .iter()
-                .find(|m| m.shortcut.eq_ignore_ascii_case(&typed))
-                .map(|m| m.expansion.clone())
-            {
-                let on_screen_len = self.engine.current_word().encode_utf16().count();
-                self.engine.reset();
-                self.forget_position(); // an expansion has no second reading
-                return Some(KeyResponse {
-                    handled: true,
-                    backspaces: on_screen_len,
-                    insert: expansion,
-                });
-            }
+        if let Some(expansion) = self.pending_macro().map(|m| m.expansion.clone()) {
+            let on_screen_len = self.engine.current_word().encode_utf16().count();
+            self.engine.reset();
+            self.forget_position(); // an expansion has no second reading
+            return Some(KeyResponse {
+                handled: true,
+                backspaces: on_screen_len,
+                insert: expansion,
+            });
         }
         let restore = if self.engine.is_composing() {
             let rendered = self.engine.current_word().to_string();

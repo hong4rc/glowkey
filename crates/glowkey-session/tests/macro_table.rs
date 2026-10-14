@@ -321,3 +321,65 @@ fn an_existing_shortcut_is_reported_case_insensitively() {
     );
     assert!(!s.has_macro("zz"));
 }
+
+// ── Editing a macro in place ────────────────────────────────────────────────
+
+/// What the Macros window's Save button does. An edit keeps the row where it
+/// was: remove-and-add would move it to the end of a list the user is reading.
+#[test]
+fn an_edit_rewrites_the_row_in_place() {
+    let mut s = session_with_two();
+    assert!(s.replace_macro("vn", "vn", "Việt Nam "));
+    assert_eq!(s.macros(), [m("vn", "Việt Nam "), m("hn", "Hà Nội")]);
+}
+
+/// Renaming the shortcut must not leave the old one behind — the bug that makes
+/// add-or-replace the wrong primitive for an edit.
+#[test]
+fn renaming_a_shortcut_does_not_leave_the_old_one_behind() {
+    let mut s = session_with_two();
+    assert!(s.replace_macro("vn", "vnam", "Việt Nam"));
+    assert_eq!(s.macros(), [m("vnam", "Việt Nam"), m("hn", "Hà Nội")]);
+    assert!(!s.has_macro("vn"));
+}
+
+/// Renaming onto a shortcut another row already holds collapses the two: the
+/// typing path matches the first entry it finds, so a list with both is a list
+/// where one of them can never fire. The window asks before this happens.
+#[test]
+fn renaming_onto_an_existing_shortcut_leaves_one_row() {
+    let mut s = session_with_two();
+    assert!(s.replace_macro("vn", "HN", "the edited one wins"));
+    assert_eq!(s.macros(), [m("HN", "the edited one wins")]);
+}
+
+/// Nothing to edit, and nothing written: the row was removed while the fields
+/// were open, and the caller falls back to adding.
+#[test]
+fn editing_a_macro_that_is_gone_refuses() {
+    let mut s = session_with_two();
+    assert!(!s.replace_macro("zz", "zz", "new"));
+    assert!(!s.replace_macro("vn", "  ", "an unstorable shortcut"));
+    assert_eq!(s.macros().len(), 2);
+}
+
+/// The question the decision ladder asks before committing, so it knows whether
+/// the edit it gets back is an expansion (which consumes a Tab) or an auto-fix
+/// restore (which does not).
+#[test]
+fn a_pending_macro_is_visible_before_the_boundary() {
+    let mut s = session_with_two();
+    s.set_frontmost_app("com.apple.TextEdit");
+    assert!(s.pending_macro().is_none(), "nothing typed yet");
+    for ch in "vn".chars() {
+        s.process_key(ch);
+    }
+    assert_eq!(
+        s.pending_macro().map(|m| m.expansion.as_str()),
+        Some("Việt Nam")
+    );
+    s.process_key('x');
+    assert!(s.pending_macro().is_none(), "vnx is not a shortcut");
+    // And it is a question, not a commit: the expansion is still waiting.
+    assert_eq!(s.macros().len(), 2);
+}

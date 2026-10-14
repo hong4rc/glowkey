@@ -321,7 +321,14 @@ Cargo workspace, four layers, each depending only on the one below
   carries a 51-word corpus asserting identical output with the option on and off.
 - **Macros (gõ tắt)**: `vn `→`Việt Nam `, managed in the Macros window, with
   **import and export** — EVKey's `shortcut:expansion` line format, so a table
-  curated in Unikey or EVKey imports as-is. Import merges and reports
+  curated in Unikey or EVKey imports as-is. A macro fired by **Tab** consumes the
+  Tab (`ladder.rs` step 6): the key was the trigger, and replaying it moved the
+  focus or accepted a completion the moment the expansion landed. A space is text
+  and still types; a Tab after an auto-fix restore is still replayed. Rows can be
+  **edited** as well as removed — Edit loads the row into the input fields, which
+  then read Save, and `Session::replace_macro` rewrites it in place, so renaming
+  a shortcut cannot leave the old one behind and cannot end in two rows carrying
+  the same shortcut. Import merges and reports
   `(added, skipped)`; an existing shortcut is skipped, never overwritten. Tables
   the line format cannot carry (a colon in a shortcut, a newline in either field)
   are written as JSON and still parse back.

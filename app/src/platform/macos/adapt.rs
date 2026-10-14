@@ -27,6 +27,9 @@ pub(super) const KEY_CODE_FORWARD_DELETE: i64 = 117;
 pub(super) const KEY_CODE_ESCAPE: i64 = 53;
 /// macOS virtual key code for Space.
 pub(super) const KEY_CODE_SPACE: i64 = 49;
+/// macOS virtual key code for Tab — a macro trigger, so it is swallowed when one
+/// fires on it (`ladder.rs` step 6).
+pub(super) const KEY_CODE_TAB: i64 = 48;
 /// macOS virtual key code for the letter E — the per-app toggle hotkey.
 #[cfg(test)]
 pub(super) const KEY_CODE_E: i64 = 14;
@@ -76,7 +79,7 @@ fn key_for(keycode: i64) -> Key {
         KEY_CODE_ESCAPE => Key::Escape,
         KEY_CODE_SPACE => Key::Space,
         36 | 76 => Key::Return, // Return, and the keypad's Enter
-        48 => Key::Tab,
+        KEY_CODE_TAB => Key::Tab,
         // Left 123, Right 124, Down 125, Up 126, Home 115, End 119, PgUp 116,
         // PgDn 121. One class: any of them moves the insertion point with no text
         // change, so GlowKey's diff baseline is stale either way.

@@ -1169,8 +1169,8 @@ impl SettingsApp {
         intro(
             ui,
             t(
-                "Type the shortcut then a space to expand it — e.g. \"vn\" → \"Việt Nam\".",
-                "Gõ chữ viết tắt rồi dấu cách để bung ra — ví dụ “vn” → “Việt Nam”.",
+                "Type the shortcut then a space or Tab to expand it — e.g. \"vn\" → \"Việt Nam\".",
+                "Gõ chữ viết tắt rồi dấu cách hoặc Tab để bung ra — ví dụ “vn” → “Việt Nam”.",
             ),
         );
         ui.add_space(6.0);
@@ -1579,6 +1579,11 @@ fn validate_macro(shortcut: &str, expansion: &str) -> Option<(String, String)> {
 /// entry with the same shortcut (case-insensitively, matching how the engine
 /// matches a typed shortcut) is replaced rather than duplicated; a genuinely
 /// new shortcut is appended.
+///
+/// An edit **renamed onto another row's shortcut** drops that other row, which
+/// is the same rule `Session::replace_macro` applies on the other platform: two
+/// entries with one shortcut is a list where the second can never fire, because
+/// the typing path matches the first it finds.
 fn upsert_macro(
     macros: &mut Vec<Macro>,
     shortcut: String,
@@ -1586,11 +1591,18 @@ fn upsert_macro(
     edit_index: Option<usize>,
 ) {
     if let Some(idx) = edit_index {
+        let duplicate = macros
+            .iter()
+            .position(|m| m.shortcut.eq_ignore_ascii_case(&shortcut))
+            .filter(|other| *other != idx);
         if let Some(slot) = macros.get_mut(idx) {
             *slot = Macro {
                 shortcut,
                 expansion,
             };
+            if let Some(other) = duplicate {
+                macros.remove(other);
+            }
             return;
         }
     }
@@ -1694,6 +1706,26 @@ mod tests {
         assert_eq!(macros.len(), 2);
         assert_eq!(macros[0].shortcut, "vnm");
         assert_eq!(macros[1].shortcut, "us");
+    }
+
+    #[test]
+    fn upsert_macro_with_edit_index_collapses_a_rename_onto_another_row() {
+        let mut macros = vec![
+            Macro {
+                shortcut: "vn".into(),
+                expansion: "Việt Nam".into(),
+            },
+            Macro {
+                shortcut: "us".into(),
+                expansion: "United States".into(),
+            },
+        ];
+        // Renaming `vn` to `us` must leave one `us`, not two: the second could
+        // never fire.
+        upsert_macro(&mut macros, "us".into(), "the edited one".into(), Some(0));
+        assert_eq!(macros.len(), 1);
+        assert_eq!(macros[0].shortcut, "us");
+        assert_eq!(macros[0].expansion, "the edited one");
     }
 
     #[test]

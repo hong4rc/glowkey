@@ -278,6 +278,32 @@ section is where a regression would show up first.
 - [ ] Switch the interface language to Vietnamese with Personal Words open: it
       must come back in Vietnamese. It was the one window the rebuild forgot.
 
+## 9d. Macro editing and the Tab trigger (2026-09-18)
+
+The Tab half is pinned by tests at both the policy and the `CGEvent` level; what
+no test reaches is what the *application* does with the keystroke it never sees,
+and the Edit row is AppKit.
+
+- [ ] **Tab expands and goes no further.** Bind `abc` to a URL, then in a browser
+      address bar and in a text field type `abc` and press ⇥: the URL appears and
+      nothing else happens — no focus jump, no autocomplete accepted, no tab
+      character.
+- [ ] **Space still types.** `vn␣` → `Việt Nam ` with the trailing space intact.
+- [ ] **A Tab with no macro is untouched.** In a form, type a word and press ⇥:
+      the focus moves as it always did. Then type `work` and press ⇥: auto-fix
+      restores `work` **and** the focus still moves.
+- [ ] **Edit loads the row.** Settings → Apps & macros → Macros…, press Edit on a
+      row: both fields fill, the caret lands in the expansion, the button reads
+      Save and a Cancel appears beside it. Cancel empties the fields and the
+      button reads Add again.
+- [ ] **Save rewrites that row in place**, keeping its position in the list — it
+      does not move to the bottom, and no second row appears.
+- [ ] **Renaming a shortcut leaves one row.** Edit `vn` to `vnam`: `vn` is gone.
+      Edit it onto a shortcut another row already has: it asks Replace / Cancel,
+      and Replace leaves exactly one row with that shortcut.
+- [ ] **Remove while editing clears the fields**, and the expansion still expands
+      correctly by typing it afterwards.
+
 ## 10. Permission gate, on a fresh grant
 
 - [ ] Copy the app to a new location (or rebuild after a code change if you have
@@ -294,6 +320,6 @@ section is where a regression would show up first.
 ## Recording results
 
 Note the date, the commit, and anything that failed, directly in the pull request
-or commit message that prompted the run. Sections 7 step 4, 8, 9, 9b and 9c produce
+or commit message that prompted the run. Sections 7 step 4, 8, 9, 9b, 9c and 9d produce
 **numbers and facts that belong in `docs/handoff.md`** — they are the open items
 that no headless test can ever close.

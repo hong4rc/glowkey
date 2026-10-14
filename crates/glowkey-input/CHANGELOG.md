@@ -6,6 +6,9 @@ All notable changes to `glowkey-input` are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A macro fired by **Tab** now consumes the Tab instead of replaying it: the key was the trigger, and replaying it moved the focus or accepted a completion the moment the expansion landed. A space still types, and a Tab after an auto-fix restore is still replayed.
+
 ## [0.1.0] - 2026-09-05
 
 First version carved out of the GlowKey application.

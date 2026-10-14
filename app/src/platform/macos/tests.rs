@@ -7,7 +7,8 @@
 // split means the siblings have to be named — the only change the move made to
 // this file; every test body below is byte-identical to before.
 use super::adapt::{
-    KEY_CODE_DELETE, KEY_CODE_E, KEY_CODE_ESCAPE, KEY_CODE_SPACE, KEY_CODE_W, KEY_CODE_Z,
+    KEY_CODE_DELETE, KEY_CODE_E, KEY_CODE_ESCAPE, KEY_CODE_SPACE, KEY_CODE_TAB, KEY_CODE_W,
+    KEY_CODE_Z,
 };
 use super::emit::is_chromium_browser;
 use super::*;
@@ -21,6 +22,23 @@ use objc2_core_graphics::CGEventFlags;
 fn key_event(source: &CGEventSource, ch: char) -> CFRetained<CGEvent> {
     let event = CGEvent::new_keyboard_event(Some(source), 0, true).expect("event");
     let utf16: Vec<u16> = ch.to_string().encode_utf16().collect();
+    unsafe {
+        CGEvent::keyboard_set_unicode_string(Some(&event), utf16.len() as u64, utf16.as_ptr());
+    }
+    event
+}
+
+/// Builds a real Tab key-down event: keycode 48 carrying U+0009.
+///
+/// The Unicode string is set here for the reason [`key_event`] sets one — a
+/// CGEvent built in-process has not been through the system's layout decode, so
+/// it arrives with none. A Tab from the keyboard has been: the tap's own log
+/// shows one landing on a two-character composition and clearing it, which only
+/// the boundary path does, and the boundary path is reached by the character.
+fn tab_event(source: &CGEventSource) -> CFRetained<CGEvent> {
+    let event =
+        CGEvent::new_keyboard_event(Some(source), KEY_CODE_TAB as u16, true).expect("event");
+    let utf16: Vec<u16> = "\t".encode_utf16().collect();
     unsafe {
         CGEvent::keyboard_set_unicode_string(Some(&event), utf16.len() as u64, utf16.as_ptr());
     }
@@ -894,4 +912,30 @@ fn a_restored_word_breaks_the_chain() {
     let state = active_state();
     // `work ` is restored by auto-fix, so nothing behind it stays re-openable.
     assert_eq!(type_with_deletes(&state, "hoongf work ⌫z"), "hồng workz");
+}
+
+/// The adapter's half of the Tab rule: a real Tab event carries both a character
+/// (which is what makes it a word boundary) and the `Key::Tab` identity (which is
+/// what makes it a trigger). A macro fired by it must leave the expansion alone
+/// on screen — replaying the Tab moved the focus or fired a completion the moment
+/// the expansion landed.
+#[test]
+fn a_macro_fired_by_a_real_tab_swallows_the_tab() {
+    let state = active_state();
+    state
+        .session
+        .borrow_mut()
+        .add_macro("abc", "https://everfit.atlassian.net/browse/UP");
+    for ch in "abc".chars() {
+        let event = key_event(&state.source, ch);
+        state.decide(NonNull::from(&*event));
+    }
+    let tab = tab_event(&state.source);
+    match state.decide(NonNull::from(&*tab)) {
+        Decision::Emit(edit) => {
+            assert_eq!(edit.insert, "https://everfit.atlassian.net/browse/UP");
+            assert_eq!(edit.backspaces, 3, "the three typed letters come back off");
+        }
+        other => panic!("the expansion must consume the Tab, got {other:?}"),
+    }
 }

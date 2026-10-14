@@ -436,8 +436,8 @@ const APPS: &[Section] = &[
             Row::new(Control::List(ListId::Macros))
                 .label("Macros", "Gõ tắt")
                 .caption(
-                    "Type a shortcut then a space to expand it: vn → Việt Nam.",
-                    "Gõ chữ viết tắt rồi dấu cách để bung ra: vn → Việt Nam.",
+                    "Type a shortcut then a space or Tab to expand it: vn → Việt Nam.",
+                    "Gõ chữ viết tắt rồi dấu cách hoặc Tab để bung ra: vn → Việt Nam.",
                 ),
             Row::new(Control::Checkbox(Toggle::AlwaysMacro))
                 .label(
